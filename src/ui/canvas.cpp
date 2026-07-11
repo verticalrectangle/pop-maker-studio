@@ -108,7 +108,10 @@ static bool s_rot_snapped = false;   // rotate drag is currently angle-snapped
 // ActiveId catches a drag already in progress (it persists across frames).
 static bool ui_widget_claims_mouse() {
     ImGuiContext& g = *GImGui;
-    return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0;
+    // ui_splitter_capture(): the panel-resize handles are raw hit-tests, not
+    // ImGui items — while one is hot or dragging, the press belongs to it.
+    return g.HoveredIdPreviousFrame != 0 || g.ActiveId != 0 || ui_splitter_capture() ||
+           ui_dropper_active();
 }
 
 bool camera_live_native_dims(int& cw, int& ch);   // defined below
@@ -122,7 +125,7 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     float fit_w = w, fit_h = h;
     bool got_aspect = false;
     std::string vkey = clip_slot_key(clip_video_src(state, cl), cl.start);
-    for (int s = 0; s < MAX_VIDEO_TRACKS; ++s) {
+    for (int s = 0; s < MAX_VIDEO_SLOTS; ++s) {
         if (state.proxy_paths[s] == vkey && video_info(s).width > 0) {
             // Crop changes the displayed aspect — bbox must match the render.
             float va = cl.cropped_aspect(video_info(s).width, video_info(s).height);
@@ -195,7 +198,7 @@ static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, f
     int src_w = 0, src_h = 0;
     {
         std::string vkey = clip_slot_key(clip_video_src(state, cl), cl.start);
-        for (int s = 0; s < MAX_VIDEO_TRACKS; ++s)
+        for (int s = 0; s < MAX_VIDEO_SLOTS; ++s)
             if (state.proxy_paths[s] == vkey && video_info(s).width > 0)
                 { src_w = video_info(s).width; src_h = video_info(s).height; break; }
     }
@@ -397,8 +400,8 @@ static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, f
     }
 }
 
-static CanvasHandleGeom s_handle_geom;
-CanvasHandleGeom canvas_handle_geom() { return s_handle_geom; }
+// Handle-geometry storage hoisted to the engine (src/ui_geom.cpp).
+#define s_handle_geom g_canvas_handle_geom
 
 // True when the mouse sits on one of the selection's transform handles
 // (geometry from last frame's draw_canvas_handles). Layer picking runs
@@ -1005,6 +1008,16 @@ static struct {
     float  w = 0.f, h = 0.f;
 } g_canvas_cap;
 
+// Save-thumbnail capture: same lifecycle as g_canvas_cap but writes a small
+// PNG to a fixed path and never touches the IPC snapshot_done fields.
+static struct {
+    int    frames_left = -1;
+    ImVec2 p{};
+    float  w = 0.f, h = 0.f;
+    std::string path;
+} g_thumb_cap;
+
+
 // ── Live camera preview ───────────────────────────────────────────────────────
 // While the camera brick monitors, warms up, or records, the latest camera
 // frame is composited into the scene AT THE BRICK'S TRANSFORM (pos/scale/
@@ -1012,8 +1025,8 @@ static struct {
 // self-view. Glass FX + face filter are baked into the texture so the live
 // preview and the recorded take render through the same machinery.
 static FaceObs s_mirror_obs;          // latest tracked face (raw-frame coords)
-static MirrorDebugGeom s_mirror_dbg;
-MirrorDebugGeom mirror_debug_geom() { return s_mirror_dbg; }
+// Mirror-geometry storage hoisted to the engine (src/ui_geom.cpp).
+#define s_mirror_dbg g_mirror_dbg_geom
 static int     s_mirror_filter = 0;
 static float   s_mirror_filter_amt = 1.f;
 
@@ -1183,7 +1196,7 @@ static uintptr_t camera_live_tex(AppState& st, const Clip*& out_brick,
                         FaceObs raw = obs;
                         raw.w = s_cam_w; raw.h = s_cam_h;
                         float hw2f = (float)(s_cam_w / 2), hh2f = (float)(s_cam_h / 2);
-                        for (int k = 0; k < 106; ++k) {
+                        for (int k = 0; k < FT_NPTS; ++k) {
                             float ux = obs.pts[k][0], uy = obs.pts[k][1];
                             float rx2, ry2;   // half-res raw coords
                             if (s_sub_rotq == 1)      { rx2 = uy;             ry2 = hh2f - 1.f - ux; }
@@ -1236,6 +1249,18 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     if (g_canvas_cap.frames_left > 0) {
         g_canvas_cap.p = p; g_canvas_cap.w = w; g_canvas_cap.h = h;
         --g_canvas_cap.frames_left;  // 0 → canvas_capture_after_render fires
+    }
+    // Save-thumbnail request (project save): capture the preview rect next
+    // frame and write a small PNG for the home screen's recent-project card.
+    // Separate from g_canvas_cap so it can't disturb an in-flight IPC snapshot.
+    if (!state.thumb_request.empty() && g_thumb_cap.frames_left < 0) {
+        g_thumb_cap.path        = state.thumb_request;
+        g_thumb_cap.frames_left = 2;
+        state.thumb_request.clear();
+    }
+    if (g_thumb_cap.frames_left > 0) {
+        g_thumb_cap.p = p; g_thumb_cap.w = w; g_thumb_cap.h = h;
+        --g_thumb_cap.frames_left;   // 0 → canvas_capture_after_render writes it
     }
 
     // The playhead is clamped to the last playable frame upstream (app.cpp), so
@@ -1483,15 +1508,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         auto make_pfx = [&](const Clip* cl_ptr, int ti) {
             PixelFX pfx;
             CreativeFXAccum cfx2 = collect_glass_fx(state, state.playhead, ti);
-            pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
-                                     cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
-            pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
-            pfx.bg_remove_softness = cl_ptr->bg_remove_softness;
-            pfx.bg_remove_box_on   = cl_ptr->bg_remove_box_on;
-            pfx.bg_remove_box_l    = cl_ptr->bg_remove_box_l;
-            pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
-            pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
-            pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
+            // bg-removal no longer rides PixelFX — the RemoveBackground brick shader
+            // does the cutout (single path; no CPU alpha-bake).
             pfx.datamosh_on        = cfx2.datamosh_on;
             pfx.datamosh_intensity = cfx2.datamosh_intensity;
             pfx.datamosh_spread    = cfx2.datamosh_spread;
@@ -1670,15 +1688,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 CreativeFXAccum cfx = collect_glass_fx(state, at_time, ti);
                 if (slot >= 0) {
                     PixelFX pfx;
-                    pfx.bg_remove_on       = cl_ptr->bg_remove_on &&
-                                             cl_ptr->bg_remove_status == BgRemoveStatus::Ready;
-                    pfx.bg_remove_mask_dir = cl_ptr->bg_remove_mask_dir;
-                    pfx.bg_remove_softness = cl_ptr->bg_remove_softness;
-                    pfx.bg_remove_box_on   = cl_ptr->bg_remove_box_on;
-                    pfx.bg_remove_box_l    = cl_ptr->bg_remove_box_l;
-                    pfx.bg_remove_box_r    = cl_ptr->bg_remove_box_r;
-                    pfx.bg_remove_box_t    = cl_ptr->bg_remove_box_t;
-                    pfx.bg_remove_box_b    = cl_ptr->bg_remove_box_b;
+                    // bg-removal no longer rides PixelFX — the RemoveBackground brick
+                    // shader does the cutout (single path; no CPU alpha-bake).
                     pfx.datamosh_on        = cfx.datamosh_on;
                     pfx.datamosh_intensity = cfx.datamosh_intensity;
                     pfx.datamosh_spread    = cfx.datamosh_spread;
@@ -1708,23 +1719,42 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     cl_ptr->bg_remove_status == BgRemoveStatus::Ready &&
                     !cl_ptr->bg_remove_mask_dir.empty()) {
                     std::string mask_dir = cl_ptr->bg_remove_mask_dir;
-                    float mask_fps = bg_remove_read_fps(mask_dir);
-                    // Same source-time mapping as the frame fetch (×speed —
-                    // this used to divide, desyncing masks on retimed clips).
-                    float src_t = clip_src_time(*cl_ptr, at_time);
-                    int frame_i = (int)(src_t * mask_fps);
+                    // Index the masks by the SAME proxy frame the displayed texture
+                    // decoded — video_proxy_frame_idx reads the cached proxy rate with
+                    // NO ffprobe fork. (proxy_load() here used to fork inside the render
+                    // and deadlock Mesa, freezing the app. The masks are 1:1 with the
+                    // proxy, so this index is exact.)
+                    int frame_i = video_proxy_frame_idx(slot, (double)(src_t + lookahead));
+                    if (frame_i < 0)
+                        frame_i = (int)(src_t * bg_remove_read_fps(mask_dir));
+                    // Box (keep-region in v_uv; y bottom-up → flip t/b) + softness → brick.
+                    float bg_box[4] = {0.f, 1.f, 0.f, 1.f};
+                    if (cl_ptr->bg_remove_box_on) {
+                        bg_box[0] = cl_ptr->bg_remove_box_l;        bg_box[1] = cl_ptr->bg_remove_box_r;
+                        bg_box[2] = 1.f - cl_ptr->bg_remove_box_b;  bg_box[3] = 1.f - cl_ptr->bg_remove_box_t;
+                    }
+                    float bg_soft = cl_ptr->bg_remove_softness;
                     VideoInfo vi_g = video_info(slot);
                     int bw = (vi_g.width  > 0) ? vi_g.width  : (int)w;
                     int bh = (vi_g.height > 0) ? vi_g.height : (int)h;
+
+                    // At most ONE RemoveBackground may apply across both loops: stacking
+                    // the cutout multiplies alpha by the mask twice (mask^2) -> eroded,
+                    // smudgy edges. Other body-FX still stack freely (they preserve alpha).
+                    bool bg_removed = false;
 
                     // Standalone glass BodyFX bricks on this track
                     for (auto& bfx_cl : state.tracks[ti].clips) {
                         if (bfx_cl.clip_type != ClipType::BodyFX) continue;
                         if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
+                        bool is_rmbg = (bfx_cl.body_fx_type == BodyFXType::RemoveBackground);
+                        if (is_rmbg && bg_removed) continue;
                         unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
                         if (!mask_tex) continue;
                         tex = body_fx_apply(bfx_cl.body_fx_type, tex, mask_tex, bw, bh,
-                                            bfx_cl.body_fx_params, bfx_cl.body_fx_amount, t_anim);
+                                            bfx_cl.body_fx_params, bfx_cl.body_fx_amount, t_anim,
+                                            bg_box, bg_soft);
+                        if (is_rmbg) bg_removed = true;
                     }
 
                     // BodyFX sub-effects inside glass MultiFX bricks on this track
@@ -1738,10 +1768,14 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                             if (se.clip_type != ClipType::BodyFX) continue;
                             float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
                             if (rel < se.rel_start || rel >= se_end) continue;
+                            bool is_rmbg = (se.body_fx_type == BodyFXType::RemoveBackground);
+                            if (is_rmbg && bg_removed) continue;
                             unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
                             if (!mask_tex) continue;
                             tex = body_fx_apply(se.body_fx_type, tex, mask_tex, bw, bh,
-                                                se.body_fx_params, se.body_fx_amount, t_anim);
+                                                se.body_fx_params, se.body_fx_amount, t_anim,
+                                                bg_box, bg_soft);
+                            if (is_rmbg) bg_removed = true;
                         }
                     }
                 }
@@ -1753,7 +1787,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     int rh = (vi_r.height > 0) ? vi_r.height : (int)h;
                     tex = runtime_fx_apply(cl_ptr->runtime_fx_id, tex, rw, rh,
                                           cl_ptr->runtime_fx_params,
-                                          cl_ptr->runtime_fx_amount, t_anim);
+                                          cl_ptr->eval_prop("runtime_fx_amount", t_anim), t_anim);
                 }
 
                 // Face filter on the take (Pretty/Doggy…): cached landmark
@@ -2008,6 +2042,44 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             {p.x + w, p.y + h},    {p.x, p.y + h},
             {0.f, 1.f}, {1.f, 1.f}, {1.f, 0.f}, {0.f, 0.f},
             IM_COL32_WHITE);
+
+        // ── Eyedropper: sample the rendered scene under the cursor ────────────
+        // Armed by ui_dropper_button next to any color picker. Reads ONE pixel
+        // from the scene texture via a scratch FBO (the pick click is swallowed
+        // by ui_widget_claims_mouse's dropper gate, so nothing gets selected).
+        if (ui_dropper_active()) {
+            ImVec2 mp = ImGui::GetIO().MousePos;
+            bool over = mp.x >= p.x && mp.x < p.x + w && mp.y >= p.y && mp.y < p.y + h;
+            if (over) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsMouseClicked(1)) {
+                ui_dropper_cancel();
+            } else if (over && ImGui::IsMouseClicked(0)) {
+                GLint tw = 0, th = 0;
+                glBindTexture(GL_TEXTURE_2D, (GLuint)scene_tex);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &tw);
+                glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                if (tw > 0 && th > 0) {
+                    float u = (mp.x - p.x) / w;
+                    float v = (mp.y - p.y) / h;          // image space, top-left origin
+                    int sx = (int)(u * (float)tw);
+                    int sy = (int)((1.f - v) * (float)th);   // GL row 0 = bottom
+                    sx = sx < 0 ? 0 : (sx >= tw ? tw - 1 : sx);
+                    sy = sy < 0 ? 0 : (sy >= th ? th - 1 : sy);
+                    static GLuint s_pick_fbo = 0;
+                    if (!s_pick_fbo) glGenFramebuffers(1, &s_pick_fbo);
+                    GLint prev_fbo = 0;
+                    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+                    glBindFramebuffer(GL_FRAMEBUFFER, s_pick_fbo);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                           GL_TEXTURE_2D, (GLuint)scene_tex, 0);
+                    uint8_t px4[4] = {};
+                    glReadPixels(sx, sy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px4);
+                    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+                    ui_dropper_feed(px4[0] / 255.f, px4[1] / 255.f, px4[2] / 255.f);
+                }
+            }
+        }
     }
 
     // ── Pass 2: Text clips (drawn on top of scene) ────────────────────────────
@@ -2230,6 +2302,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 trc.t           = state.playhead;
                 trc.rotation    = render_clip.eval_prop("rotation", state.playhead);
                 trc.canvas_w    = w;
+                trc.canvas_x0   = p.x;
+                trc.canvas_h    = h;
+                trc.canvas_y0   = p.y;
                 trc.clip_words  = has_karaoke ? &clip_words : nullptr;
                 render_text_block(trc, txt_lines);
             }
@@ -2616,6 +2691,45 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 #include "stb_image_write.h"
 
 void canvas_capture_after_render(AppState& state) {
+    // Pending save-thumbnail: read the preview rect and write a ~448px-wide
+    // PNG (box-sampled) for the home screen card. Independent of the IPC
+    // snapshot flow below.
+    if (g_thumb_cap.frames_left == 0) {
+        g_thumb_cap.frames_left = -1;
+        ImGuiIO& tio = ImGui::GetIO();
+        float tsx = tio.DisplayFramebufferScale.x, tsy = tio.DisplayFramebufferScale.y;
+        int tfb_h = (int)(tio.DisplaySize.y * tsy);
+        int trx = (int)(g_thumb_cap.p.x * tsx);
+        int trw = (int)(g_thumb_cap.w   * tsx);
+        int trh = (int)(g_thumb_cap.h   * tsy);
+        int try_ = tfb_h - (int)((g_thumb_cap.p.y + g_thumb_cap.h) * tsy);
+        if (trw > 0 && trh > 0 && !g_thumb_cap.path.empty()) {
+            std::vector<uint8_t> raw((size_t)trw * trh * 4);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(trx, try_, trw, trh, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+            int ow = 448;
+            if (trw < ow) ow = trw;
+            int oh = (int)((long long)trh * ow / trw);
+            if (oh < 1) oh = 1;
+            std::vector<uint8_t> img((size_t)ow * oh * 4);
+            for (int y = 0; y < oh; ++y) {
+                int sy0 = (int)((long long)y * trh / oh);
+                // GL rows are bottom-up — flip while sampling.
+                const uint8_t* srow = raw.data() + (size_t)(trh - 1 - sy0) * trw * 4;
+                uint8_t* drow = img.data() + (size_t)y * ow * 4;
+                for (int x = 0; x < ow; ++x) {
+                    int sx0 = (int)((long long)x * trw / ow);
+                    const uint8_t* sp = srow + (size_t)sx0 * 4;
+                    uint8_t* dp = drow + (size_t)x * 4;
+                    dp[0]=sp[0]; dp[1]=sp[1]; dp[2]=sp[2]; dp[3]=255;
+                }
+            }
+            stbi_write_png(g_thumb_cap.path.c_str(), ow, oh, 4, img.data(), ow * 4);
+        }
+        g_thumb_cap.path.clear();
+    }
+
     if (g_canvas_cap.frames_left != 0) return;
     g_canvas_cap.frames_left = -1;
 

@@ -1990,3 +1990,318 @@
                 acc.greenscreen_spill = fmaxf(acc.greenscreen_spill, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
+        case FXType::RetroBeauty:
+            acc.retro_beauty_on = true;
+            acc.any_gen_fx = true;
+            acc.retro_beauty_amount = fmaxf(acc.retro_beauty_amount, cl.eval_prop("fx_retro_beauty_amount", _cl_t));
+            {
+                float _bi = cl.fx_retro_beauty_glow_beat;
+                float _bv = cl.eval_prop("fx_retro_beauty_glow", _cl_t);
+                acc.retro_beauty_glow = fmaxf(acc.retro_beauty_glow, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_retro_beauty_fade_beat;
+                float _bv = cl.eval_prop("fx_retro_beauty_fade", _cl_t);
+                acc.retro_beauty_fade = fmaxf(acc.retro_beauty_fade, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_retro_beauty_blush_beat;
+                float _bv = cl.eval_prop("fx_retro_beauty_blush", _cl_t);
+                acc.retro_beauty_blush = fmaxf(acc.retro_beauty_blush, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::Insta2016:
+            acc.insta_2016_on = true;
+            acc.any_gen_fx = true;
+            acc.insta_2016_amount = fmaxf(acc.insta_2016_amount, cl.eval_prop("fx_insta_2016_amount", _cl_t));
+            {
+                float _bi = cl.fx_insta_2016_fade_beat;
+                float _bv = cl.eval_prop("fx_insta_2016_fade", _cl_t);
+                acc.insta_2016_fade = fmaxf(acc.insta_2016_fade, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_insta_2016_pop_beat;
+                float _bv = cl.eval_prop("fx_insta_2016_pop", _cl_t);
+                acc.insta_2016_pop = fmaxf(acc.insta_2016_pop, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_insta_2016_warmth_beat;
+                float _bv = cl.eval_prop("fx_insta_2016_warmth", _cl_t);
+                acc.insta_2016_warmth = fmaxf(acc.insta_2016_warmth, (_bi > 0.001f) ? (-1.0f + (1.0f - -1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::GlassSkin:
+            acc.glass_skin_on = true;
+            acc.any_gen_fx = true;
+            acc.glass_skin_amount = fmaxf(acc.glass_skin_amount, cl.eval_prop("fx_glass_skin_amount", _cl_t));
+            {
+                float _bi = cl.fx_glass_skin_radius_beat;
+                float _bv = cl.eval_prop("fx_glass_skin_radius", _cl_t);
+                acc.glass_skin_radius = fmaxf(acc.glass_skin_radius, (_bi > 0.001f) ? (1.0f + (6.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_glass_skin_gloss_beat;
+                float _bv = cl.eval_prop("fx_glass_skin_gloss", _cl_t);
+                acc.glass_skin_gloss = fmaxf(acc.glass_skin_gloss, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::PorcelainSkin:
+            acc.porcelain_skin_on = true;
+            acc.any_gen_fx = true;
+            acc.porcelain_skin_amount = fmaxf(acc.porcelain_skin_amount, cl.eval_prop("fx_porcelain_skin_amount", _cl_t));
+            {
+                float _bi = cl.fx_porcelain_skin_smooth_beat;
+                float _bv = cl.eval_prop("fx_porcelain_skin_smooth", _cl_t);
+                acc.porcelain_skin_smooth = fmaxf(acc.porcelain_skin_smooth, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_porcelain_skin_brighten_beat;
+                float _bv = cl.eval_prop("fx_porcelain_skin_brighten", _cl_t);
+                acc.porcelain_skin_brighten = fmaxf(acc.porcelain_skin_brighten, (_bi > 0.001f) ? (0.0f + (0.5f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_porcelain_skin_warmth_beat;
+                float _bv = cl.eval_prop("fx_porcelain_skin_warmth", _cl_t);
+                acc.porcelain_skin_warmth = fmaxf(acc.porcelain_skin_warmth, (_bi > 0.001f) ? (-1.0f + (1.0f - -1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::BlushDoll:
+            acc.blush_doll_on = true;
+            acc.any_gen_fx = true;
+            acc.blush_doll_amount = fmaxf(acc.blush_doll_amount, cl.eval_prop("fx_blush_doll_amount", _cl_t));
+            {
+                float _bi = cl.fx_blush_doll_blush_beat;
+                float _bv = cl.eval_prop("fx_blush_doll_blush", _cl_t);
+                acc.blush_doll_blush = fmaxf(acc.blush_doll_blush, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_blush_doll_smooth_beat;
+                float _bv = cl.eval_prop("fx_blush_doll_smooth", _cl_t);
+                acc.blush_doll_smooth = fmaxf(acc.blush_doll_smooth, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_blush_doll_tint_beat;
+                float _bv = cl.eval_prop("fx_blush_doll_tint", _cl_t);
+                acc.blush_doll_tint = fmaxf(acc.blush_doll_tint, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::HoneyGlow:
+            acc.honey_glow_on = true;
+            acc.any_gen_fx = true;
+            acc.honey_glow_amount = fmaxf(acc.honey_glow_amount, cl.eval_prop("fx_honey_glow_amount", _cl_t));
+            {
+                float _bi = cl.fx_honey_glow_glow_beat;
+                float _bv = cl.eval_prop("fx_honey_glow_glow", _cl_t);
+                acc.honey_glow_glow = fmaxf(acc.honey_glow_glow, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_honey_glow_warmth_beat;
+                float _bv = cl.eval_prop("fx_honey_glow_warmth", _cl_t);
+                acc.honey_glow_warmth = fmaxf(acc.honey_glow_warmth, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_honey_glow_lift_beat;
+                float _bv = cl.eval_prop("fx_honey_glow_lift", _cl_t);
+                acc.honey_glow_lift = fmaxf(acc.honey_glow_lift, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::SoftGlam:
+            acc.soft_glam_on = true;
+            acc.any_gen_fx = true;
+            acc.soft_glam_amount = fmaxf(acc.soft_glam_amount, cl.eval_prop("fx_soft_glam_amount", _cl_t));
+            {
+                float _bi = cl.fx_soft_glam_glam_beat;
+                float _bv = cl.eval_prop("fx_soft_glam_glam", _cl_t);
+                acc.soft_glam_glam = fmaxf(acc.soft_glam_glam, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_soft_glam_split_beat;
+                float _bv = cl.eval_prop("fx_soft_glam_split", _cl_t);
+                acc.soft_glam_split = fmaxf(acc.soft_glam_split, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_soft_glam_sparkle_beat;
+                float _bv = cl.eval_prop("fx_soft_glam_sparkle", _cl_t);
+                acc.soft_glam_sparkle = fmaxf(acc.soft_glam_sparkle, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::AcidTrip:
+            acc.acid_trip_on = true;
+            acc.any_gen_fx = true;
+            acc.acid_trip_amount = fmaxf(acc.acid_trip_amount, cl.eval_prop("fx_acid_trip_amount", _cl_t));
+            {
+                float _bi = cl.fx_acid_trip_trip_beat;
+                float _bv = cl.eval_prop("fx_acid_trip_trip", _cl_t);
+                acc.acid_trip_trip = fmaxf(acc.acid_trip_trip, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_acid_trip_speed_beat;
+                float _bv = cl.eval_prop("fx_acid_trip_speed", _cl_t);
+                acc.acid_trip_speed = fmaxf(acc.acid_trip_speed, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_acid_trip_wobble_beat;
+                float _bv = cl.eval_prop("fx_acid_trip_wobble", _cl_t);
+                acc.acid_trip_wobble = fmaxf(acc.acid_trip_wobble, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::LiquidMarble:
+            acc.liquid_marble_on = true;
+            acc.any_gen_fx = true;
+            acc.liquid_marble_amount = fmaxf(acc.liquid_marble_amount, cl.eval_prop("fx_liquid_marble_amount", _cl_t));
+            {
+                float _bi = cl.fx_liquid_marble_flow_beat;
+                float _bv = cl.eval_prop("fx_liquid_marble_flow", _cl_t);
+                acc.liquid_marble_flow = fmaxf(acc.liquid_marble_flow, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_liquid_marble_scale_beat;
+                float _bv = cl.eval_prop("fx_liquid_marble_scale", _cl_t);
+                acc.liquid_marble_scale = fmaxf(acc.liquid_marble_scale, (_bi > 0.001f) ? (1.0f + (10.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_liquid_marble_speed_beat;
+                float _bv = cl.eval_prop("fx_liquid_marble_speed", _cl_t);
+                acc.liquid_marble_speed = fmaxf(acc.liquid_marble_speed, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::FractalMirror:
+            acc.fractal_mirror_on = true;
+            acc.any_gen_fx = true;
+            acc.fractal_mirror_amount = fmaxf(acc.fractal_mirror_amount, cl.eval_prop("fx_fractal_mirror_amount", _cl_t));
+            {
+                float _bi = cl.fx_fractal_mirror_folds_beat;
+                float _bv = cl.eval_prop("fx_fractal_mirror_folds", _cl_t);
+                acc.fractal_mirror_folds = fmaxf(acc.fractal_mirror_folds, (_bi > 0.001f) ? (1.0f + (6.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_fractal_mirror_drift_beat;
+                float _bv = cl.eval_prop("fx_fractal_mirror_drift", _cl_t);
+                acc.fractal_mirror_drift = fmaxf(acc.fractal_mirror_drift, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_fractal_mirror_zoom_beat;
+                float _bv = cl.eval_prop("fx_fractal_mirror_zoom", _cl_t);
+                acc.fractal_mirror_zoom = fmaxf(acc.fractal_mirror_zoom, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::BreatheWarp:
+            acc.breathe_warp_on = true;
+            acc.any_gen_fx = true;
+            acc.breathe_warp_amount = fmaxf(acc.breathe_warp_amount, cl.eval_prop("fx_breathe_warp_amount", _cl_t));
+            {
+                float _bi = cl.fx_breathe_warp_breathe_beat;
+                float _bv = cl.eval_prop("fx_breathe_warp_breathe", _cl_t);
+                acc.breathe_warp_breathe = fmaxf(acc.breathe_warp_breathe, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_breathe_warp_rate_beat;
+                float _bv = cl.eval_prop("fx_breathe_warp_rate", _cl_t);
+                acc.breathe_warp_rate = fmaxf(acc.breathe_warp_rate, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_breathe_warp_chroma_beat;
+                float _bv = cl.eval_prop("fx_breathe_warp_chroma", _cl_t);
+                acc.breathe_warp_chroma = fmaxf(acc.breathe_warp_chroma, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::MeltDrip:
+            acc.melt_drip_on = true;
+            acc.any_gen_fx = true;
+            acc.melt_drip_amount = fmaxf(acc.melt_drip_amount, cl.eval_prop("fx_melt_drip_amount", _cl_t));
+            {
+                float _bi = cl.fx_melt_drip_melt_beat;
+                float _bv = cl.eval_prop("fx_melt_drip_melt", _cl_t);
+                acc.melt_drip_melt = fmaxf(acc.melt_drip_melt, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_melt_drip_drip_beat;
+                float _bv = cl.eval_prop("fx_melt_drip_drip", _cl_t);
+                acc.melt_drip_drip = fmaxf(acc.melt_drip_drip, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_melt_drip_haze_beat;
+                float _bv = cl.eval_prop("fx_melt_drip_haze", _cl_t);
+                acc.melt_drip_haze = fmaxf(acc.melt_drip_haze, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::NeonCity:
+            acc.neon_city_on = true;
+            acc.any_gen_fx = true;
+            acc.neon_city_amount = fmaxf(acc.neon_city_amount, cl.eval_prop("fx_neon_city_amount", _cl_t));
+            {
+                float _bi = cl.fx_neon_city_neon_beat;
+                float _bv = cl.eval_prop("fx_neon_city_neon", _cl_t);
+                acc.neon_city_neon = fmaxf(acc.neon_city_neon, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_neon_city_scanline_beat;
+                float _bv = cl.eval_prop("fx_neon_city_scanline", _cl_t);
+                acc.neon_city_scanline = fmaxf(acc.neon_city_scanline, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_neon_city_streak_beat;
+                float _bv = cl.eval_prop("fx_neon_city_streak", _cl_t);
+                acc.neon_city_streak = fmaxf(acc.neon_city_streak, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::ChromePulse:
+            acc.chrome_pulse_on = true;
+            acc.any_gen_fx = true;
+            acc.chrome_pulse_amount = fmaxf(acc.chrome_pulse_amount, cl.eval_prop("fx_chrome_pulse_amount", _cl_t));
+            {
+                float _bi = cl.fx_chrome_pulse_chrome_beat;
+                float _bv = cl.eval_prop("fx_chrome_pulse_chrome", _cl_t);
+                acc.chrome_pulse_chrome = fmaxf(acc.chrome_pulse_chrome, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_chrome_pulse_pulse_beat;
+                float _bv = cl.eval_prop("fx_chrome_pulse_pulse", _cl_t);
+                acc.chrome_pulse_pulse = fmaxf(acc.chrome_pulse_pulse, (_bi > 0.001f) ? (0.0f + (4.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_chrome_pulse_edge_beat;
+                float _bv = cl.eval_prop("fx_chrome_pulse_edge", _cl_t);
+                acc.chrome_pulse_edge = fmaxf(acc.chrome_pulse_edge, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::HudGlitch:
+            acc.hud_glitch_on = true;
+            acc.any_gen_fx = true;
+            acc.hud_glitch_amount = fmaxf(acc.hud_glitch_amount, cl.eval_prop("fx_hud_glitch_amount", _cl_t));
+            {
+                float _bi = cl.fx_hud_glitch_hud_beat;
+                float _bv = cl.eval_prop("fx_hud_glitch_hud", _cl_t);
+                acc.hud_glitch_hud = fmaxf(acc.hud_glitch_hud, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_hud_glitch_dropout_beat;
+                float _bv = cl.eval_prop("fx_hud_glitch_dropout", _cl_t);
+                acc.hud_glitch_dropout = fmaxf(acc.hud_glitch_dropout, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_hud_glitch_tint_beat;
+                float _bv = cl.eval_prop("fx_hud_glitch_tint", _cl_t);
+                acc.hud_glitch_tint = fmaxf(acc.hud_glitch_tint, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;
+        case FXType::NightDrive:
+            acc.night_drive_on = true;
+            acc.any_gen_fx = true;
+            acc.night_drive_amount = fmaxf(acc.night_drive_amount, cl.eval_prop("fx_night_drive_amount", _cl_t));
+            {
+                float _bi = cl.fx_night_drive_night_beat;
+                float _bv = cl.eval_prop("fx_night_drive_night", _cl_t);
+                acc.night_drive_night = fmaxf(acc.night_drive_night, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_night_drive_sodium_beat;
+                float _bv = cl.eval_prop("fx_night_drive_sodium", _cl_t);
+                acc.night_drive_sodium = fmaxf(acc.night_drive_sodium, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_night_drive_flare_beat;
+                float _bv = cl.eval_prop("fx_night_drive_flare", _cl_t);
+                acc.night_drive_flare = fmaxf(acc.night_drive_flare, (_bi > 0.001f) ? (0.0f + (1.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            break;

@@ -1,9 +1,9 @@
+#include "platform.h"
 #include "fx_shader.h"
 #include "bg_presets.h"
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#if PMS_HAS_GL
+#include "gl_compat.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -96,11 +96,23 @@ uniform float u_threshold;
 uniform float u_softness;
 
 void main() {
-    vec4 c = texture(u_tex, v_uv);
+    vec4 c = texture(u_tex, v_uv);               // sharp center pixel — the OUTPUT color
+    // Compute the matte on a small box-averaged colour, not the raw pixel. Codec/JPEG
+    // compression shoves scattered green texels off the key colour; on a flat green
+    // that survives as a blocky, half-keyed matte — invisible over black, but ugly
+    // over a lit layer below. Averaging four neighbours pulls those stragglers back
+    // onto the key so they zero out. The OUTPUT stays the sharp center pixel; only the
+    // matte is computed on the smoothed colour, so foreground edges stay crisp.
+    vec2 tx = 1.0 / vec2(textureSize(u_tex, 0));
+    vec3 kc = (c.rgb
+            + texture(u_tex, v_uv + vec2( 2.0 * tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(-2.0 * tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(0.0,  2.0 * tx.y)).rgb
+            + texture(u_tex, v_uv + vec2(0.0, -2.0 * tx.y)).rgb) * 0.2;
     float lum_k = dot(u_key_color, vec3(0.299, 0.587, 0.114));
     vec3 ck = u_key_color - lum_k;
-    float lum_p = dot(c.rgb, vec3(0.299, 0.587, 0.114));
-    vec3 cp = c.rgb - lum_p;
+    float lum_p = dot(kc, vec3(0.299, 0.587, 0.114));
+    vec3 cp = kc - lum_p;
     float dist = length(cp - ck);
     float soft = max(u_softness, 0.001);
     float t = clamp((dist - u_threshold) / soft, 0.0, 1.0);
@@ -252,6 +264,110 @@ void main() {
 }
 )glsl";
 
+// Chroma melt — chroma-keyed temporal feedback smear (the "trippy melt", NOT a
+// clean key). Foreground (far from the key colour) shows the current frame; keyed
+// background pixels keep the previous frame's output (u_feedback = the persistent
+// slot), drifting sideways so motion smears into trails. The deliberate, export-safe
+// version of the old GL_BLEND ghost. The clean keyer is k_chroma_key_frag (untouched).
+static const char* k_chroma_melt_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;       // current chain result
+uniform sampler2D u_feedback;  // previous frame's melt output (persistent slot)
+uniform vec3  u_key_color;
+uniform float u_threshold;
+uniform float u_persist;       // 0 = no trail, ~0.9 = long smear
+void main() {
+    vec3 cur = texture(u_tex, v_uv).rgb;
+    vec2 tx  = 1.0 / vec2(textureSize(u_tex, 0));
+    // Foreground matte on a box-averaged colour (same anti-block trick as the keyer).
+    vec3 kc = (cur
+            + texture(u_tex, v_uv + vec2( 2.0*tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(-2.0*tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(0.0,  2.0*tx.y)).rgb
+            + texture(u_tex, v_uv + vec2(0.0, -2.0*tx.y)).rgb) * 0.2;
+    float lum_k = dot(u_key_color, vec3(0.299,0.587,0.114));
+    float lum_p = dot(kc,          vec3(0.299,0.587,0.114));
+    float dist  = length((kc - lum_p) - (u_key_color - lum_k));
+    float fg    = smoothstep(u_threshold, u_threshold + 0.12, dist);  // 1=subject, 0=key
+    // Keyed background keeps the prior frame, drifting sideways → smear trails.
+    vec3 prev   = texture(u_feedback, v_uv + vec2(1.5*tx.x, 0.0)).rgb;
+    vec3 trail  = mix(cur, prev, u_persist);
+    frag = vec4(mix(trail, cur, fg), 1.0);
+}
+)glsl";
+
+// Chroma echo — chroma-keyed feedback ECHO (sibling of Chroma Melt). Same feedback
+// idea, but CRISP: a HARD matte + NO sideways drift, so keyed pixels stack the
+// subject's past frames as distinct fading ghosts ("cool frames over the keyed
+// colour") instead of a smudge. High persist = a longer stack of frames.
+static const char* k_chroma_echo_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;       // current chain result
+uniform sampler2D u_feedback;  // previous frame's echo output (persistent slot)
+uniform vec3  u_key_color;
+uniform float u_threshold;
+uniform float u_persist;       // echo length (0 = none, ~0.95 = long stack)
+void main() {
+    vec3 cur = texture(u_tex, v_uv).rgb;
+    vec2 tx  = 1.0 / vec2(textureSize(u_tex, 0));
+    vec3 kc = (cur
+            + texture(u_tex, v_uv + vec2( 2.0*tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(-2.0*tx.x, 0.0)).rgb
+            + texture(u_tex, v_uv + vec2(0.0,  2.0*tx.y)).rgb
+            + texture(u_tex, v_uv + vec2(0.0, -2.0*tx.y)).rgb) * 0.2;
+    float lum_k = dot(u_key_color, vec3(0.299,0.587,0.114));
+    float lum_p = dot(kc,          vec3(0.299,0.587,0.114));
+    float dist  = length((kc - lum_p) - (u_key_color - lum_k));
+    float fg    = step(u_threshold, dist);   // HARD matte → crisp ghost frames
+    // Keyed pixels keep the previous output (NO drift → frames stay crisp), decaying
+    // toward the key colour. The subject stamps fresh each frame, so its path stacks.
+    vec3 prev   = texture(u_feedback, v_uv).rgb;
+    vec3 echo   = mix(cur, prev, u_persist);
+    frag = vec4(mix(echo, cur, fg), 1.0);
+}
+)glsl";
+
+// Chroma frame — chroma-keyed DISCRETE frame echoes (multi-tap delay). Unlike Melt/Echo
+// (single-buffer feedback → a continuous trail), this samples a per-slot RING of past
+// snapshot frames (u_ring, a 2D array) and composites the subject from N taps spaced
+// `spacing` seconds apart, each fainter — distinct stacked "frames over the keyed colour".
+static const char* k_chroma_frame_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D      u_tex;     // live current frame
+uniform sampler2DArray u_ring;    // ring of past snapshots
+uniform int   u_head;             // most-recent ring layer
+uniform int   u_ntaps;            // active taps
+uniform vec3  u_key_color;
+uniform float u_threshold;
+uniform float u_falloff;          // per-tap fade (newest = 1, each older x falloff)
+const int RING = 8;
+float matte(vec3 c) {
+    float lk = dot(u_key_color, vec3(0.299,0.587,0.114));
+    float lp = dot(c,           vec3(0.299,0.587,0.114));
+    return step(u_threshold, length((c - lp) - (u_key_color - lk)));
+}
+void main() {
+    vec3 live = texture(u_tex, v_uv).rgb;
+    float live_fg = matte(live);
+    vec3 echo = live;   // keyed bg starts as the live key colour
+    // Composite taps oldest -> newest (over): newest on top, full strength; oldest faint.
+    for (int i = RING - 1; i >= 0; --i) {
+        if (i >= u_ntaps) continue;
+        int layer = ((u_head - i) % RING + RING) % RING;
+        vec3 tcol = texture(u_ring, vec3(v_uv, float(layer))).rgb;
+        float a = matte(tcol) * pow(u_falloff, float(i));
+        echo = mix(echo, tcol, a);
+    }
+    frag = vec4(mix(echo, live, live_fg), 1.0);   // live subject on top
+}
+)glsl";
+
 // Simple blit (passthrough) ────────────────────────────────────────────────
 static const char* k_blit_frag = R"glsl(
 #version 330 core
@@ -376,7 +492,7 @@ static GLuint link_prog2(const char* vert_src, const char* frag_src) {
 static struct {
     GLuint grade = 0, blur = 0, chroma_key = 0, glitch = 0;
     GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0, blend = 0;
-    GLuint composite = 0;
+    GLuint composite = 0, chroma_melt = 0, chroma_echo = 0, chroma_frame = 0;
 } g_prog;
 
 // Generated effects use a map keyed by (int)FXType — no struct fields needed.
@@ -411,7 +527,7 @@ static GLuint g_solid_tex = 0;
 // previously shared MAX*2 with the mirror face-warp — now exclusive.
 // + a dedicated bank for the face-filter picker previews (one per filter id) so
 // the whole grid of warps can be shown at once without clobbering each other.
-static const int kFacePreviewSlots    = 8;
+static const int kFacePreviewSlots    = 40;  // >= face_filter_count() so picker previews never share an FBO
 static const int kFacePreviewSlotBase = MAX_VIDEO_TRACKS * 4 + 2;
 static const int kMaxSlots = MAX_VIDEO_TRACKS * 4 + 2 + kFacePreviewSlots;
 static const int kFaceClipSlotBase = MAX_VIDEO_TRACKS * 2 + 1;
@@ -550,6 +666,9 @@ void fx_shader_init() {
     g_prog.blit           = link_prog(k_blit_frag);
     g_prog.blend          = link_prog(k_blend_frag);
     g_prog.composite      = link_prog(k_composite_frag);
+    g_prog.chroma_melt    = link_prog(k_chroma_melt_frag);
+    g_prog.chroma_echo    = link_prog(k_chroma_echo_frag);
+    g_prog.chroma_frame   = link_prog(k_chroma_frame_frag);
 
     glGenVertexArrays(1, &g_vao);
 
@@ -640,8 +759,8 @@ uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
     if (n_bumps > 12) n_bumps = 12;
 
     GLint prev_fbo = 0;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-    GLint prev_vp[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);   // before out_ensure —
+    GLint prev_vp[4];                                    // it leaves its FBO bound
     glGetIntegerv(GL_VIEWPORT, prev_vp);
 
     out_ensure(slot, w, h);
@@ -671,6 +790,621 @@ uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     return (uintptr_t)g_out[slot].tex;
+}
+
+// ── Face beauty (skin smoothing / brighten / eye pop) ─────────────────────────
+// The industry recipe, done procedurally from the mesh: an elliptical skin
+// mask in the face basis with holes punched over eyes/brows/mouth; a 12-tap
+// poisson-disk bilateral-lite blur (taps weighted by luma similarity, so
+// pores melt but edges — glasses, hairline, nostrils — survive); a soft-light
+// brighten + warm tint on the same mask; and a gentle brighten inside the
+// eye discs. Geometry arrives in pixels — no aspect gymnastics in UV space.
+static const char* k_face_beauty_fs = R"(#version 330 core
+in vec2 v_uv; out vec4 frag;
+uniform sampler2D u_tex;
+uniform vec2 u_dim;      // texture w, h in px
+uniform vec4 u_face;     // cx, cy, rx, ry (px)
+uniform vec2 u_up;       // face up unit vector
+uniform vec4 u_eyes;     // eyeL xy, eyeR xy (px)
+uniform vec4 u_feat;     // eye_r, mouth_x, mouth_y, mouth_r
+uniform vec4 u_amt;      // smooth, brighten, warmth, eye_pop
+uniform vec4 u_makeup;   // blush, lip_tint, _, _
+uniform vec4 u_cheeks;   // cheekL xy, cheekR xy (px)
+uniform vec4 u_blushc;   // blush color rgb, _
+uniform vec4 u_lipc;     // lip color rgb, _
+uniform vec4 u_eyeglow;  // rgb, amount
+uniform vec4 u_cyber;    // skin_tint, desat, chrome, scanlines
+uniform vec4 u_tintc;    // skin tint color rgb, _
+uniform vec4 u_mouthax;  // lip ellipse semi-width, semi-height (px), _, _
+uniform vec2 u_lippoly[12];  // outer-lip ring in px — the mask FOLLOWS the mouth
+uniform vec4 u_nose;     // nose bridge xy (px), nose blush amt, freckles amt
+uniform float u_brow_r;
+uniform vec4 u_lash;     // amount, wing, liner, _
+uniform vec4 u_chin_px;  // chin x, y (px), crease-smooth amount, _
+uniform vec2 u_blink;    // per-eye blink 0..1 — lid landmarks lag a blink,
+                         // so eye makeup fades out for those frames instead
+                         // of floating over the closed eye
+uniform vec4 u_eyeout;   // outer eye corners L xy, R xy (px)
+uniform vec2 u_lidL[7];  // upper-lid chain, outer→inner (px)
+uniform vec2 u_lidR[7];
+float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+// Distance to a segment, for the liner wing stroke.
+float seg_dist(vec2 p2, vec2 a2, vec2 b2) {
+    vec2 e2 = b2 - a2;
+    float t2 = clamp(dot(p2 - a2, e2) / max(dot(e2, e2), 1e-4), 0.0, 1.0);
+    return length(p2 - (a2 + e2 * t2));
+}
+float hash_f(float x) { return fract(sin(x * 91.3458) * 47453.5453); }
+void main() {
+    vec2 p   = v_uv * u_dim;
+    vec3 col = texture(u_tex, v_uv).rgb;
+
+    // Skin mask: face ellipse in the (right, up) basis…
+    vec2 rightv = vec2(-u_up.y, u_up.x);
+    vec2 d  = p - u_face.xy;
+    float a = dot(d, rightv) / max(u_face.z, 1.0);
+    float b = dot(d, u_up)   / max(u_face.w, 1.0);
+    float mask = 1.0 - smoothstep(0.72, 1.05, length(vec2(a, b)));
+    // Hard cut at the chin line: the ellipse has margin below the chin, so
+    // brighten/smooth were painting the top of the neck and fading out in a
+    // visible U across the chest. b is the up-axis coordinate; the chin sits
+    // near b = -0.89. Nothing below it gets skin processing.
+    mask *= 1.0 - smoothstep(0.84, 1.0, -b);
+    // …minus feature discs (eyes + brow band above them + mouth).
+    float er = max(u_feat.x, 1.0);
+    float holeL = 1.0 - smoothstep(er * 0.7, er * 1.25, distance(p, u_eyes.xy));
+    float holeR = 1.0 - smoothstep(er * 0.7, er * 1.25, distance(p, u_eyes.zw));
+    vec2 browL = u_eyes.xy + u_up * er * 1.2;
+    vec2 browR = u_eyes.zw + u_up * er * 1.2;
+    float br = max(u_brow_r, 1.0);
+    float holeBL = 1.0 - smoothstep(br * 0.6, br * 1.1, distance(p, browL));
+    float holeBR = 1.0 - smoothstep(br * 0.6, br * 1.1, distance(p, browR));
+    float mr = max(u_feat.w, 1.0);
+    float holeM = 1.0 - smoothstep(mr * 0.75, mr * 1.3, distance(p, u_feat.yz));
+    mask *= (1.0 - holeL) * (1.0 - holeR) * (1.0 - holeM)
+          * (1.0 - holeBL * 0.85) * (1.0 - holeBR * 0.85);
+
+    // Bilateral-lite smoothing: poisson disk scaled to face size.
+    if (u_amt.x > 0.001 && mask > 0.003) {
+        float rad = max(u_face.z, u_face.w) * 0.045;
+        vec2 taps[12] = vec2[12](
+            vec2(-0.326,-0.406), vec2(-0.840,-0.074), vec2(-0.696, 0.457),
+            vec2(-0.203, 0.621), vec2( 0.962,-0.195), vec2( 0.473,-0.480),
+            vec2( 0.519, 0.767), vec2( 0.185,-0.893), vec2( 0.507, 0.064),
+            vec2( 0.896, 0.412), vec2(-0.322,-0.933), vec2(-0.792,-0.598));
+        float l0 = lum(col);
+        vec3 acc = col; float wsum = 1.0;
+        for (int i = 0; i < 12; ++i) {
+            vec3 c = texture(u_tex, v_uv + taps[i] * rad / u_dim).rgb;
+            float wl = exp(-pow((lum(c) - l0) * 9.0, 2.0));
+            acc  += c * wl;
+            wsum += wl;
+        }
+        col = mix(col, acc / wsum, u_amt.x * mask);
+    }
+    // Soft-light brighten + warmth on skin.
+    if (u_amt.y > 0.001) {
+        vec3 lift = col + (vec3(1.0) - col) * col * 0.9;
+        col = mix(col, lift, u_amt.y * mask);
+    }
+    if (u_amt.z > 0.001)
+        col += vec3(0.035, 0.012, -0.02) * (u_amt.z * mask);
+    // Eye pop: brighten inside the eye discs (soft).
+    if (u_amt.w > 0.001) {
+        float eL = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, u_eyes.xy));
+        float eR = 1.0 - smoothstep(er * 0.35, er * 0.95, distance(p, u_eyes.zw));
+        col *= 1.0 + u_amt.w * 0.30 * max(eL, eR);
+    }
+    // Double-chin crease erase: frequency-separation retouch. The fold reads
+    // as a horizontal crease shadow + bulge highlight; a wide blur in a
+    // chin-anchored region removes that local contrast while the AVERAGE
+    // tone stays identical — no band (nothing painted), no wobble (nothing
+    // moves). Uses its own region, not the face mask (which ends at the chin).
+    if (u_chin_px.z > 0.001) {
+        float below = smoothstep(0.70, 0.95, -b) * (1.0 - smoothstep(1.30, 1.55, -b));
+        float reg = below * (1.0 - smoothstep(er * 1.3, er * 2.3,
+                                              distance(p, u_chin_px.xy)));
+        if (reg > 0.003) {
+            vec2 px2 = 1.0 / u_dim;
+            float rad = er * 0.55;
+            vec3 acc = vec3(0.0);
+            for (int i = 0; i < 12; ++i) {
+                float ang = float(i) * 0.5236;
+                float rr2 = (0.35 + 0.65 * fract(float(i) * 0.618)) * rad;
+                acc += texture(u_tex, v_uv + vec2(cos(ang), sin(ang)) * rr2 * px2).rgb;
+            }
+            col = mix(col, acc * (1.0 / 12.0), reg * u_chin_px.z * 0.8);
+        }
+    }
+    // Under-jaw contour shadow: a soft darkening band just OUTSIDE the lower
+    // face ellipse — the makeup-artist trick that makes a double chin recede.
+    // (elen = elliptical distance in the face basis; >1 is outside the face.)
+    if (u_makeup.w > 0.001) {
+        float elen = length(vec2(a, b));
+        float band = smoothstep(0.94, 1.03, elen) * (1.0 - smoothstep(1.03, 1.18, elen));
+        float below = smoothstep(0.45, 0.85, -b);    // lower face only
+        // Hug the CHIN: without this the band relative to the big face
+        // ellipse sweeps a wide U across the neck and chest.
+        vec2 chin_px = u_face.xy - u_up * u_face.w * 0.92;
+        float near_chin = 1.0 - smoothstep(u_face.z * 0.55, u_face.z * 0.95,
+                                           distance(p, chin_px));
+        float sh = u_makeup.w * band * below * near_chin;
+        col *= 1.0 - sh * vec3(0.20, 0.22, 0.24);
+    }
+    // Makeup gates: geometry says WHERE, chroma says WHAT. Without these the
+    // lip disc tinted whatever sat in front of the mouth (a microphone, a
+    // hand) and blush landed on headphone cups inside the face ellipse.
+    float m_cb = 0.5 - 0.168736 * col.r - 0.331264 * col.g + 0.5 * col.b;
+    float m_cr = 0.5 + 0.5 * col.r - 0.418688 * col.g - 0.081312 * col.b;
+    float skin_chroma = smoothstep(0.27, 0.31, m_cb) * (1.0 - smoothstep(0.45, 0.50, m_cb))
+                      * smoothstep(0.50, 0.54, m_cr) * (1.0 - smoothstep(0.66, 0.70, m_cr));
+    // Blush: two soft rosy discs on the cheeks, skin-chroma gated.
+    if (u_makeup.x > 0.001) {
+        float br2 = max(u_face.z, u_face.w) * 0.30;
+        float cL = 1.0 - smoothstep(br2 * 0.3, br2, distance(p, u_cheeks.xy));
+        float cR = 1.0 - smoothstep(br2 * 0.3, br2, distance(p, u_cheeks.zw));
+        float bm = max(cL, cR) * u_makeup.x * mask * skin_chroma;
+        col = mix(col, col * (0.75 + 0.5 * u_blushc.rgb), bm * 0.55);
+    }
+    // E-girl layer: across-the-nose blush + faux freckles, both in the face
+    // basis so they ride head rotation. Freckles are hash-jittered dots over
+    // an elliptical band spanning the nose bridge and upper cheeks.
+    if (u_nose.z + u_nose.w > 0.001) {
+        vec2 nb = vec2(dot(p - u_nose.xy, rightv), dot(p - u_nose.xy, u_up)) / max(er, 1.0);
+        float band = 1.0 - smoothstep(0.55, 1.0, length(nb * vec2(0.50, 1.55)));
+        if (u_nose.z > 0.001) {
+            float m_cb2 = 0.5 - 0.168736 * col.r - 0.331264 * col.g + 0.5 * col.b;
+            float m_cr2 = 0.5 + 0.5 * col.r - 0.418688 * col.g - 0.081312 * col.b;
+            float sk2 = smoothstep(0.27, 0.31, m_cb2) * (1.0 - smoothstep(0.45, 0.50, m_cb2))
+                      * smoothstep(0.50, 0.54, m_cr2) * (1.0 - smoothstep(0.66, 0.70, m_cr2));
+            col = mix(col, col * (0.75 + 0.5 * u_blushc.rgb),
+                      band * u_nose.z * mask * sk2 * 0.50);
+        }
+        if (u_nose.w > 0.001) {
+            vec2 cell = floor(nb * 6.0);
+            vec2 fr2  = fract(nb * 6.0);
+            float h1 = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+            vec2 jit = fract(sin(vec2(dot(cell, vec2(269.5, 183.3)),
+                                      dot(cell, vec2(419.2, 371.9)))) * 43758.5453);
+            float fd = length(fr2 - 0.30 - jit * 0.40);
+            // Size + opacity jitter per dot; soft edges and a warm brown so
+            // they read as freckles, not specks.
+            float rsz  = 0.11 + 0.10 * fract(h1 * 7.31);
+            float dotm = (1.0 - smoothstep(rsz * 0.4, rsz + 0.06, fd)) * step(0.45, h1);
+            float op   = 0.35 + 0.30 * fract(h1 * 13.7);
+            col = mix(col, col * vec3(0.74, 0.55, 0.45),
+                      dotm * band * u_nose.w * mask * op);
+        }
+    }
+    // Lip tint: the OUTER-LIP POLYGON from the live mesh (follows a smile
+    // exactly — an ellipse can't bend), feathered by distance to its edge,
+    // with a bitten-lip gradient: strongest at the mouth center, fading to
+    // the edge (the douyin 咬唇 look). Redness gate keeps it off teeth/mic.
+    if (u_makeup.y > 0.001) {
+        int crossings = 0;
+        float dmin = 1e9;
+        for (int i = 0; i < 12; ++i) {
+            vec2 a2 = u_lippoly[i];
+            vec2 b2 = u_lippoly[i == 11 ? 0 : i + 1];
+            if ((a2.y > p.y) != (b2.y > p.y)) {
+                float xin = a2.x + (p.y - a2.y) * (b2.x - a2.x) / (b2.y - a2.y);
+                if (p.x < xin) crossings++;
+            }
+            vec2 e2 = b2 - a2;
+            float ts = clamp(dot(p - a2, e2) / max(dot(e2, e2), 1e-4), 0.0, 1.0);
+            dmin = min(dmin, length(p - (a2 + e2 * ts)));
+        }
+        float inside  = float((crossings & 1) == 1);
+        float feather = max(u_mouthax.y * 0.30, 1.5);
+        // No outside bleed: color above the vermilion border is what reads
+        // as "smudged". The mask is zero outside the ring, full inside past
+        // a short feather.
+        float lm2 = inside * smoothstep(0.0, feather * 0.8, dmin);
+        // Bitten-lip gradient via the center ellipse.
+        vec2 md = p - u_feat.yz;
+        float la = dot(md, rightv) / max(u_mouthax.x, 1.0);
+        float lb = dot(md, u_up)   / max(u_mouthax.y, 1.0);
+        float grad = 1.0 - 0.55 * u_makeup.z * smoothstep(0.25, 1.0, length(vec2(la, lb)));
+        // Redness gate polices the EDGES only. Deep inside the lip polygon
+        // geometry wins — a lower lip washed out by window light is still a
+        // lip (the gate-everywhere version painted upper lips only).
+        float deep  = inside * smoothstep(feather, feather * 2.2, dmin);
+        float lippy = max(smoothstep(0.03, 0.12, col.r - col.g), deep);
+        float t = u_makeup.y * lm2 * grad * lippy;
+        // Colorize toward the lip color, keeping the lip's own shading — a
+        // dark goth plum and a hot Barbie pink both read as lipstick.
+        vec3 lip_target = u_lipc.rgb * (0.30 + 1.05 * lum(col));
+        col = mix(col, clamp(lip_target, 0.0, 1.0), t * 0.85);
+    }
+
+    // ── Cyber layer (all skin-masked; runs after makeup) ──────────────────
+    if (u_cyber.x + u_cyber.y + u_cyber.z + u_cyber.w > 0.001) {
+        float lm3 = lum(col);
+        // Desaturate → tint → chrome curve → scanlines.
+        col = mix(col, vec3(lm3), u_cyber.y * mask);
+        col = mix(col, u_tintc.rgb * (0.15 + 1.1 * lm3), u_cyber.x * mask);
+        if (u_cyber.z > 0.001) {
+            vec3 crm = clamp((col - 0.5) * 2.2 + 0.5, 0.0, 1.0);
+            crm += smoothstep(0.75, 0.98, lm3) * 0.25;   // hard speculars
+            col = mix(col, crm, u_cyber.z * mask);
+        }
+        if (u_cyber.w > 0.001) {
+            float sl = 0.5 + 0.5 * sin(p.y * 1.4);
+            col *= 1.0 - u_cyber.w * mask * 0.35 * smoothstep(0.55, 0.95, sl);
+            col += u_tintc.rgb * u_cyber.w * mask * 0.06 * (1.0 - sl);
+        }
+    // Procedural eyeliner + lashes + wing (hybrid: plates carry eyeshadow/etc,
+    // this provides all lash/liner). High-def: liner sits exactly on the live
+    // lid polyline, lashes are individual tapered strokes fanning outward with
+    // curl + jitter so they contour and flow, wing curves along brow bone
+    // with tip taper + alpha fade. Values scale with lash/liner/lash_wing.
+    if (u_lash.x + u_lash.y + u_lash.z > 0.001) {
+        vec3 ink = vec3(0.04, 0.03, 0.04);
+        for (int side = 0; side < 2; ++side) {
+            float bfade = 1.0 - 0.9 * smoothstep(0.25, 0.55,
+                                    side == 0 ? u_blink.x : u_blink.y);
+            vec2 outc = side == 0 ? u_eyeout.xy : u_eyeout.zw;
+            float dmin2 = 1e9; float tbest = 0.0;
+            vec2 seg_a = vec2(0.0); vec2 seg_b = vec2(0.0);
+            vec2 seg_dir = vec2(0.0);
+            for (int i = 0; i < 6; ++i) {
+                vec2 a3 = side == 0 ? u_lidL[i]     : u_lidR[i];
+                vec2 b3 = side == 0 ? u_lidL[i + 1] : u_lidR[i + 1];
+                vec2 e3 = b3 - a3;
+                float ts = clamp(dot(p - a3, e3) / max(dot(e3, e3), 1e-4), 0.0, 1.0);
+                float dd = length(p - (a3 + e3 * ts));
+                if (dd < dmin2) {
+                    dmin2 = dd; tbest = (float(i) + ts) / 6.0;
+                    seg_a = a3; seg_b = b3;
+                    seg_dir = e3 / max(length(e3), 1e-4);
+                }
+            }
+            vec2 lid_norm = vec2(-seg_dir.y, seg_dir.x);
+            {
+                vec2 tmpEye = side == 0 ? u_eyes.xy : u_eyes.zw;
+                if (dot(lid_norm, tmpEye - (seg_a + seg_b) * 0.5) > 0.0)
+                    lid_norm = -lid_norm;
+            }
+            float taper = 1.0 - tbest * 0.6;
+            // Crisp liner on the lid polyline.
+            if (u_lash.z > 0.001) {
+                float lt = er * 0.045 * taper;
+                float line = 1.0 - smoothstep(lt * 0.5, lt, dmin2);
+                float above_clamp = smoothstep(-er * 0.08, er * 0.04, dot(p - outc, lid_norm));
+                col = mix(col, ink, line * above_clamp * u_lash.z * 0.98 * bfade);
+            }
+            // High-def lash strokes.
+            if (u_lash.x > 0.001) {
+                float lash_total = 0.0;
+                float base_count = 18.0 * u_lash.x;
+                if (dmin2 < er * 0.42) {
+                    for (int hi = 0; hi < 28; ++hi) {
+                        if (float(hi) >= base_count + 6.0) break;
+                        float ht = fract(float(hi) * 0.618034 + float(side) * 0.37);
+                        ht = clamp(ht, 0.02, 0.95);
+                        float h_jitter = hash_f(float(hi * 7) + float(side) * 13.0 + 0.11) * 0.08 - 0.04;
+                        ht = clamp(ht + h_jitter, 0.02, 0.97);
+                        vec2 lid_at_t = vec2(0.0);
+                        vec2 lid_dir_at_t = vec2(0.0);
+                        float acc = 0.0;
+                        float fps = 1.0 / 6.0;
+                        for (int si = 0; si < 6; ++si) {
+                            vec2 a3 = side == 0 ? u_lidL[si]     : u_lidR[si];
+                            vec2 b3 = side == 0 ? u_lidL[si + 1] : u_lidR[si + 1];
+                            if (ht >= acc && ht < acc + fps) {
+                                float lt2 = (ht - acc) / fps;
+                                lid_at_t = a3 + (b3 - a3) * lt2;
+                                lid_dir_at_t = normalize(b3 - a3);
+                                break;
+                            }
+                            acc += fps;
+                        }
+                        if (lid_dir_at_t.x == 0.0 && lid_dir_at_t.y == 0.0) {
+                            lid_at_t = seg_a; lid_dir_at_t = seg_dir;
+                        }
+                        vec2 ln_n = vec2(-lid_dir_at_t.y, lid_dir_at_t.x);
+                        {
+                            vec2 tmpEye2 = side == 0 ? u_eyes.xy : u_eyes.zw;
+                            if (dot(ln_n, tmpEye2 - lid_at_t) > 0.0) ln_n = -ln_n;
+                        }
+                        float fan = (1.0 - ht) * 0.55;
+                        vec2 flair = normalize(ln_n * 0.75 + lid_dir_at_t * (-fan + 0.20 * (1.0 - ht)));
+                        float ang_jit = (hash_f(float(hi * 3 + side * 5) + 0.53) * 2.0 - 1.0) * 0.18;
+                        float cs = cos(ang_jit), sn = sin(ang_jit);
+                        vec2 jaz = vec2(flair.x * cs - flair.y * sn, flair.x * sn + flair.y * cs);
+                        float hl_jit = hash_f(float(hi * 11 + side) + 0.77);
+                        float hl = er * (0.14 + u_lash.x * 0.22) * (0.8 + ht * 0.3)
+                                 * (0.60 + hl_jit * 0.80);
+                        vec2 h_mid = lid_at_t + jaz * hl * 0.55;
+                        vec2 h_tip = h_mid + jaz * hl * 0.45 + ln_n * hl * 0.18;
+                        float d1 = seg_dist(p, lid_at_t, h_mid);
+                        float d2 = seg_dist(p, h_mid, h_tip);
+                        float d_hair = min(d1, d2);
+                        float al1 = clamp(dot(p - lid_at_t, h_mid - lid_at_t) /
+                                          max(dot(h_mid - lid_at_t, h_mid - lid_at_t), 1e-4), 0.0, 1.0);
+                        float al_tot = al1 * 0.5;
+                        {
+                            float a2 = clamp(dot(p - h_mid, h_tip - h_mid) /
+                                             max(dot(h_tip - h_mid, h_tip - h_mid), 1e-4), 0.0, 1.0);
+                            if (d2 < d1) al_tot = 0.5 + a2 * 0.5;
+                        }
+                        float hw = mix(er * 0.022, er * 0.004, al_tot);
+                        hw *= (0.70 + u_lash.x * 0.45);
+                        float hair = 1.0 - smoothstep(hw * 0.5, hw, d_hair);
+                        float tip_f = 1.0 - smoothstep(0.55, 1.0, al_tot);
+                        lash_total = max(lash_total, hair * tip_f);
+                    }
+                }
+                lash_total = clamp(lash_total, 0.0, 1.0);
+                col = mix(col, col * 0.18, lash_total * u_lash.x * 0.85 * bfade);
+                col += vec3(0.08, 0.06, 0.05) * lash_total * u_lash.x * 0.12 * bfade;
+            }
+            // Wing anchored on live lid line at outer corner, curved + tapered.
+            if (u_lash.y > 0.001) {
+                vec2 inc = side == 0 ? u_lidL[6] : u_lidR[6];
+                vec2 outdir = normalize(outc - inc);
+                vec2 eye_up = vec2(-outdir.y, outdir.x);
+                if (dot(eye_up, u_up) < 0.0) eye_up = -eye_up;
+                vec2 w_mid = outc + (outdir * 0.85 + eye_up * 0.38) * er * u_lash.y;
+                vec2 w_tip = w_mid + (outdir * 0.15 + eye_up * 0.20) * er * u_lash.y;
+                float al = clamp(dot(p - outc, w_tip - outc) /
+                                 max(dot(w_tip - outc, w_tip - outc), 1e-4), 0.0, 1.0);
+                vec2 wp = mix(mix(outc, w_mid, al), mix(w_mid, w_tip, al), al);
+                float wd = distance(p, wp);
+                float wt = mix(er * 0.10, er * 0.010, al);
+                float wing = 1.0 - smoothstep(wt * 0.4, wt, wd);
+                float tip_f = 1.0 - smoothstep(0.65, 1.0, al);
+                col = mix(col, ink, wing * u_lash.y * tip_f * 0.96 * bfade);
+            }
+        }
+    }
+    // Eye glow: additive colored halo, larger + softer than eye pop.
+    if (u_eyeglow.a > 0.001) {
+        float gL = 1.0 - smoothstep(er * 0.3, er * 1.6, distance(p, u_eyes.xy));
+        float gR = 1.0 - smoothstep(er * 0.3, er * 1.6, distance(p, u_eyes.zw));
+        col += u_eyeglow.rgb * (u_eyeglow.a * 0.55 * max(gL, gR));
+    }
+    frag = vec4(clamp(col, 0.0, 1.0), texture(u_tex, v_uv).a);
+}
+)";
+// ── UV-mapped face makeup pass ─────────────────────────────────────────────
+// Draws the tracked face mesh (MediaPipe canonical UVs, 898 tris) textured
+// with an authored makeup PNG. Per-pixel lighting adaptation ties pigment to
+// the skin beneath (luminance + color cast) so a texture authored under
+// neutral light sits naturally in a warm/dim room.
+#include "generated/face_uv_mesh.h"
+
+static const char* k_face_mk_vs = R"(#version 330 core
+layout(location = 0) in vec2 a_px;   // landmark position, texture pixels
+layout(location = 1) in vec2 a_uv;   // canonical makeup-texture UV
+uniform vec2 u_dim;
+out vec2 v_mkuv;
+out vec2 v_srcuv;
+void main() {
+    v_mkuv  = a_uv;
+    v_srcuv = a_px / u_dim;
+    gl_Position = vec4(v_srcuv * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+static const char* k_face_mk_fs = R"(#version 330 core
+in vec2 v_mkuv;
+in vec2 v_srcuv;
+out vec4 frag;
+uniform sampler2D u_mk;
+uniform sampler2D u_src;
+uniform float u_opacity;
+uniform float u_adapt;    // 0 = raw decal, 1 = full lighting adaptation
+uniform vec4 u_mk_eyes;   // eye centers (px) — for blink fade
+uniform vec4 u_mk_blink;  // blink L, blink R, eye radius px, _
+float lum2(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main() {
+    vec4 mk   = texture(u_mk, v_mkuv);
+    vec3 base = texture(u_src, v_srcuv).rgb;
+    // Blink fade: painted eye makeup would float over a closed eye (the lid
+    // landmarks lag a blink) — fade it inside the eye discs instead.
+    vec2 ppx = v_srcuv * vec2(textureSize(u_src, 0));
+    float er2 = max(u_mk_blink.z, 1.0);
+    float nearL = 1.0 - smoothstep(er2 * 0.8, er2 * 2.2, distance(ppx, u_mk_eyes.xy));
+    float nearR = 1.0 - smoothstep(er2 * 0.8, er2 * 2.2, distance(ppx, u_mk_eyes.zw));
+    float bfade = 1.0 - 0.9 * max(nearL * smoothstep(0.25, 0.55, u_mk_blink.x),
+                                  nearR * smoothstep(0.25, 0.55, u_mk_blink.y));
+    mk.a *= bfade;
+    float base_lum = lum2(base);
+    vec3 tint = base / max(base_lum, 0.04);
+    vec3 lit  = mk.rgb
+              * mix(vec3(1.0), clamp(tint, 0.55, 1.0), u_adapt * 0.65)
+              * mix(1.0, clamp(base_lum * 1.9, 0.20, 1.0), u_adapt * 0.85);
+    vec3 blend = clamp(lit, 0.0, 1.0);
+    // Material-aware blend: dark pigments deepen, chromatic midtones tint,
+    // bright low-alpha texels add a soft, non-clipping highlight.
+    vec3 out = base + (2.0 * blend - 1.0) * base * (1.0 - base);
+    // Depth cue for dark pigment (lashes, liner): very dark, high-alpha
+    // texels get a subtle luma-based edge highlight/shadow, simulating
+    // raised hair/ink catching light. Breaks the flat-decal read.
+    float mk_lum = lum2(mk.rgb);
+    float is_dark_pigment = smoothstep(0.12, 0.0, mk_lum) * smoothstep(0.3, 0.7, mk.a);
+    if (is_dark_pigment > 0.01) {
+        vec2 mkpx = vec2(0.0, -er2 * 0.4 / 1024.0);
+        vec3 above = texture(u_mk, v_mkuv + mkpx).rgb;
+        float above_lum = lum2(above);
+        float edge = clamp((above_lum - mk_lum) * 3.0, -1.0, 1.0);
+        out += vec3(0.06, 0.05, 0.05) * edge * is_dark_pigment;
+    }
+    frag = vec4(mix(base, out, mk.a * u_opacity), 1.0);
+}
+)";
+
+static GLuint g_face_mk_prog = 0;
+static GLuint g_face_mk_vao = 0, g_face_mk_vbo = 0, g_face_mk_ibo = 0;
+static struct { GLuint tex = 0, fbo = 0; int w = 0, h = 0; } g_makeup_out[kMaxSlots];
+
+uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const float (*pts)[2], unsigned makeup_tex,
+                            float opacity, float adapt,
+                            float eyeL_x, float eyeL_y, float eyeR_x, float eyeR_y,
+                            float eye_r, float blink_l, float blink_r) {
+    if (!src_tex || !makeup_tex || slot < 0 || slot >= kMaxSlots ||
+        w <= 0 || h <= 0 || opacity <= 0.001f)
+        return src_tex;
+    if (!g_face_mk_prog) {
+        g_face_mk_prog = link_prog2(k_face_mk_vs, k_face_mk_fs);
+        if (!g_face_mk_prog) return src_tex;
+        glGenVertexArrays(1, &g_face_mk_vao);
+        glGenBuffers(1, &g_face_mk_vbo);
+        glGenBuffers(1, &g_face_mk_ibo);
+        glBindVertexArray(g_face_mk_vao);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_face_mk_ibo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(k_face_tris),
+                     k_face_tris, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, g_face_mk_vbo);
+        glBufferData(GL_ARRAY_BUFFER, FACE_UV_NPTS * 4 * sizeof(float),
+                     nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                              (void*)(2 * sizeof(float)));
+        glBindVertexArray(0);
+    }
+    // Save bindings BEFORE the ensure (make_tex_fbo leaves its FBO bound).
+    GLint prev_fbo = 0, prev_vp[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+    auto& s = g_makeup_out[slot];
+    if (s.w != w || s.h != h) {
+        if (s.fbo) { glDeleteFramebuffers(1, &s.fbo); glDeleteTextures(1, &s.tex); s.fbo = s.tex = 0; }
+        make_tex_fbo(s.tex, s.fbo, w, h);
+        s.w = w; s.h = h;
+    }
+    GLboolean was_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_BLEND);
+    // Base copy, then the textured mesh over it (fragment blends in-shader so
+    // it can light-adapt against the base).
+    draw_pass(s.fbo, (GLuint)src_tex, w, h, g_prog.blit);
+    float vtx[FACE_UV_NPTS * 4];
+    for (int i = 0; i < FACE_UV_NPTS; ++i) {
+        vtx[i * 4 + 0] = pts[i][0];
+        vtx[i * 4 + 1] = pts[i][1];
+        vtx[i * 4 + 2] = k_face_uv[i][0];
+        vtx[i * 4 + 3] = k_face_uv[i][1];
+    }
+    // Cull folded triangles: under yaw the far side of the face self-occludes
+    // and its triangles flip winding — drawing them smears the hidden eye's
+    // makeup across the visible cheek. Majority sign = frontal.
+    static unsigned short live_tris[FACE_UV_NTRI * 3];
+    int n_live = 0, n_pos = 0;
+    static float sa[FACE_UV_NTRI];
+    for (int t = 0; t < FACE_UV_NTRI; ++t) {
+        const unsigned short* tr = k_face_tris[t];
+        float ax = pts[tr[1]][0] - pts[tr[0]][0], ay = pts[tr[1]][1] - pts[tr[0]][1];
+        float bx2 = pts[tr[2]][0] - pts[tr[0]][0], by2 = pts[tr[2]][1] - pts[tr[0]][1];
+        sa[t] = ax * by2 - ay * bx2;
+        if (sa[t] > 0.f) ++n_pos;
+    }
+    bool front_pos = n_pos * 2 >= FACE_UV_NTRI;
+    for (int t = 0; t < FACE_UV_NTRI; ++t) {
+        if ((sa[t] > 0.f) != front_pos) continue;
+        live_tris[n_live * 3 + 0] = k_face_tris[t][0];
+        live_tris[n_live * 3 + 1] = k_face_tris[t][1];
+        live_tris[n_live * 3 + 2] = k_face_tris[t][2];
+        ++n_live;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, s.fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_face_mk_prog);
+    glBindVertexArray(g_face_mk_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_face_mk_vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vtx), vtx);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)makeup_tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
+    glUniform1i(glGetUniformLocation(g_face_mk_prog, "u_mk"), 0);
+    glUniform1i(glGetUniformLocation(g_face_mk_prog, "u_src"), 1);
+    glUniform2f(glGetUniformLocation(g_face_mk_prog, "u_dim"), (float)w, (float)h);
+    glUniform1f(glGetUniformLocation(g_face_mk_prog, "u_opacity"), opacity);
+    glUniform1f(glGetUniformLocation(g_face_mk_prog, "u_adapt"), adapt);
+    glUniform4f(glGetUniformLocation(g_face_mk_prog, "u_mk_eyes"),
+                eyeL_x, eyeL_y, eyeR_x, eyeR_y);
+    glUniform4f(glGetUniformLocation(g_face_mk_prog, "u_mk_blink"),
+                blink_l, blink_r, eye_r, 0.f);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_face_mk_ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, n_live * 3 * sizeof(unsigned short),
+                 live_tris, GL_DYNAMIC_DRAW);
+    glDrawElements(GL_TRIANGLES, n_live * 3, GL_UNSIGNED_SHORT, 0);
+    glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE0);
+    if (was_blend) glEnable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    return s.tex;
+}
+
+static GLuint g_face_beauty_prog = 0;
+// Own buffer per slot — the warp pass reads this output into g_out[slot];
+// sharing g_out here would be a same-texture read/write feedback loop.
+static struct { GLuint tex = 0, fbo = 0; int w = 0, h = 0; } g_beauty_out[kMaxSlots];
+
+uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const FaceBeautyParams& p) {
+    if (slot < 0 || slot >= kMaxSlots || w <= 0 || h <= 0) return src_tex;
+    if (!g_face_beauty_prog) {
+        g_face_beauty_prog = link_prog(k_face_beauty_fs);
+        if (!g_face_beauty_prog) return src_tex;
+    }
+    // Save bindings BEFORE the ensure: make_tex_fbo leaves the fresh FBO
+    // bound, so reading the "previous" binding after it captures OUR buffer —
+    // the restore then pins the rest of the frame into it (one black frame
+    // the first time a size is seen).
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4];
+    glGetIntegerv(GL_VIEWPORT, prev_vp);
+    auto& s = g_beauty_out[slot];
+    if (s.w != w || s.h != h) {
+        if (s.fbo) { glDeleteFramebuffers(1, &s.fbo); glDeleteTextures(1, &s.tex); s.fbo = s.tex = 0; }
+        make_tex_fbo(s.tex, s.fbo, w, h);
+        s.w = w; s.h = h;
+    }
+
+    glBindVertexArray(g_vao);
+    glBindFramebuffer(GL_FRAMEBUFFER, s.fbo);
+    glViewport(0, 0, w, h);
+    glUseProgram(g_face_beauty_prog);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
+    auto u = [&](const char* nm) { return glGetUniformLocation(g_face_beauty_prog, nm); };
+    glUniform1i(u("u_tex"), 0);
+    glUniform2f(u("u_dim"), (float)w, (float)h);
+    glUniform4f(u("u_face"), p.face_cx, p.face_cy, p.face_rx, p.face_ry);
+    glUniform2f(u("u_up"), p.upx, p.upy);
+    glUniform4f(u("u_eyes"), p.eyeL_x, p.eyeL_y, p.eyeR_x, p.eyeR_y);
+    glUniform4f(u("u_feat"), p.eye_r, p.mouth_x, p.mouth_y, p.mouth_r);
+    glUniform4f(u("u_amt"), p.smooth, p.brighten, p.warmth, p.eye_pop);
+    glUniform4f(u("u_makeup"), p.blush, p.lip_tint, p.lip_grad, p.jaw_shade);
+    glUniform4f(u("u_cheeks"), p.cheekL_x, p.cheekL_y, p.cheekR_x, p.cheekR_y);
+    glUniform4f(u("u_blushc"), p.blush_col[0], p.blush_col[1], p.blush_col[2], 0.f);
+    glUniform4f(u("u_lipc"), p.lip_col[0], p.lip_col[1], p.lip_col[2], 0.f);
+    glUniform4f(u("u_eyeglow"), p.eye_glow_col[0], p.eye_glow_col[1], p.eye_glow_col[2], p.eye_glow);
+    glUniform4f(u("u_cyber"), p.skin_tint, p.desat, p.chrome, p.scanlines);
+    glUniform4f(u("u_tintc"), p.tint_col[0], p.tint_col[1], p.tint_col[2], 0.f);
+    glUniform4f(u("u_mouthax"), p.mouth_sw, p.mouth_sh, 0.f, 0.f);
+    glUniform2fv(u("u_lippoly"), 12, &p.lip_poly[0][0]);
+    glUniform4f(u("u_nose"), p.nose_x, p.nose_y, p.nose_blush, p.freckles);
+    glUniform4f(u("u_lash"), p.lash, p.lash_wing, p.liner, 0.f);
+    glUniform2f(u("u_blink"), p.blink_l, p.blink_r);
+    glUniform4f(u("u_chin_px"), p.chin_x, p.chin_y, p.chin_smooth, 0.f);
+    glUniform4f(u("u_eyeout"), p.eyeoutL_x, p.eyeoutL_y, p.eyeoutR_x, p.eyeoutR_y);
+    glUniform2fv(u("u_lidL"), 7, &p.lidL[0][0]);
+    glUniform2fv(u("u_lidR"), 7, &p.lidR[0][0]);
+    glUniform1f(u("u_brow_r"), p.brow_r);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    return (uintptr_t)s.tex;
 }
 
 // ── Face sprites (doggy ears/nose/tongue at playback/export) ─────────────────
@@ -737,6 +1471,43 @@ uintptr_t face_sprites_apply(uintptr_t src_tex, int slot, int w, int h,
     return (uintptr_t)g_out[slot].tex;
 }
 
+// ── Chroma Frame ring: per-slot history of snapshot frames for discrete echoes ──
+// Melt/Echo reuse the single g_out[slot] feedback texture; Frame needs DISTINCT past
+// frames, so each Frame-carrying slot keeps a small 2D-array ring, advanced every
+// `spacing` seconds of clip time. Lazily allocated; only slots with a Frame brick pay.
+static const int kFrameRingLayers = 8;
+struct FrameRing {
+    GLuint arr = 0;         // GL_TEXTURE_2D_ARRAY, kFrameRingLayers layers
+    GLuint fbo = 0;         // scratch FBO for per-layer writes
+    int    w = 0, h = 0;
+    int    head = -1;       // most-recent filled layer
+    int    count = 0;       // layers filled so far
+    float  last_t = -1e9f;  // clip-time of the last tap advance
+};
+static std::unordered_map<int, FrameRing> g_frame_rings;
+
+static FrameRing& frame_ring_ensure(int slot, int w, int h) {
+    FrameRing& r = g_frame_rings[slot];
+    if (r.arr && (r.w != w || r.h != h)) {
+        glDeleteTextures(1, &r.arr); r.arr = 0;
+        r.head = -1; r.count = 0; r.last_t = -1e9f;
+    }
+    if (!r.arr) {
+        glGenTextures(1, &r.arr);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, r.arr);
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, w, h, kFrameRingLayers,
+                     0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+        if (!r.fbo) glGenFramebuffers(1, &r.fbo);
+        r.w = w; r.h = h;
+    }
+    return r;
+}
+
 uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t)
 {
@@ -751,9 +1522,13 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     bool need_vhs      = cfx.vhs_on      && (cfx.vhs_noise >= 0.01f || cfx.vhs_bleed >= 0.1f || cfx.vhs_tracking >= 0.01f);
     bool need_leak     = cfx.leak_on     && cfx.leak_intensity > 0.01f;
     bool need_datamosh = cfx.datamosh_on && cfx.datamosh_spread > 0.01f;
+    bool need_melt     = cfx.chroma_melt_on;
+    bool need_echo     = cfx.chroma_echo_on;
+    bool need_frame    = cfx.chroma_frame_on;
 
     if (!need_grade && !need_vig && !need_blur && !need_chroma &&
-        !need_glitch && !need_vhs && !need_leak && !need_datamosh && !cfx.any_gen_fx)
+        !need_glitch && !need_vhs && !need_leak && !need_datamosh &&
+        !need_melt && !need_echo && !need_frame && !cfx.any_gen_fx)
         return src_tex_in;
 
     if (w <= 0 || h <= 0) return src_tex_in;
@@ -766,6 +1541,15 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
 
     pp_ensure(w, h);
     out_ensure(slot, w, h);
+
+    // Every FX pass (and the final blit into the persistent slot below) OVERWRITES
+    // its target — the shaders composite internally — so GL blending must be off.
+    // The live preview leaves GL_BLEND enabled (ImGui backend), which made the slot
+    // blit BLEND: a chroma-keyed clip's alpha-0 pixels never cleared, so the slot
+    // accumulated last frame's content into a sideways ghost. Export ran blend-off,
+    // hence clean. Force it off for the chain, restore the caller's state after.
+    GLboolean prev_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_BLEND);
 
     glBindVertexArray(g_vao);
 
@@ -863,6 +1647,105 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     // ── Generated effects ─────────────────────────────────────────────────────
 #include "generated/fx_shader_apply.h"
 
+    // ── Chroma melt: feed the keyed frame back into the persistent slot for a
+    //    deliberate temporal smear — the old GL_BLEND "ghost", now on purpose and
+    //    export-safe (g_out[slot] still holds last frame's output = the feedback).
+    if (need_melt) {
+        GLuint p = g_prog.chroma_melt;
+        glBindFramebuffer(GL_FRAMEBUFFER, g_pp.fbo[pslot]);
+        glViewport(0, 0, w, h);
+        glUseProgram(p);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, cur);
+        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, g_out[slot].tex);   // previous frame = feedback
+        glUniform1i(glGetUniformLocation(p, "u_feedback"), 1);
+        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+                    cfx.chroma_melt_r, cfx.chroma_melt_g, cfx.chroma_melt_b);
+        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_melt_threshold);
+        glUniform1f(glGetUniformLocation(p, "u_persist"),   cfx.chroma_melt_persist);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+        cur = g_pp.tex[pslot];
+        pslot ^= 1;
+    }
+
+    // ── Chroma echo: crisp sibling of melt — keyed pixels stack the subject's past
+    //    frames as fading ghosts (no drift). Also reads g_out[slot] (last frame).
+    if (need_echo) {
+        GLuint p = g_prog.chroma_echo;
+        glBindFramebuffer(GL_FRAMEBUFFER, g_pp.fbo[pslot]);
+        glViewport(0, 0, w, h);
+        glUseProgram(p);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, cur);
+        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, g_out[slot].tex);   // previous frame = feedback
+        glUniform1i(glGetUniformLocation(p, "u_feedback"), 1);
+        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+                    cfx.chroma_echo_r, cfx.chroma_echo_g, cfx.chroma_echo_b);
+        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_echo_threshold);
+        glUniform1f(glGetUniformLocation(p, "u_persist"),   cfx.chroma_echo_persist);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE0);
+        cur = g_pp.tex[pslot];
+        pslot ^= 1;
+    }
+
+    // ── Chroma frame: discrete multi-tap echoes from a per-slot frame ring ─────
+    if (need_frame) {
+        FrameRing& ring = frame_ring_ensure(slot, w, h);
+        float spacing = fmaxf(0.01f, cfx.chroma_frame_spacing);
+        // Reset on a backward / large time jump (scrub) so echoes don't smear a seek.
+        if (t < ring.last_t - 0.001f || t - ring.last_t > spacing * 8.f) {
+            ring.head = -1; ring.count = 0; ring.last_t = -1e9f;
+        }
+        // Advance one tap every `spacing` seconds (or on first frame): snapshot the
+        // current chain result into the ring head via a layer-targeted blit.
+        if (ring.head < 0 || t - ring.last_t >= spacing) {
+            ring.head = (ring.head + 1) % kFrameRingLayers;
+            if (ring.count < kFrameRingLayers) ring.count++;
+            ring.last_t = t;
+            glBindFramebuffer(GL_FRAMEBUFFER, ring.fbo);
+            glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, ring.arr, 0, ring.head);
+            glViewport(0, 0, w, h);
+            glUseProgram(g_prog.blit);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, cur);
+            glUniform1i(glGetUniformLocation(g_prog.blit, "u_tex"), 0);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+        // Composite the live frame + the ring taps into the ping-pong.
+        int ntaps = (int)(cfx.chroma_frame_taps + 0.5f);
+        ntaps = ntaps < 1 ? 1 : (ntaps > kFrameRingLayers ? kFrameRingLayers : ntaps);
+        if (ntaps > ring.count) ntaps = ring.count;
+        GLuint p = g_prog.chroma_frame;
+        glBindFramebuffer(GL_FRAMEBUFFER, g_pp.fbo[pslot]);
+        glViewport(0, 0, w, h);
+        glUseProgram(p);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, cur);
+        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, ring.arr);
+        glUniform1i(glGetUniformLocation(p, "u_ring"), 1);
+        glUniform1i(glGetUniformLocation(p, "u_head"), ring.head);
+        glUniform1i(glGetUniformLocation(p, "u_ntaps"), ntaps);
+        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+                    cfx.chroma_frame_r, cfx.chroma_frame_g, cfx.chroma_frame_b);
+        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_frame_threshold);
+        glUniform1f(glGetUniformLocation(p, "u_falloff"),   cfx.chroma_frame_falloff);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+        glActiveTexture(GL_TEXTURE0);
+        cur = g_pp.tex[pslot];
+        pslot ^= 1;
+    }
+
     // ── Write final result to stable per-slot output ──────────────────────────
     draw_pass(g_out[slot].fbo, cur, w, h, g_prog.blit);
 
@@ -871,6 +1754,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glBindVertexArray(0);
+    if (prev_blend) glEnable(GL_BLEND);
 
     return (uintptr_t)g_out[slot].tex;
 }
@@ -1109,3 +1993,21 @@ void fx_blit(uintptr_t src_tex, unsigned dst_fbo, int w, int h) {
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
     glBindVertexArray(0);
 }
+
+#else
+uintptr_t bg_render_to_texture(const char*, int, int, int, float, float, float, const float*, const float*, const float*) { return 0; }
+uintptr_t face_beauty_apply(uintptr_t s, int, int, int, const FaceBeautyParams&) { return s; }
+uintptr_t face_makeup_apply(uintptr_t s, int, int, int, const float (*)[2], unsigned, float, float, float, float, float, float, float, float, float) { return s; }
+uintptr_t face_makeup_apply(uintptr_t s, int, int, int, const float (*)[2], unsigned, float, float) { return s; }
+uintptr_t face_warp_apply(uintptr_t s, int, int, int, const float*, int) { return s; }
+uintptr_t face_sprites_apply(uintptr_t s, int, int, int, const FaceSpriteQuad*, int) { return s; }
+int fx_face_clip_slot(int) { return 0; }
+int fx_face_preview_slot(int) { return 0; }
+uintptr_t fx_apply(uintptr_t s, int, int, int, const EffectAccum&, const CreativeFXAccum&, float) { return s; }
+uintptr_t fx_preview_gen_effect(FXType, uintptr_t s, int, int, float) { return s; }
+void fx_blit(uintptr_t, unsigned, int, int) {}
+void scene_add_layer(uintptr_t, float, float, float, float, float, float, float, float, float, float, float) {}
+uintptr_t scene_result() { return 0; }
+void fx_shader_init() {}
+void fx_shader_shutdown() {}
+#endif  // PMS_HAS_GL

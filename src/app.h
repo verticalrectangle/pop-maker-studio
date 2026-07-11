@@ -27,6 +27,15 @@ enum class PipelineMode {
 
 static const int MAX_VIDEO_TRACKS = 32;
 
+// Concurrent video DECODER slots (g_pv[] / AppState::proxy_paths[]). Decoupled
+// from MAX_VIDEO_TRACKS: a project has few tracks but can have hundreds of video
+// clips, and each distinct on-screen source needs a decoder slot. The old code
+// reused MAX_VIDEO_TRACKS (32) here, so the 33rd+ distinct source got no slot and
+// rendered blank. The live set is playhead-scoped (only clips near the playhead
+// hold slots — see gc_video_slots), so this is headroom for a dense window, not a
+// per-project ceiling; idle slots are cheap (empty PreviewState).
+static const int MAX_VIDEO_SLOTS = 96;
+
 // ── Animation style ───────────────────────────────────────────────────────────
 
 enum class AnimStyle {
@@ -58,7 +67,10 @@ enum class FXType {
     LightLeak,    // procedural film-light flare synced to amplitude envelope
     VHS,          // chroma bleed + grain + tracking glitch
     Datamosh,     // temporal ghost buffer + multi-key chroma chaos
-    ChromaKey,    // color-range keyer — compositing brick
+    ChromaKey,    // color-range keyer — compositing brick (the clean keyer)
+    ChromaMelt,   // chroma-keyed feedback smear (the "trippy melt") — NOT a clean key
+    ChromaEcho,   // chroma-keyed feedback echo — crisp stacked frame-ghosts (no smear)
+    ChromaFrame,  // chroma-keyed DISCRETE frame echoes — multi-tap delay (per-slot ring)
     // ── Audio FX bricks ─────────────────────────────────────────────────────
     AudioAutotune,      // YIN pitch detection + grain shift + scale quantize
     AudioPitch,         // grain pitch shift, fixed semitone offset
@@ -251,6 +263,26 @@ struct Clip {
     float       fx_chroma_key_b         = 0.f;
     float       fx_chroma_key_threshold = 0.30f;
     float       fx_chroma_key_softness  = 0.15f;
+    // ChromaMelt brick (the trippy feedback smear — distinct from the keyer)
+    float       fx_chroma_melt_r         = 0.f;
+    float       fx_chroma_melt_g         = 1.f;
+    float       fx_chroma_melt_b         = 0.f;
+    float       fx_chroma_melt_threshold = 0.30f;
+    float       fx_chroma_melt_persist   = 0.88f;
+    // ChromaEcho brick (crisp feedback echo — stacked frame-ghosts, no smear/drift)
+    float       fx_chroma_echo_r         = 0.f;
+    float       fx_chroma_echo_g         = 1.f;
+    float       fx_chroma_echo_b         = 0.f;
+    float       fx_chroma_echo_threshold = 0.30f;
+    float       fx_chroma_echo_persist   = 0.92f;
+    // ChromaFrame brick (discrete multi-tap frame echoes — needs a per-slot frame ring)
+    float       fx_chroma_frame_r         = 0.f;
+    float       fx_chroma_frame_g         = 1.f;
+    float       fx_chroma_frame_b         = 0.f;
+    float       fx_chroma_frame_threshold = 0.30f;
+    float       fx_chroma_frame_taps      = 4.f;     // number of discrete echoes (1..8)
+    float       fx_chroma_frame_spacing   = 0.12f;   // seconds between taps (delay time)
+    float       fx_chroma_frame_falloff   = 0.75f;   // per-tap fade
 
     // Glitch
     float       fx_glitch_chroma     = 8.f;   // RGB channel spread in pixels
@@ -367,6 +399,10 @@ struct Clip {
     // managed takes dir). The selected take plays in preview/export like an
     // audio clip with in_point 0 / speed 1; the rest wait in the panel tray.
     std::vector<std::string> rec_takes;
+    uint64_t rec_live_id = 0;   // transient recorder-session stamp (NOT serialized):
+                                // the recorders resolve their target brick by this,
+                                // not by indices or loop bounds — a new brick with
+                                // identical bounds must never inherit a session.
     int                      rec_take_sel = -1;
 
     // Capture IMG brick: a VideoRecord brick in photo mode — each take is a
@@ -375,16 +411,32 @@ struct Clip {
     // and renders through the normal image-still path. Same camera panel.
     bool rec_photo = false;
 
-    // Video Record brick: capture the mic alongside the webcam so each take is a
-    // synced A/V mp4 (one ffmpeg captures both → single clock). rec_av_offset_ms
-    // nudges audio vs video to dial out fixed device latency (+ = delay audio).
+    // LEGACY (pre-v61 A/V capture): the camera brick used to mux the mic into
+    // each take via one ffmpeg (+ rec_av_offset_ms manual nudge). Superseded by
+    // the record PAIR below — kept only so old projects round-trip and their
+    // muxed .mkv takes keep playing. New recordings never read these.
     bool  rec_audio       = true;
     float rec_av_offset_ms = 0.f;
+
+    // Record A/V pair: a camera (VideoRecord) brick and a mic (Record) brick
+    // that record together on the shared loop clock. Same non-zero id on both
+    // sides = paired. Starting the camera starts the mic recorder in lockstep
+    // (cycle N of one is cycle N of the other, so take trays pair by index),
+    // and each side keeps its own takes — best video + best audio can come
+    // from different passes. 0 = unpaired (solo brick, records its own medium).
+    int rec_pair_id = 0;
+
+    // Clip group: clips sharing a non-zero group_id select and drag as one
+    // (right-click → Group clips / Ungroup). 0 = ungrouped.
+    int group_id = 0;
 
     // Content clip: when true, the coupled FX chains expand into per-FX timing
     // lanes drawn beneath the clip (the track grows), so each effect's run can
     // be trimmed individually. Collapsed by default; view state, not exported.
     bool  fx_expanded = false;
+    // Per-effect (set on each fx_chain sub-effect): expand this effect's lane into
+    // per-PARAM keyframe sub-rows on the timeline. View state, not exported.
+    bool  params_expanded = false;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.
@@ -425,6 +477,12 @@ struct ClipKfField { const char* name; float Clip::* f; };
 extern const ClipKfField kClipKfFields[];
 extern const int kClipKfFieldCount;
 
+// What a track holds. Lyrics/LyricsFX tracks are exclusive (accept only their own
+// brick) and durable across reloads — see is_lyrics_track and project serialization.
+// (managed is NOT serialized; kind is what survives a save/load.)
+enum class TrackKind : uint8_t { Normal = 0, Lyrics = 1, LyricsFX = 2,
+                                 GroupHead = 3 };  // folder row over the N tracks below
+
 struct Track {
     std::string       name;
     std::vector<Clip> clips;
@@ -433,7 +491,19 @@ struct Track {
     bool              locked  = false;  // when true, blocks all clip edits on this track
     bool              managed = false;  // owned by typography system — preset rewrites clips in-place
     int               sub_row = 0;
+    TrackKind         kind    = TrackKind::Normal;
+
+    // Track group (kind == GroupHead): this row is a FOLDER over the next
+    // group_children tracks. Holds no clips; carries the collapse state and
+    // fans mute/lock/visibility out to its children. Contiguity is the rule —
+    // a group is also a contiguous compositing unit (normalize_track_groups
+    // clamps runs so they never swallow another head). v63.
+    int  group_children  = 0;
+    bool group_collapsed = false;
 };
+
+inline bool is_lyrics_track(const Track& t) { return t.kind == TrackKind::Lyrics; }
+inline bool is_group_head(const Track& t)   { return t.kind == TrackKind::GroupHead; }
 
 // ── Audio bus brick ────────────────────────────────────────────────────────────
 // A Bus is a Clip (ClipType::Bus) placed on a track: it submixes the audio of
@@ -452,6 +522,30 @@ struct CreativeFXAccum {
     float chroma_key_b         = 0.f;
     float chroma_key_threshold = 0.30f;
     float chroma_key_softness  = 0.15f;
+
+    // ChromaMelt — chroma-keyed temporal feedback smear (distinct from the keyer above)
+    bool  chroma_melt_on        = false;
+    float chroma_melt_r         = 0.f;
+    float chroma_melt_g         = 1.f;
+    float chroma_melt_b         = 0.f;
+    float chroma_melt_threshold = 0.30f;
+    float chroma_melt_persist   = 0.88f;
+    // ChromaEcho — chroma-keyed feedback echo (crisp stacked frames, no drift)
+    bool  chroma_echo_on        = false;
+    float chroma_echo_r         = 0.f;
+    float chroma_echo_g         = 1.f;
+    float chroma_echo_b         = 0.f;
+    float chroma_echo_threshold = 0.30f;
+    float chroma_echo_persist   = 0.92f;
+    // ChromaFrame — chroma-keyed discrete multi-tap frame echoes
+    bool  chroma_frame_on        = false;
+    float chroma_frame_r         = 0.f;
+    float chroma_frame_g         = 1.f;
+    float chroma_frame_b         = 0.f;
+    float chroma_frame_threshold = 0.30f;
+    float chroma_frame_taps      = 4.f;
+    float chroma_frame_spacing   = 0.12f;
+    float chroma_frame_falloff   = 0.75f;
 
     bool  glitch_on         = false;
     float glitch_chroma     = 0.f;
@@ -574,6 +668,8 @@ enum TypoField {
     TF_FontSize = 0, TF_Color, TF_Case, TF_AnchorH,
     TF_Tracking, TF_Wrap, TF_PosV,
     TF_PosX, TF_PosY, TF_TextStyle, TF_FadeIn, TF_FadeOut,
+    TF_Grouping,   // override the preset's grouping; value lives in state.subtitle_mode/_n
+    TF_KaraokeHi,  // override the preset's karaoke highlight colour (karaoke_hi)
     TF_COUNT
 };
 struct TypoTweaks {
@@ -591,6 +687,7 @@ struct TypoTweaks {
     TextStyle ts;                // shadow/stroke/glow/box
     float     fade_in   = 0.f;
     float     fade_out  = 0.f;
+    float     karaoke_hi[4] = {1.f, 0.85f, 0.1f, 1.f};  // TF_KaraokeHi: karaoke highlight colour
 
     bool on(TypoField f)     const { return (active & (1u << f)) != 0; }
     bool pinned(TypoField f) const { return (held   & (1u << f)) != 0; }
@@ -608,6 +705,10 @@ struct AppState {
     // splash
     float splash_timer = 1.6f;  // counts down from launch; studio shows when <= 0
     bool  in_studio    = false; // false = show the home/launcher; true = the editor
+
+    // iOS live-FX: the ordered render-time FX stack the Metal backend applies to
+    // the submitted frame (JSON array of {fx_type,params}), set via `set_live_fx`.
+    std::string live_fx_json;
 
     // files
     std::string project_path;   // path of the .pms file last saved/loaded (empty = unsaved)
@@ -689,7 +790,14 @@ struct AppState {
 
     // Proxy slot table: proxy_paths[slot] = source file path (empty = free).
     // Keyed by file path so two clips sharing a source share one proxy.
-    std::string proxy_paths[MAX_VIDEO_TRACKS];
+    std::string proxy_paths[MAX_VIDEO_SLOTS];
+
+    // Runtime, never serialized: pending slot opens from a project load. The
+    // studio frame drains a few per frame (tick_video_slot_opens) and shows an
+    // "Opening project…" bar until empty — opening slots synchronously froze
+    // the UI for seconds on media-heavy projects (ffprobe per source).
+    std::vector<std::pair<int, std::string>> slot_open_queue;
+    int slot_open_total = 0;
 
     // Bin — project-scoped media library. Files added here are "available to
     // the project" but not necessarily on the timeline. Drag from bin → track
@@ -704,6 +812,12 @@ struct AppState {
     int         kf_sel_clip  = -1;
     std::string kf_sel_prop;
     int         kf_sel_idx   = -1;
+    int         kf_sel_source = -1;   // -1 = clip's own ktracks; else the fx_chain entry index
+
+    // Navigate-to-param: a timeline keyframe click names a prop to reveal in the
+    // panel (scroll-to + flash). One-shot; consumed/cleared in kf_slider.
+    std::string focus_prop;
+    double      focus_prop_t = 0.0;
 
     // multi-clip selection — set of (track_idx, clip_idx)
     std::set<std::pair<int,int>> clip_selection;
@@ -768,6 +882,16 @@ struct AppState {
     // on the 9:16 canvas and shift the drag centre-snap to the visible box.
     bool show_social_safe = false;
 
+    // View ▸ Master meter: live LUFS + peak strip on the preview (master-only).
+    bool show_master_meter = false;
+
+    // Export loudness report (ffmpeg ebur128 on the finished file, so it
+    // measures what platforms receive — post-mix, post-AAC, true peak).
+    // Runtime only; keyed to the file it measured so a re-export re-runs it.
+    std::string loudness_report;        // human line shown in the export UI
+    std::string loudness_report_for;    // out_mp4 path the report belongs to
+    bool        loudness_measuring = false;
+
     // scroll-to-clip request (set by preview click, consumed by draw_timeline)
     bool request_scroll_to_clip = false;
 
@@ -779,6 +903,17 @@ struct AppState {
 
     // IPC-requested snapshot (ipc_server sets request; GL thread fulfills and sets done)
     bool        snapshot_request    = false;
+    // Save-thumbnail request: canvas capture writes a small PNG here on the
+    // next rendered frame (set on every successful project save). Runtime.
+    std::string thumb_request;
+    // Dirty tracking: history_pos() at the last save/load/new. The project is
+    // dirty when history has moved past this point (undoing back to it counts
+    // as clean again). Runtime, never serialized.
+    int  saved_history_pos = 0;
+    // Quit flow: the close button arms quit_prompt instead of exiting when
+    // dirty; the save-confirm modal sets quit_confirmed to let the app close.
+    bool quit_prompt    = false;
+    bool quit_confirmed = false;
     // source == "canvas": capture the live preview rect from the window
     // framebuffer after ImGui renders — the exact pixels the user sees
     // (scene compositor + text overlays) — instead of re-rendering through

@@ -38,8 +38,32 @@ bool  audio_capture_start();    // enter performance mode
 void  audio_capture_stop();     // leave performance mode
 bool  audio_capture_active();
 float audio_input_peak();       // live mic peak 0–1 (0 when not capturing)
+
+// Master output meter (BS.1770): momentary + integrated LUFS and sample peak
+// of the final device buffer. Integrated resets each time playback starts.
+#include "loudness.h"
+LoudnessSnapshot audio_master_meter();
 // Move all captured samples since the last drain into `out` (appends).
+// Drains BOTH native device capture and externally injected capture
+// (audio_capture_push) through this one contract.
 void  audio_capture_drain(std::vector<float>& out);
+
+// ── External capture injection (iOS mic path; Linux-testable) ─────────────────
+// Push interleaved stereo f32 from an external capture source (e.g. an
+// AVAudioEngine tap on iOS). The samples are COPIED before returning into a
+// fixed-capacity SPSC ring — no allocation, no locks. If sample_rate differs
+// from the engine's 44100 Hz the block is linearly resampled at push time
+// (push runs on the capture thread, never the render callback; fractional
+// phase carries across pushes for a continuous stream). Single producer:
+// call from one thread at a time.
+// Overflow policy: REJECT NEWEST — post-resample frames that don't fit are
+// dropped (and counted); buffered-but-undrained audio is never overwritten.
+// Works in PMS_HEADLESS builds (pure memory ring — no device, no PipeWire).
+void audio_capture_push(const float* interleaved_lr, size_t frames,
+                        double sample_rate);
+// Counters (monotonic since process start; surfaced by get_audio_perf):
+uint64_t audio_capture_injected_frames();  // post-resample frames accepted
+uint64_t audio_capture_dropped_frames();   // post-resample frames rejected (ring full)
 float audio_capture_latency();  // input period in seconds (0 if not capturing)
 
 // Capture device picker. Index -1 = system default. The list refreshes on
@@ -72,6 +96,13 @@ bool audio_gate_bake_get();
 // sample in the duplex input path.
 void audio_monitor_fx_set(bool on);
 bool audio_monitor_fx_get();
+
+// Virtual microphone (PipeWire only): expose the PROCESSED record-brick
+// signal (gate + noise reduction + live FX) as a system input device —
+// "Pop Maker Studio Mic" in every app's mic picker. Keeps the capture
+// device running while enabled, independent of local monitoring.
+bool audio_vmic_set(bool on);   // false = start failed (no PipeWire)
+bool audio_vmic_get();
 void audio_monitor_chain_set(const std::vector<AudioFX>& stages);
 // Windowed monitor chain: while the transport rolls, the live mic runs through
 // these source-time FX windows via process_seg (matching playback/export

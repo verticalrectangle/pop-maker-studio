@@ -9,7 +9,9 @@ INPUT="$1"
 OUTPUT="$2"
 PW=270
 PH=480
-TMP=$(mktemp /tmp/fx_face_XXXXXX.rgb)
+# BSD mktemp (macOS) requires the Xs at the END of the template.
+TMP=$(mktemp /tmp/fx_face_XXXXXX).rgb
+trap 'rm -f "${TMP%.rgb}" "$TMP"' EXIT
 
 ffmpeg -y -i "$INPUT" \
     -vf "crop=ih*9/16:ih,scale=${PW}:${PH}:flags=lanczos" \

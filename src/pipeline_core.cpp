@@ -1,18 +1,19 @@
-#include "studio_types.h"
-#include "studio_shared.h"
-#include "pipeline.h"
-#include "panel_animation.h"
+// pipeline_core.cpp — the ML/import/subtitle pipeline, hoisted whole from
+// ui/pipeline.cpp during the iOS engine extraction (Phase 0): everything in
+// this file is engine logic (SRT parse, word grouping, beat detect queue,
+// subtitle modes, import + pipeline kick). The two draw_* status strips that
+// shared the old file moved to ui/pipeline_ui.cpp. Behavior unchanged.
+#include "engine_seams.h"
+#include "pipeline_core.h"
 #include "app.h"
 #include "audio.h"
 #include "video.h"
 #include "proxy.h"
 #include "history.h"
-#include "filepicker.h"
 #include "transcribe.h"
 #include "paths.h"
 #include "beat_detect.h"
 #include "waveform.h"
-#include "theme.h"
 #include "render.h"
 #include "json.hpp"
 #include <imgui.h>
@@ -178,6 +179,76 @@ std::vector<Clip> group_words(
     return out;
 }
 
+// Parse a Whisper *_segments.json into raw segment Clips (text/start/end) in
+// source-time. Empty on missing/unreadable/garbage. These are the real line
+// boundaries — far more reliable than re-deriving lines from silence gaps.
+std::vector<Clip> read_segment_clips(const std::string& seg_path) {
+    std::vector<Clip> segs;
+    if (seg_path.empty() || !fs::exists(seg_path)) return segs;
+    std::ifstream f(seg_path);
+    if (!f) return segs;
+    try {
+        auto j = nlohmann::json::parse(f);
+        for (auto& seg : j) {
+            Clip c;
+            c.text  = seg.value("text", std::string());
+            c.start = seg.value("start", 0.f);
+            c.end   = seg.value("end", 0.f);
+            segs.push_back(c);
+        }
+    } catch (...) {}
+    return segs;
+}
+
+// Segment-accurate grouping. Words and segments must be in the SAME time space
+// (both source, or both already offset to the timeline). Each segment claims the
+// words up to the next segment's start (so no word is dropped), then:
+//   Phrase  → sub-split the segment's words at internal pauses (> thresh)
+//   Line / Segment / Sentence / Karaoke → one clip for the whole segment
+// The clip's text comes from the segment (keeps spacing/punctuation) but its
+// timing comes from the contained words' onsets, so it never stretches over the
+// silence a raw Whisper segment timestamp runs into. Falls back to {} if either
+// list is empty (caller then uses the gap-based group_words).
+std::vector<Clip> group_words_segmented(
+    const std::vector<Clip>& words, const std::vector<Clip>& segments,
+    SubtitleMode mode, float pause_gap, int max_words)
+{
+    std::vector<Clip> out;
+    if (words.empty() || segments.empty()) return out;
+    const bool  karaoke = (mode == SubtitleMode::Karaoke);
+    const float thresh  = (pause_gap > 0.f) ? pause_gap : 0.3f;
+    size_t wi = 0;
+    for (size_t si = 0; si < segments.size(); ++si) {
+        float claim_end = (si + 1 < segments.size())
+                            ? segments[si + 1].start - 0.05f : 1e9f;
+        std::vector<const Clip*> bucket;
+        while (wi < words.size() && words[wi].start < claim_end) {
+            bucket.push_back(&words[wi]); ++wi;
+        }
+        if (bucket.empty()) continue;
+        if (mode == SubtitleMode::Phrase) {
+            Clip cur = *bucket[0]; int wc = 1;
+            for (size_t i = 1; i < bucket.size(); ++i) {
+                float gap = bucket[i]->start - bucket[i - 1]->end;
+                if (gap > thresh || (max_words > 0 && wc >= max_words)) {
+                    out.push_back(cur); cur = *bucket[i]; wc = 1;
+                } else {
+                    cur.text += " " + bucket[i]->text;
+                    cur.end   = bucket[i]->end; ++wc;
+                }
+            }
+            out.push_back(cur);
+        } else {
+            Clip cur = *bucket[0];
+            if (!segments[si].text.empty()) cur.text = segments[si].text;
+            cur.end = bucket.back()->end;
+            if (karaoke) cur.karaoke = true;
+            out.push_back(cur);
+        }
+    }
+    return out;
+}
+
 // Load the flat word list from words_json_path into AppState::words_cache.
 // ── Beat detection subprocess ─────────────────────────────────────────────────
 
@@ -239,17 +310,36 @@ void poll_clip_beat_analysis(AppState& state) {
                 if (cl.source_id != r.source_id) continue;
                 cl.beats_analyzing = false;
                 if (r.ok) { cl.beat_bpm = r.bpm; cl.beats = r.beats; }
+                // Persist the failure: bpm = -1 means "no beats detectable in
+                // this source" (silent b-roll, no audio stream). Without the
+                // sentinel these clips stayed beats.empty() and re-analyzed on
+                // EVERY project open, forever.
+                else cl.beat_bpm = -1.f;
             }
         }
     }
 
-    // Auto-trigger for any Audio/Video clip that has no beats and isn't pending
+    // Auto-trigger for any Audio/Video clip that has no beats and isn't
+    // pending — THROTTLED. This used to fire one detached beat_detect thread
+    // per distinct source in a single frame (~40 concurrent full audio
+    // decodes on a media-heavy project), which pegged every core and starved
+    // the UI for seconds right as a freshly opened project drew its first
+    // studio frame. At most 2 in flight; the rest trickle in on later frames.
+    int in_flight;
+    {
+        std::lock_guard<std::mutex> lk(s_beat_pending_mtx);
+        in_flight = (int)s_beat_pending.size();
+    }
     for (auto& track : state.tracks) {
         for (auto& cl : track.clips) {
+            if (in_flight >= 2) return;
             if (cl.clip_type != ClipType::Video && cl.clip_type != ClipType::Audio) continue;
             if (cl.source_id.empty() || !cl.beats.empty() || cl.beats_analyzing) continue;
+            if (cl.beat_bpm < 0.f) continue;              // known beat-less source
+            if (is_image_path(cl.source_id)) continue;    // stills have no audio
             cl.beats_analyzing = true;
             kick_clip_beat_detect(cl.source_id);
+            ++in_flight;
         }
     }
 }
@@ -409,26 +499,32 @@ void apply_lyrics_edits(AppState& state, Clip& c) {
 
 // Removes all Lyrics clips with matching source_id from ALL tracks, then
 // places fresh grouped clips on the "Lyrics" track.
+// Find the clip a transcription source belongs to: a placed Audio/Video clip, or a
+// Record/VideoRecord brick whose SELECTED take is this file. The record case lets
+// lyrics/subtitles extracted from a recorded take land at the brick's timeline
+// position (and scope transcription to its window) instead of at t=0.
+static const Clip* clip_for_pipeline_source(const AppState& state, const std::string& src) {
+    if (src.empty()) return nullptr;
+    for (auto& t : state.tracks)
+        for (auto& c : t.clips) {
+            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
+                c.source_id == src) return &c;
+            if ((c.clip_type == ClipType::Record || c.clip_type == ClipType::VideoRecord) &&
+                c.rec_take_sel >= 0 && c.rec_take_sel < (int)c.rec_takes.size() &&
+                c.rec_takes[(size_t)c.rec_take_sel] == src) return &c;
+        }
+    return nullptr;
+}
+
 void apply_subtitle_mode(AppState& state) {
     if (state.words_json_path.empty()) return;
     const std::string src = state.audio_path;
 
-    // Compute timeline offset: whisper timestamps are relative to the audio file
-    // start, but the clip may sit at a non-zero timeline position or have an in_point.
-    // offset = clip.start - clip.in_point
+    // Timeline offset: whisper timestamps are relative to the audio file start, but
+    // the clip (or record brick) may sit at a non-zero timeline position / in_point.
     float tl_offset = 0.f;
-    for (auto& t : state.tracks) {
-        bool found = false;
-        for (auto& c : t.clips) {
-            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
-                c.source_id == src) {
-                tl_offset = c.start - c.in_point;
-                found = true;
-                break;
-            }
-        }
-        if (found) break;
-    }
+    if (const Clip* c = clip_for_pipeline_source(state, src))
+        tl_offset = c->start - c->in_point;
 
     // Remove all Lyrics clips from this source across all tracks
     if (!src.empty()) {
@@ -445,42 +541,9 @@ void apply_subtitle_mode(AppState& state) {
         c.sub_pos   = 1;          // center
     };
 
-    // For Segment mode, read _segments.json instead
-    if (state.subtitle_mode == SubtitleMode::Segment &&
-        !state.segments_json_path.empty() &&
-        fs::exists(state.segments_json_path)) {
-        std::ifstream f(state.segments_json_path);
-        if (!f) return;
-        try {
-            auto j = nlohmann::json::parse(f);
-            Track* lyrics = nullptr;
-            for (auto& t : state.tracks)
-                if (t.name == "Lyrics") { lyrics = &t; break; }
-            if (!lyrics) {
-                state.tracks.insert(state.tracks.begin(), Track{});
-                lyrics = &state.tracks.front();
-                lyrics->name = "Lyrics";
-            }
-            lyrics->managed = true;
-            lyrics->clips.clear();
-            float latency = audio_latency();
-            for (auto& seg : j) {
-                Clip c;
-                c.text  = seg["text"].get<std::string>();
-                c.start = snap_to_frame(seg["start"].get<float>() + tl_offset - latency, state.fps);
-                c.end   = snap_end_to_frame(seg["end"].get<float>() + tl_offset - latency, state.fps);
-                if (c.end < 0.f) continue;  // skip clips shifted before timeline start
-                stamp(c);
-                lyrics->clips.push_back(c);
-            }
-            // Extend project duration so all lyrics are reachable on the timeline.
-            for (auto& c : lyrics->clips)
-                if (c.end > state.duration) state.duration = c.end;
-        } catch (...) {}
-        return;
-    }
-
-    // Word-level JSON → group
+    // Word-level JSON → group. Segment/Phrase/Line route through the
+    // segment-accurate grouper below (the words give timing, the *_segments.json
+    // gives line boundaries) instead of the old gap-only / overrun-prone paths.
     std::ifstream f(state.words_json_path);
     if (!f) return;
     try {
@@ -494,7 +557,20 @@ void apply_subtitle_mode(AppState& state) {
             c.end   = snap_end_to_frame(w["end"].get<float>() + tl_offset - latency, state.fps);
             raw.push_back(c);
         }
-        auto grouped = group_words(raw, state.subtitle_mode, state.subtitle_n);
+        // Segment-accurate grouping for line-level modes when segments exist.
+        std::vector<Clip> segs;
+        const bool line_mode = (state.subtitle_mode == SubtitleMode::Phrase ||
+                                state.subtitle_mode == SubtitleMode::Line ||
+                                state.subtitle_mode == SubtitleMode::Segment ||
+                                state.subtitle_mode == SubtitleMode::Karaoke);
+        if (line_mode && !state.segments_json_path.empty() &&
+            fs::exists(state.segments_json_path)) {
+            segs = read_segment_clips(state.segments_json_path);
+            for (auto& s : segs) { s.start += tl_offset - latency; s.end += tl_offset - latency; }
+        }
+        std::vector<Clip> grouped = !segs.empty()
+            ? group_words_segmented(raw, segs, state.subtitle_mode)
+            : group_words(raw, state.subtitle_mode, state.subtitle_n);
         for (auto& c : grouped) stamp(c);
 
         // Drop clips that land entirely before timeline start (can happen when
@@ -521,14 +597,19 @@ void apply_subtitle_mode(AppState& state) {
 
         Track* lyrics = nullptr;
         for (auto& t : state.tracks)
-            if (t.name == "Lyrics") { lyrics = &t; break; }
+            if (is_lyrics_track(t)) { lyrics = &t; break; }
         if (!lyrics) {
             state.tracks.insert(state.tracks.begin(), Track{});
             lyrics = &state.tracks.front();
             lyrics->name = "Lyrics";
         }
         lyrics->managed = true;
-        lyrics->clips = grouped;
+        lyrics->kind    = TrackKind::Lyrics;
+        // Append (don't replace) so freestanding manual bricks survive a re-group;
+        // the scoped erase above already removed this source's generated bricks.
+        for (auto& c : grouped) lyrics->clips.push_back(c);
+        std::sort(lyrics->clips.begin(), lyrics->clips.end(),
+                  [](const Clip& a, const Clip& b){ return a.start < b.start; });
 
         // Extend project duration so all lyrics are reachable on the timeline.
         for (auto& c : lyrics->clips)
@@ -544,18 +625,8 @@ void apply_subtitle_pipeline(AppState& state) {
     const std::string src = state.audio_path;
 
     float tl_offset = 0.f;
-    for (auto& t : state.tracks) {
-        bool found = false;
-        for (auto& c : t.clips) {
-            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
-                c.source_id == src) {
-                tl_offset = c.start - c.in_point;
-                found = true;
-                break;
-            }
-        }
-        if (found) break;
-    }
+    if (const Clip* c = clip_for_pipeline_source(state, src))
+        tl_offset = c->start - c->in_point;
 
     // Remove existing Subtitle clips from this source across all tracks
     if (!src.empty()) {
@@ -831,120 +902,13 @@ void kick_pipeline(AppState& state, const std::string& path, PipelineMode mode) 
     // [in_point, in_point + (clip.end - clip.start)].
     float clip_in  = 0.f;
     float clip_dur = 0.f;
-    for (auto& t : state.tracks) {
-        for (auto& c : t.clips) {
-            if ((c.clip_type == ClipType::Audio || c.clip_type == ClipType::Video) &&
-                c.source_id == path) {
-                clip_in  = c.in_point;
-                clip_dur = c.end - c.start;
-                break;
-            }
-        }
-        if (clip_dur > 0.f) break;
+    if (const Clip* c = clip_for_pipeline_source(state, path)) {
+        clip_in  = c->in_point;
+        clip_dur = c->end - c->start;
     }
 
     transcribe_start(path, state.pipeline, state.words_json_path, state.vocals_path,
                      mode, proxy_fps, clip_in, clip_dur);
 }
 
-// ── Pipeline inline strip ─────────────────────────────────────────────────────
 
-void draw_pipeline_strip(AppState& state, float w) {
-    if (state.pipeline.stage == PipelineStage::Idle ||
-        state.pipeline.stage == PipelineStage::Done ||
-        state.pipeline.stage == PipelineStage::Error) return;
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    float  h = 32.f;
-
-    dl->AddRectFilled(p, {p.x + w, p.y + h}, to_u32(Col::bg_soft));
-    dl->AddLine({p.x, p.y + h}, {p.x + w, p.y + h}, to_u32(Col::line));
-
-    // Clean progress bar along the bottom edge — same look as bg removal. An
-    // indeterminate sweep until real progress starts (model download / warmup).
-    float pp = state.pipeline.progress > 0.001f ? state.pipeline.progress : -1.f;
-    ui_progress_bar(dl, p.x, p.y + h - 3.f, w, pp, IM_COL32(255, 165, 0, 255), 3.f);
-
-    // Status dot
-    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.f);
-    dl->AddCircleFilled({p.x + 14.f, p.y + h * 0.5f}, 4.f,
-        ImGui::ColorConvertFloat4ToU32({1.f, 1.f, 1.f, pulse}));
-
-    // Text — status + raw debug line
-    std::string msg = state.pipeline.message.empty() ?
-        "Processing…" : state.pipeline.message;
-    char buf[256];
-    snprintf(buf, sizeof(buf), "%s  %d%%", msg.c_str(),
-        (int)(state.pipeline.progress * 100.f));
-    dl->AddText({p.x + 26.f, p.y + 3.f}, to_u32(Col::muted), buf);
-    if (!state.pipeline.raw_line.empty()) {
-        // truncate long lines for display
-        std::string raw = state.pipeline.raw_line;
-        if (raw.size() > 120) raw = raw.substr(0, 117) + "...";
-        dl->AddText(ImGui::GetFont(), 10.f, {p.x + 26.f, p.y + 15.f},
-            to_u32(Col::dim), raw.c_str());
-    }
-
-    // Cancel button (draw as text, handle click)
-    const char* cancel_lbl = "Cancel";
-    float cx = p.x + w - ImGui::CalcTextSize(cancel_lbl).x - 16.f;
-    ImVec2 mp = ImGui::GetIO().MousePos;
-    bool hov = mp.x >= cx && mp.y >= p.y && mp.y < p.y + h;
-    dl->AddText({cx, p.y + 3.f},
-        to_u32(hov ? Col::fg : Col::muted), cancel_lbl);
-    if (hov && ImGui::IsMouseClicked(0)) transcribe_cancel();
-
-    ImGui::Dummy({w, h});
-}
-
-// ── Find-and-add-clip search strip ────────────────────────────────────────────
-//
-// Agent-driven windowed transcript searches (find_and_add_clip /
-// search_transcript) used to run invisibly — the human only saw a clip
-// appear (or not) at the end.  This mirrors draw_pipeline_strip so a search
-// in progress shows up in the same status bar with its current chunk range,
-// progress, and a cancel button.  See feedback_agent_tools_visible_ui.
-void draw_search_strip(float w) {
-    if (!transcribe_search_running()) return;
-
-    SearchStatus s = transcribe_search_status();
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    float  h = 32.f;
-
-    dl->AddRectFilled(p, {p.x + w, p.y + h}, to_u32(Col::bg_soft));
-    dl->AddLine({p.x, p.y + h}, {p.x + w, p.y + h}, to_u32(Col::line));
-
-    dl->AddRectFilled(p, {p.x + w * s.progress, p.y + h},
-        IM_COL32(255,255,255,18));
-
-    float pulse = 0.5f + 0.5f * sinf((float)ImGui::GetTime() * 4.f);
-    dl->AddCircleFilled({p.x + 14.f, p.y + h * 0.5f}, 4.f,
-        ImGui::ColorConvertFloat4ToU32({1.f, 1.f, 1.f, pulse}));
-
-    std::string msg = s.message.empty() ? "Searching transcript…" : s.message;
-    char buf[256];
-    snprintf(buf, sizeof(buf), "Search  •  %s  %d%%",
-        msg.c_str(), (int)(s.progress * 100.f));
-    dl->AddText({p.x + 26.f, p.y + 3.f}, to_u32(Col::muted), buf);
-
-    if (s.total_sec > 0.f) {
-        char range[64];
-        snprintf(range, sizeof(range), "%.0fs / %.0fs scanned",
-            s.current_sec, s.total_sec);
-        dl->AddText(ImGui::GetFont(), 10.f, {p.x + 26.f, p.y + 15.f},
-            to_u32(Col::dim), range);
-    }
-
-    const char* cancel_lbl = "Cancel";
-    float cx = p.x + w - ImGui::CalcTextSize(cancel_lbl).x - 16.f;
-    ImVec2 mp = ImGui::GetIO().MousePos;
-    bool hov = mp.x >= cx && mp.y >= p.y && mp.y < p.y + h;
-    dl->AddText({cx, p.y + 3.f},
-        to_u32(hov ? Col::fg : Col::muted), cancel_lbl);
-    if (hov && ImGui::IsMouseClicked(0)) transcribe_cancel();
-
-    ImGui::Dummy({w, h});
-}

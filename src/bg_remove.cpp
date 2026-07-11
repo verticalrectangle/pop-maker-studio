@@ -1,6 +1,7 @@
 #include "bg_remove.h"
 #include "paths.h"
 #include "proxy.h"
+#include "body_fx.h"   // invalidate/evict the mask caches when masks regenerate
 #include <onnxruntime_cxx_api.h>
 #include <filesystem>
 #include <map>
@@ -150,18 +151,24 @@ int bg_remove_read_frame_count(const std::string& mask_dir) {
     return (int)cnt;
 }
 
-// ── u2net helpers ─────────────────────────────────────────────────────────────
+// ── RobustVideoMatting (RVM) helpers ──────────────────────────────────────────
 
-static std::string u2net_model_path() {
-    std::string dir  = app_models_dir();
-    std::string lite = dir + "/u2netp_human_seg.onnx";
-    if (fs::exists(lite)) return lite;
-    return dir + "/u2net_human_seg.onnx";
+static std::string rvm_model_path() {
+    return app_models_dir() + "/rvm_mobilenetv3_fp32.onnx";
 }
 
-static const float U2NET_MEAN[3] = {0.485f, 0.456f, 0.406f};
-static const float U2NET_STD[3]  = {0.229f, 0.224f, 0.225f};
-static const int   U2NET_SIZE    = 320;
+// RVM is a recurrent video matting net: it takes the frame + 4 recurrent state
+// tensors + a downsample_ratio, and returns foreground, alpha, and updated
+// states. It matts at the input resolution and downsamples internally by
+// downsample_ratio for the encoder. We feed a frame scaled to long-edge RVM_LONG
+// (aspect-preserved, dims /16-aligned so the encoder's four /2 downsamples divide
+// cleanly), keep RATIO=1.0 (encoder runs at the input res), and upscale the
+// returned alpha back to native. RATIO<1 wrecked hard subjects: at a 512 input,
+// ratio 0.5 → encoder at 256 detected NOTHING on a backlit profile; ratio 1.0 at
+// long=720 gave a solid head+shoulders matte (measured: coverage 0.25 vs 0.00).
+// Temporal recurrence is why this must run frames strictly in order.
+static const int   RVM_LONG  = 720;
+static const float RVM_RATIO = 1.0f;
 
 // Bilinear resize of RGB image (src_w*src_h*3) → (dst_w*dst_h*3)
 static void bilinear_resize_rgb(const uint8_t* src, int sw, int sh,
@@ -184,9 +191,8 @@ static void bilinear_resize_rgb(const uint8_t* src, int sw, int sh,
                                   + wx * src[(y0*sw+x1)*3+c])
                         +    wy *((1-wx)*src[(y1*sw+x0)*3+c]
                                   + wx * src[(y1*sw+x1)*3+c]);
-                // Normalize and store in CHW format
-                float n = (v / 255.f - U2NET_MEAN[c]) / U2NET_STD[c];
-                dst[c * dw * dh + dy * dw + dx] = n;
+                // RVM wants src in [0,1], RGB, CHW (no ImageNet mean/std).
+                dst[c * dw * dh + dy * dw + dx] = v / 255.f;
             }
         }
     }
@@ -283,16 +289,16 @@ static void run_job(std::shared_ptr<JobData> data,
     }
 
     // Load ONNX model
-    std::string model = u2net_model_path();
+    std::string model = rvm_model_path();
     if (!fs::exists(model)) {
         std::lock_guard<std::mutex> lk(data->mu);
-        data->error_msg = "u2net model not found: " + model +
+        data->error_msg = "RVM model not found: " + model +
                           "\nPlace the models/ folder next to the binary.";
         data->status.store(2);
         return;
     }
 
-    Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "rembg");
+    Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "rvm");
     Ort::SessionOptions opts;
     // Half the cores: full-width inference starved the live app while
     // masks generated (the 'remove background made everything laggy' report).
@@ -312,10 +318,18 @@ static void run_job(std::shared_ptr<JobData> data,
     }
 
     Ort::AllocatorWithDefaultOptions alloc;
-    auto in_name  = session->GetInputNameAllocated(0, alloc);
-    auto out_name = session->GetOutputNameAllocated(0, alloc);
-    const char* in_names[]  = {in_name.get()};
-    const char* out_names[] = {out_name.get()};
+    // RVM: inputs  = src, r1i, r2i, r3i, r4i, downsample_ratio
+    //      outputs = fgr, pha, r1o, r2o, r3o, r4o
+    std::vector<Ort::AllocatedStringPtr> in_holders, out_holders;
+    std::vector<const char*> in_names, out_names;
+    for (size_t i = 0; i < session->GetInputCount(); ++i) {
+        in_holders.push_back(session->GetInputNameAllocated(i, alloc));
+        in_names.push_back(in_holders.back().get());
+    }
+    for (size_t i = 0; i < session->GetOutputCount(); ++i) {
+        out_holders.push_back(session->GetOutputNameAllocated(i, alloc));
+        out_names.push_back(out_holders.back().get());
+    }
 
     // Extract frames to temp dir using frame-number selection for accuracy
     std::string tmpdir = "/tmp/pms_bg_" + std::to_string(
@@ -380,142 +394,85 @@ static void run_job(std::shared_ptr<JobData> data,
 
     auto mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-    // Probe whether the model supports dynamic batch sizes.
-    bool dynamic_batch = false;
-    {
-        int probe_n = std::min(8, (int)std::thread::hardware_concurrency());
-        if (probe_n > 1) {
-            std::vector<float> probe(2 * 3 * U2NET_SIZE * U2NET_SIZE, 0.f);
-            int64_t pshape[] = {2, 3, U2NET_SIZE, U2NET_SIZE};
-            try {
-                Ort::Value pt = Ort::Value::CreateTensor<float>(
-                    mem_info, probe.data(), probe.size(), pshape, 4);
-                session->Run(Ort::RunOptions{nullptr}, in_names, &pt, 1, out_names, 1);
-                dynamic_batch = true;
-            } catch (...) {}
-        }
-    }
+    // Background QoS: the live app outranks mask generation. The session already
+    // caps intra-op threads at half the cores (see above); nice this worker too.
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
 
-    if (dynamic_batch) {
-        // Model supports variable batch — run all frames in batches of N.
-        int BATCH = std::min(8, (int)std::thread::hardware_concurrency());
-        std::vector<float> input_batch((size_t)BATCH * 3 * U2NET_SIZE * U2NET_SIZE);
+    // ── RVM sequential matting ────────────────────────────────────────────────
+    // RVM is RECURRENT: each frame's four output states (r1o..r4o) feed the next
+    // frame's inputs (r1i..r4i), which is what makes the matte temporally stable
+    // (no per-frame flicker) — but it forces strictly in-order processing (no
+    // batching / no parallel sessions like u2net). Init states are 1x1x1x1 zeros;
+    // ORT grows them to the right shape on the first run. A sub-range restart just
+    // costs a few warm-up frames at its start.
+    int   ww = 0, wh = 0;                    // model working size (from first frame)
+    std::vector<float>   src_buf;            // [3*wh*ww] CHW [0,1]
+    std::vector<float>   rstate[4];          // recurrent state data, carried frame→frame
+    std::vector<int64_t> rshape[4];
+    for (int k = 0; k < 4; ++k) { rstate[k].assign(1, 0.f); rshape[k] = {1, 1, 1, 1}; }
+    float   ratio_val = RVM_RATIO;
+    int64_t ratio_shape[1] = {1};
 
-        for (int i = 0; i < total; i += BATCH) {
-            if (g_shutdown.load()) { fclose(mjpeg_f); fs::remove_all(tmpdir); return; }
-            const int bs = std::min(BATCH, total - i);
+    for (int i = 0; i < total; ++i) {
+        if (g_shutdown.load()) { fclose(mjpeg_f); fs::remove_all(tmpdir); return; }
 
-            std::vector<int> frame_ws(bs, 0), frame_hs(bs, 0);
-            for (int b = 0; b < bs; ++b) {
-                int w, h, ch;
-                uint8_t* img = stbi_load(frames[i + b].string().c_str(), &w, &h, &ch, 3);
-                if (!img) continue;
-                frame_ws[b] = w; frame_hs[b] = h;
-                bilinear_resize_rgb(img, w, h,
-                    input_batch.data() + (size_t)b * 3 * U2NET_SIZE * U2NET_SIZE,
-                    U2NET_SIZE, U2NET_SIZE);
-                stbi_image_free(img);
-            }
+        int w, h, ch;
+        uint8_t* img = stbi_load(frames[i].string().c_str(), &w, &h, &ch, 3);
+        if (!img) { data->progress.store((float)(i + 1) / total); continue; }
 
-            int64_t shape[] = {bs, 3, U2NET_SIZE, U2NET_SIZE};
-            Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
-                mem_info, input_batch.data(),
-                (size_t)bs * 3 * U2NET_SIZE * U2NET_SIZE, shape, 4);
-
-            std::vector<Ort::Value> outputs;
-            try {
-                outputs = session->Run(Ort::RunOptions{nullptr},
-                                       in_names, &in_tensor, 1, out_names, 1);
-            } catch (...) { data->progress.store((float)(i + bs) / total); continue; }
-
-            float* mask_data = outputs[0].GetTensorMutableData<float>();
-            auto mshape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-            int mh = (int)mshape[mshape.size() - 2];
-            int mw = (int)mshape[mshape.size() - 1];
-            size_t mask_stride = (size_t)mh * mw;
-
-            for (int b = 0; b < bs; ++b) {
-                if (frame_ws[b] == 0) continue;
-                int w = frame_ws[b], h = frame_hs[b];
-                std::vector<uint8_t> alpha(w * h);
-                bilinear_resize_mask(mask_data + b * mask_stride, mw, mh, alpha.data(), w, h);
-                gaussian_blur_mask(alpha.data(), w, h);
-                JpegBuf buf;
-                stbi_write_jpg_to_func(JpegBuf::cb, &buf, w, h, 1, alpha.data(), 90);
-                fwrite(buf.data.data(), 1, buf.data.size(), mjpeg_f);
-                fflush(mjpeg_f);
-            }
-            data->progress.store((float)(i + bs) / total);
-        }
-    } else {
-        // Fixed batch=1 model — run N parallel sessions, each processing a different frame.
-        // Each session is single-threaded to avoid oversubscription. HALF the
-        // cores, niced: one-per-core saturated the machine and the app itself
-        // (UI, decode, audio) visibly stuttered while masks generated.
-        const int N = std::max(1, (int)std::thread::hardware_concurrency() / 2);
-        Ort::SessionOptions wopts;
-        wopts.SetIntraOpNumThreads(1);
-        wopts.SetInterOpNumThreads(1);
-        wopts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-
-        std::vector<std::unique_ptr<Ort::Session>> sessions(N);
-        sessions[0] = std::move(session);  // reuse already-loaded session
-        for (int i = 1; i < N; ++i) {
-            try { sessions[i] = std::make_unique<Ort::Session>(env, model.c_str(), wopts); }
-            catch (...) { sessions.resize(i); break; }
+        if (ww == 0) {                       // fix working size once (all frames same size)
+            float sc = (float)RVM_LONG / std::max(w, h);
+            auto a16 = [](int v) { return std::max(16, (v + 8) / 16 * 16); };
+            ww = a16((int)std::lround(w * sc));
+            wh = a16((int)std::lround(h * sc));
+            src_buf.resize((size_t)3 * ww * wh);
         }
 
-        // Results stored in order, written sequentially after all workers finish.
-        std::vector<std::vector<uint8_t>> results(total);
-        std::atomic<int> next_frame{0};
-        std::atomic<bool> aborted{false};
+        bilinear_resize_rgb(img, w, h, src_buf.data(), ww, wh);   // → [0,1] CHW
+        stbi_image_free(img);
 
-        auto worker = [&](Ort::Session* sess) {
-            // Background QoS: the live app outranks mask generation.
-            setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
-            auto wm = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-            std::vector<float> inp(3 * U2NET_SIZE * U2NET_SIZE);
-            while (true) {
-                if (g_shutdown.load()) { aborted.store(true); return; }
-                int i = next_frame.fetch_add(1);
-                if (i >= total) return;
+        // inputs: src, r1i..r4i, downsample_ratio
+        std::vector<Ort::Value> ins;
+        int64_t src_shape[4] = {1, 3, wh, ww};
+        ins.push_back(Ort::Value::CreateTensor<float>(
+            mem_info, src_buf.data(), src_buf.size(), src_shape, 4));
+        for (int k = 0; k < 4; ++k)
+            ins.push_back(Ort::Value::CreateTensor<float>(
+                mem_info, rstate[k].data(), rstate[k].size(),
+                rshape[k].data(), (size_t)rshape[k].size()));
+        ins.push_back(Ort::Value::CreateTensor<float>(
+            mem_info, &ratio_val, 1, ratio_shape, 1));
 
-                int w, h, ch;
-                uint8_t* img = stbi_load(frames[i].string().c_str(), &w, &h, &ch, 3);
-                if (!img) { data->progress.store((float)i / total); continue; }
-                bilinear_resize_rgb(img, w, h, inp.data(), U2NET_SIZE, U2NET_SIZE);
-                stbi_image_free(img);
+        std::vector<Ort::Value> outs;
+        try {
+            outs = session->Run(Ort::RunOptions{nullptr},
+                                in_names.data(), ins.data(), ins.size(),
+                                out_names.data(), out_names.size());
+        } catch (...) { data->progress.store((float)(i + 1) / total); continue; }
 
-                int64_t shape[] = {1, 3, U2NET_SIZE, U2NET_SIZE};
-                Ort::Value in_t = Ort::Value::CreateTensor<float>(wm, inp.data(), inp.size(), shape, 4);
-                std::vector<Ort::Value> outs;
-                try { outs = sess->Run(Ort::RunOptions{nullptr}, in_names, &in_t, 1, out_names, 1); }
-                catch (...) { data->progress.store((float)i / total); continue; }
+        // outputs: fgr, pha, r1o..r4o — pha is the [0,1] alpha at working size.
+        float* pha = outs[1].GetTensorMutableData<float>();
+        auto ps = outs[1].GetTensorTypeAndShapeInfo().GetShape();
+        int ph = (int)ps[ps.size() - 2], pw = (int)ps[ps.size() - 1];
 
-                float* md = outs[0].GetTensorMutableData<float>();
-                auto ms = outs[0].GetTensorTypeAndShapeInfo().GetShape();
-                int mh = (int)ms[ms.size()-2], mw2 = (int)ms[ms.size()-1];
+        std::vector<uint8_t> alpha((size_t)w * h);
+        bilinear_resize_mask(pha, pw, ph, alpha.data(), w, h);
+        gaussian_blur_mask(alpha.data(), w, h);
+        JpegBuf buf;
+        stbi_write_jpg_to_func(JpegBuf::cb, &buf, w, h, 1, alpha.data(), 90);
+        fwrite(buf.data.data(), 1, buf.data.size(), mjpeg_f);
+        fflush(mjpeg_f);
 
-                std::vector<uint8_t> alpha(w * h);
-                bilinear_resize_mask(md, mw2, mh, alpha.data(), w, h);
-                gaussian_blur_mask(alpha.data(), w, h);
-                JpegBuf buf;
-                stbi_write_jpg_to_func(JpegBuf::cb, &buf, w, h, 1, alpha.data(), 90);
-                results[i] = std::move(buf.data);
-                data->progress.store((float)next_frame.load() / total);
-            }
-        };
-
-        std::vector<std::thread> threads;
-        threads.reserve(sessions.size());
-        for (auto& s : sessions) threads.emplace_back(worker, s.get());
-        for (auto& t : threads) t.join();
-
-        if (aborted.load()) { fclose(mjpeg_f); fs::remove_all(tmpdir); return; }
-
-        for (auto& res : results) {
-            if (!res.empty()) fwrite(res.data(), 1, res.size(), mjpeg_f);
+        // carry recurrent states forward (r1o..r4o = outs[2..5])
+        for (int k = 0; k < 4; ++k) {
+            auto rs = outs[2 + k].GetTensorTypeAndShapeInfo().GetShape();
+            size_t n = 1; for (auto d : rs) n *= (size_t)d;
+            const float* rd = outs[2 + k].GetTensorData<float>();
+            rstate[k].assign(rd, rd + n);
+            rshape[k].assign(rs.begin(), rs.end());
         }
+
+        data->progress.store((float)(i + 1) / total);
     }
 
     fclose(mjpeg_f);
@@ -527,6 +484,36 @@ static void run_job(std::shared_ptr<JobData> data,
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+// Ensure SOME body-FX brick overlaps the video clip to consume the masks; if none
+// does, add a default RemoveBackground cutout brick (spanning the clip, uncoupled —
+// mirrors the MCP add_clip(type=body_fx) brick). ANY body-FX brick (NeonOutline,
+// Hologram, …) already samples the masks, so the cutout is only auto-added when the
+// clip has no body-FX at all — e.g. the bare-clip "Remove Background" button. This
+// stops adding a non-cutout body-FX from also spawning an unwanted RemoveBackground.
+static void ensure_remove_bg_brick(AppState& state, int ti, int ci) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return;
+    auto& clips = state.tracks[(size_t)ti].clips;
+    if (ci < 0 || ci >= (int)clips.size()) return;
+    float cs = clips[(size_t)ci].start, ce = clips[(size_t)ci].end;
+    for (auto& d : clips) {
+        if (d.start >= ce || d.end <= cs) continue;            // no overlap
+        if (d.clip_type == ClipType::BodyFX)                   // any standalone body-FX brick
+            return;                                            // already consumes the masks
+        if (d.clip_type == ClipType::MultiFX)                  // or a glass chain holding one
+            for (auto& se : d.fx_chain)
+                if (se.clip_type == ClipType::BodyFX)
+                    return;
+    }
+    Clip brick;
+    brick.clip_type      = ClipType::BodyFX;
+    brick.body_fx_type   = BodyFXType::RemoveBackground;
+    brick.body_fx_amount = 1.f;
+    brick.start = cs;
+    brick.end   = ce;
+    clips.push_back(std::move(brick));
+    fprintf(stderr, "[bg] auto-added RemoveBackground brick on track %d clip %d\n", ti, ci);
+}
+
 void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
     if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return;
     auto& track = state.tracks[track_idx];
@@ -534,9 +521,20 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
     Clip& clip = track.clips[clip_idx];
     if (!clip_is_videolike_type(clip.clip_type) || clip.text.empty()) return;
 
+    // Background removal is keyed to the video clip (one mask set per source path),
+    // so every body-FX brick on it shares the same masks. If a job is already
+    // running, a second trigger — another body-FX brick, a double-click — must not
+    // wipe the partial output and spawn a worker racing the first; the new brick
+    // just rides the in-flight job. (There's no per-job cancel, so restarting
+    // mid-flight would orphan the running worker; a re-run once it's Ready, or a
+    // retry after Error, regenerates cleanly — those statuses fall through.)
+    if (clip.bg_remove_status == BgRemoveStatus::Processing)
+        return;
+
     std::string mjpeg = proxy_mjpeg_path(clip.text);
     if (!fs::exists(mjpeg)) {
         clip.bg_remove_status = BgRemoveStatus::WaitingForProxy;
+        ensure_remove_bg_brick(state, track_idx, clip_idx);  // brick rides it even pre-proxy
         return;
     }
 
@@ -551,6 +549,10 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
         fs::remove(mdir + "/bg_masks.mjpeg");
         fs::remove(mdir + "/start_frame.txt");
     }
+    // The cached seek table indexes the OLD mjpeg's byte offsets; drop it now so the
+    // render rebuilds from the regenerated file (stale offsets read garbage = smudge).
+    // No-GL, so safe regardless of caller thread; the poll re-invalidates on completion.
+    body_fx_invalidate_mask_index(mdir);
 
     {
         std::lock_guard<std::mutex> lk(g_jobs_mu);
@@ -583,6 +585,10 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
         std::lock_guard<std::mutex> lk(g_jobs_mu);
         g_jobs[mdir] = std::move(job);
     }
+
+    // Guarantee the brick exists so the masks are actually applied (every removal
+    // trigger flows through here; the MCP path adds the brick first → no-op).
+    ensure_remove_bg_brick(state, track_idx, clip_idx);
 }
 
 void bg_remove_poll(AppState& state) {
@@ -605,6 +611,16 @@ void bg_remove_poll(AppState& state) {
                 }
             }
         }
+        if (st == 1) {
+            // Masks just finished regenerating — drop BOTH stale caches so the render
+            // rebuilds from the new bg_masks.mjpeg. The new file's per-frame byte offsets
+            // differ from the old one, so a stale seek table reads wrong ranges = the
+            // garbage/smudge that "stays" until a process restart (this is the bug:
+            // a Re-run / re-apply rewrote the masks but the caches kept old offsets).
+            // bg_remove_poll runs on the main thread, so the GL evict is safe here.
+            body_fx_invalidate_mask_index(mdir);
+            body_fx_evict_mask_cache(mdir);
+        }
     }
 
     for (auto it = g_jobs.begin(); it != g_jobs.end(); ) {
@@ -613,6 +629,18 @@ void bg_remove_poll(AppState& state) {
         else
             ++it;
     }
+
+    // Guarantee a brick for ANY clip with removal on + masks ready — covers projects
+    // LOADED with the flag set but no brick (e.g. made on a pre-brick build), which
+    // bg_remove_start never re-runs. Collect first (ensure mutates clips).
+    std::vector<std::pair<int,int>> need;
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
+        for (int ci = 0; ci < (int)state.tracks[(size_t)ti].clips.size(); ++ci) {
+            auto& c = state.tracks[(size_t)ti].clips[(size_t)ci];
+            if (c.bg_remove_on && c.bg_remove_status == BgRemoveStatus::Ready)
+                need.push_back({ti, ci});
+        }
+    for (auto& tc : need) ensure_remove_bg_brick(state, tc.first, tc.second);
 }
 
 void bg_remove_cancel_all() {
@@ -641,14 +669,14 @@ bool bg_remove_run_hires(const std::string& video_path,
     return data->status.load() == 1;
 }
 
-// ── rembg/u2net model management ─────────────────────────────────────────────
+// ── RVM model management ─────────────────────────────────────────────────────
 
 static std::atomic<int>  s_install_status{0};  // 0=idle 1=running 2=done 3=failed
 static std::string       s_install_error;
 static std::mutex        s_install_mu;
 
 bool rembg_is_installed(const std::string& /*python_path*/) {
-    return fs::exists(u2net_model_path());
+    return fs::exists(rvm_model_path());
 }
 
 void rembg_install_reset() {

@@ -1,4 +1,5 @@
 #include "noise_reduce.h"
+#include "platform.h"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -27,7 +28,7 @@ static void run_nr(std::shared_ptr<NrJob> job,
                       " -af \"afftdn=nf=-25\""
                       " \"" + output_path + "\" 2>&1";
 
-    int ret = system(cmd.c_str());  // NOLINT
+    int ret = pms_system(cmd.c_str());  // NOLINT
 
     std::lock_guard<std::mutex> lk(job->mu);
     if (ret == 0 && fs::exists(output_path)) {

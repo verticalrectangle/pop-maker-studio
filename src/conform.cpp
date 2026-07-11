@@ -91,45 +91,62 @@ static void run_job(const Job& j) {
     }
 
     std::string srcarg = "file:" + j.src;
-    std::vector<const char*> args = {
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-hwaccel", "auto",
-    };
     std::string loops = "2";
-    if (j.loop) { args.push_back("-stream_loop"); args.push_back(loops.c_str()); }
-    args.push_back("-i");      args.push_back(srcarg.c_str());
-    args.push_back("-vf");     args.push_back(vf.c_str());
-    args.push_back("-c:v");    args.push_back("libx264");
-    args.push_back("-crf");    args.push_back("18");
-    args.push_back("-preset"); args.push_back("veryfast");
-    args.push_back("-pix_fmt");args.push_back("yuv420p");
-    // Keep audio for plain conforms (same duration); a looped/trimmed conform
-    // drops it (loops are GIFs / silent in practice).
-    if (j.loop) { args.push_back("-an"); }
-    else        { args.push_back("-c:a"); args.push_back("copy"); }
-    args.push_back(tmp.c_str());
-    args.push_back(nullptr);
 
-    pid_t pp = spawn_ffmpeg(args.data());
-    { std::lock_guard<std::mutex> lk(g_mu); g_active_pid = pp; }
+    // One transcode attempt. GPU decode first; on failure the caller retries in
+    // pure software. -hwaccel auto selects a backend (VAAPI/NVDEC/…) that fails
+    // outright on some codecs/profiles/GPUs, and a failed conform means the clip
+    // never gets its project-fps source — retrying in software is deterministic
+    // and always works.
+    auto attempt = [&](bool use_hwaccel) -> bool {
+        std::vector<const char*> args = {
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        };
+        if (use_hwaccel) { args.push_back("-hwaccel"); args.push_back("auto"); }
+        if (j.loop) { args.push_back("-stream_loop"); args.push_back(loops.c_str()); }
+        args.push_back("-i");      args.push_back(srcarg.c_str());
+        args.push_back("-vf");     args.push_back(vf.c_str());
+        args.push_back("-c:v");    args.push_back("libx264");
+        args.push_back("-crf");    args.push_back("18");
+        args.push_back("-preset"); args.push_back("veryfast");
+        args.push_back("-pix_fmt");args.push_back("yuv420p");
+        // Keep audio for plain conforms (same duration); a looped/trimmed conform
+        // drops it (loops are GIFs / silent in practice).
+        if (j.loop) { args.push_back("-an"); }
+        else        { args.push_back("-c:a"); args.push_back("copy"); }
+        args.push_back(tmp.c_str());
+        args.push_back(nullptr);
 
-    int wst = 0;
-    while (true) {
-        pid_t r = waitpid(pp, &wst, WNOHANG);
-        if (r == pp) break;
-        if (r < 0)  { wst = -1; break; }
-        if (g_cf_shutdown.load()) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); wst = -1; break; }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        pid_t pp = spawn_ffmpeg(args.data());
+        { std::lock_guard<std::mutex> lk(g_mu); g_active_pid = pp; }
+
+        int wst = 0;
+        while (true) {
+            pid_t r = waitpid(pp, &wst, WNOHANG);
+            if (r == pp) break;
+            if (r < 0)  { wst = -1; break; }
+            if (g_cf_shutdown.load()) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); wst = -1; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        { std::lock_guard<std::mutex> lk(g_mu); g_active_pid = -1; }
+        return (wst >= 0) && WIFEXITED(wst) && WEXITSTATUS(wst) == 0;
+    };
+
+    bool ok = attempt(/*use_hwaccel=*/true);
+    if (!ok && !g_cf_shutdown.load()) {
+        fs::remove(tmp);
+        fprintf(stderr, "[conform] hw decode failed, retrying software: %s\n", j.src.c_str());
+        ok = attempt(/*use_hwaccel=*/false);
     }
-    { std::lock_guard<std::mutex> lk(g_mu); g_active_pid = -1; }
 
-    bool ok = (wst >= 0) && WIFEXITED(wst) && WEXITSTATUS(wst) == 0;
     if (ok && fs::exists(tmp)) {
         std::error_code ec;
         fs::rename(tmp, j.out, ec);
         if (ec) fs::remove(tmp);
         else    { std::lock_guard<std::mutex> lk(g_mu); g_ready_cache.insert(j.out); }
     } else {
+        if (!ok && !g_cf_shutdown.load())
+            fprintf(stderr, "[conform] FAILED (both hw+sw): %s\n", j.src.c_str());
         fs::remove(tmp);
     }
 }

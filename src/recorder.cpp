@@ -19,10 +19,12 @@ namespace fs = std::filesystem;
 
 static bool   s_active     = false;
 static int    s_ti = -1, s_ci = -1;
-static float  s_lp_start = 0.f, s_lp_end = 0.f;  // identity check: brick must keep these bounds
+static float  s_lp_start = 0.f, s_lp_end = 0.f;
+static uint64_t s_live_id = 0;   // session stamp on the target brick
 static std::vector<float> s_buf;       // capture stream since record start (interleaved)
 static size_t s_take_len   = 0;        // loop length in interleaved floats
 static size_t s_lat_off    = 0;        // capture→loop-grid offset in interleaved floats
+static size_t s_first_off  = 0;        // join mid-loop: floats until the first cycle boundary
 static int    s_take_count = 0;
 static float  s_level      = 0.f;
 
@@ -45,7 +47,7 @@ static void live_bins_reset() {
 // Fold fresh capture into the current pass's bins (mono = left channel).
 static void live_bins_scan() {
     if (s_take_len == 0) return;
-    size_t base = s_lat_off + (size_t)s_take_count * s_take_len;
+    size_t base = s_lat_off + s_first_off + (size_t)s_take_count * s_take_len;
     if (s_lb_scanned < base) s_lb_scanned = base;
     size_t i = s_lb_scanned & ~(size_t)1;  // keep L/R phase
     for (; i + 1 < s_buf.size(); i += 2) {
@@ -108,10 +110,10 @@ static Clip* target_brick(AppState& state) {
         if (ci < 0 || ci >= (int)clips.size()) return nullptr;
         Clip* cl = &clips[ci];
         if (cl->clip_type != ClipType::Record) return nullptr;
-        // Identity check — track/clip indices shift when the timeline is
-        // edited mid-record; the loop bounds are the brick's fingerprint.
-        if (s_active && (fabsf(cl->start - s_lp_start) > 1e-4f ||
-                         fabsf(cl->end   - s_lp_end)   > 1e-4f)) return nullptr;
+        // Identity by session stamp — loop bounds were the old fingerprint,
+        // and a new brick with identical bounds inherited a deleted brick's
+        // session.
+        if (s_active && cl->rec_live_id != s_live_id) return nullptr;
         return cl;
     };
     if (Clip* cl = match(s_ti, s_ci)) return cl;
@@ -189,6 +191,9 @@ bool recorder_start(AppState& state, int ti, int ci) {
     Clip* cl = target_brick(state);
     if (!cl || cl->end - cl->start < 0.25f) { s_ti = s_ci = -1; return false; }
     float lp_start = cl->start, lp_end = cl->end;
+    static uint64_t s_live_counter = 0;
+    s_live_id = ++s_live_counter;
+    cl->rec_live_id = s_live_id;
     s_lp_start = lp_start;
     s_lp_end   = lp_end;
 
@@ -205,19 +210,45 @@ bool recorder_start(AppState& state, int ti, int ci) {
         usleep(5 * 1000);
     }
 
-    audio_set_loop(lp_start, lp_end);
-    audio_seek(lp_start);
-    state.playhead        = lp_start;
-    state.playing         = true;
-    state.play_start_pos  = lp_start;
-    state.play_start_wall = std::chrono::steady_clock::now();
-    audio_play();
-    discard.clear();
-    audio_capture_drain(discard);  // drop pre-roll: stream origin = playback start
+    // JOIN an already-running loop (the camera side of a record pair started
+    // the transport) instead of restarting it — a restart would tear the video
+    // take mid-pass. The capture stream's origin then sits at the CURRENT loop
+    // phase, so the first full cycle starts (loop_len - cur) later; that skip
+    // is s_first_off and every slicing computation adds it.
+    float loop_len = lp_end - lp_start;
+    float first_skip = 0.f;
+    bool join = state.playing && audio_loop_active();
+    if (join) {
+        float cur = fmodf(fmaxf(0.f,
+                        std::chrono::duration<float>(
+                            std::chrono::steady_clock::now()
+                            - state.play_start_wall).count()
+                        + state.play_start_pos - lp_start),
+                    fmaxf(loop_len, 1e-3f));
+        // Joined within the first fraction of a cycle (the paired start does
+        // this a few ms after the transport launches): record THIS cycle from
+        // its top rather than waiting a whole loop — the missed head is a few
+        // milliseconds, inaudible, and it keeps take 1 on both sides paired.
+        if (cur < 0.05f * loop_len) first_skip = 0.f;
+        else                        first_skip = loop_len - cur;
+        discard.clear();
+        audio_capture_drain(discard);  // stream origin = the phase we measured
+    } else {
+        audio_set_loop(lp_start, lp_end);
+        audio_seek(lp_start);
+        state.playhead        = lp_start;
+        state.playing         = true;
+        state.play_start_pos  = lp_start;
+        state.play_start_wall = std::chrono::steady_clock::now();
+        audio_play();
+        discard.clear();
+        audio_capture_drain(discard);  // drop pre-roll: stream origin = playback start
+    }
 
     live_bins_reset();
     s_lb_scanned = 0;
-    s_take_len = (size_t)((lp_end - lp_start) * 44100.f) * 2;
+    s_take_len  = (size_t)(loop_len * 44100.f) * 2;
+    s_first_off = ((size_t)(first_skip * 44100.f) * 2) & ~(size_t)1;  // keep L/R phase
     // The performer tracks what they hear (one output period late); the mic's
     // samples arrive one input period after that. Skipping that much of the
     // capture stream puts each take back on the loop grid.
@@ -234,12 +265,12 @@ void recorder_stop(AppState& state, bool keep_partial) {
     audio_capture_drain(s_buf);
     // Keep the device running if the user is monitoring their mic; the
     // capture buffer self-wraps when nobody drains it.
-    if (!audio_monitor_get()) audio_capture_stop();
+    if (!audio_monitor_get() && !audio_vmic_get()) audio_capture_stop();
     audio_clear_loop();
 
     // Keep a partial last pass when it has at least half a second in it —
     // stopping mid-phrase shouldn't throw the phrase away.
-    size_t done = s_lat_off + (size_t)s_take_count * s_take_len;
+    size_t done = s_lat_off + s_first_off + (size_t)s_take_count * s_take_len;
     if (keep_partial && s_buf.size() > done + 44100u
         && s_take_len > 0 && s_buf.size() > s_lat_off) {
         // Pad the partial pass up to a FULL brick span with silence so a take
@@ -261,6 +292,7 @@ void recorder_stop(AppState& state, bool keep_partial) {
     s_ti = s_ci = -1;
     s_buf.clear();
     s_buf.shrink_to_fit();
+    s_first_off = 0;
     s_level = 0.f;
 }
 
@@ -283,11 +315,11 @@ void recorder_tick(AppState& state) {
         peak = fmaxf(peak, fabsf(s_buf[i]));
     s_level = fmaxf(peak, s_level * 0.90f);
 
-    // Every full loop length past the latency offset is one finished take.
+    // Every full loop length past the latency (+ join) offset is one finished take.
     while (s_take_len > 0 &&
-           s_buf.size() >= s_lat_off + (size_t)(s_take_count + 1) * s_take_len) {
+           s_buf.size() >= s_lat_off + s_first_off + (size_t)(s_take_count + 1) * s_take_len) {
         if (!finalize_take(state,
-                           s_buf.data() + s_lat_off + (size_t)s_take_count * s_take_len,
+                           s_buf.data() + s_lat_off + s_first_off + (size_t)s_take_count * s_take_len,
                            s_take_len)) {
             recorder_stop(state, false);  // disk/brick failure — don't spin
             return;

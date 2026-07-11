@@ -202,6 +202,9 @@ def main():
 
     # ── fx_project_read.h ─────────────────────────────────────────────────────
     # Each effect is gated by its own since_version (defaults to project_version).
+    # Gated on g_fx_read_version (not the clip's `version`) so project_load can
+    # decrement it by 1 to skip an effect introduced at exactly the file's
+    # version without a format bump — recovering files saved just before it.
     lines = []
     cur_pv = None
     for e in effects:
@@ -210,7 +213,7 @@ def main():
         if pv != cur_pv:
             if cur_pv is not None:
                 lines.append('    }')
-            lines.append(f'    if (version >= {pv}u) {{')
+            lines.append(f'    if (g_fx_read_version >= {pv}u) {{')
             cur_pv = pv
         lines.append(f'        c.fx_{eid}_amount = r.pod<float>();')
         for p in e["params"]:
@@ -396,12 +399,84 @@ def main():
     write(os.path.join(GEN_DIR, "fx_clip_set_dispatch.h"), "\n".join(lines) + "\n")
 
     # ── effects/mcp_manifest.json ─────────────────────────────────────────────
+    # Legacy hand-wired FX (fx_shader.cpp / app.h) exposed on the agent + iOS
+    # catalog surface. Not registry effects — the desktop browser already has
+    # hand-made cards for them; this block only adds them to the manifest so
+    # clients (iOS FX sheet, MCP) can place them. ids/param names match
+    # parse_fx_type / apply_effect_params / effect_params_to_json in
+    # ipc_server.cpp; Metal runs them via shaders/legacy/*.glsl transpiles and
+    # the hand-written chroma feedback passes in metal_render.mm.
+    def _p(name, label, lo, hi, default, fmt="%.2f"):
+        return {"name": name, "label": label, "min": float(lo),
+                "max": float(hi), "default": float(default), "fmt": fmt}
+
+    LEGACY_MANIFEST_EXTRAS = [
+        {"id": "chroma_key", "label": "Chroma Key Pro", "category": "Chroma",
+         "description": "Clean color-range keyer  ·  composite over the layer below  ·  spill kill",
+         "params": [_p("chroma_key_r", "Key R", 0, 1, 0), _p("chroma_key_g", "Key G", 0, 1, 1),
+                    _p("chroma_key_b", "Key B", 0, 1, 0),
+                    _p("chroma_key_threshold", "Threshold", 0, 1, 0.30),
+                    _p("chroma_key_softness", "Edge Softness", 0.001, 1, 0.15)]},
+        {"id": "chroma_melt", "label": "Chroma Melt", "category": "Chroma",
+         "description": "Trippy chroma smear  ·  keyed feedback trail  ·  motion melts sideways",
+         "params": [_p("chroma_melt_r", "Key R", 0, 1, 0), _p("chroma_melt_g", "Key G", 0, 1, 1),
+                    _p("chroma_melt_b", "Key B", 0, 1, 0),
+                    _p("chroma_melt_threshold", "Threshold", 0, 1, 0.30),
+                    _p("chroma_melt_persist", "Persist", 0, 0.98, 0.88)]},
+        {"id": "chroma_echo", "label": "Chroma Echo", "category": "Chroma",
+         "description": "Keyed feedback echo  ·  stacks past frames (crisp ghosts)",
+         "params": [_p("chroma_echo_r", "Key R", 0, 1, 0), _p("chroma_echo_g", "Key G", 0, 1, 1),
+                    _p("chroma_echo_b", "Key B", 0, 1, 0),
+                    _p("chroma_echo_threshold", "Threshold", 0, 1, 0.30),
+                    _p("chroma_echo_persist", "Persist", 0, 0.98, 0.92)]},
+        {"id": "chroma_frame", "label": "Chroma Frame", "category": "Chroma",
+         "description": "Keyed multi-tap delay  ·  discrete frame echoes  ·  beat-syncable",
+         "params": [_p("chroma_frame_r", "Key R", 0, 1, 0), _p("chroma_frame_g", "Key G", 0, 1, 1),
+                    _p("chroma_frame_b", "Key B", 0, 1, 0),
+                    _p("chroma_frame_threshold", "Threshold", 0, 1, 0.30),
+                    _p("chroma_frame_taps", "Taps", 1, 8, 4, "%.0f"),
+                    _p("chroma_frame_spacing", "Spacing (s)", 0.02, 1, 0.12),
+                    _p("chroma_frame_falloff", "Falloff", 0.2, 0.98, 0.75)]},
+        {"id": "grade", "label": "Color Grade", "category": "Color",
+         "description": "Classic grade  ·  brightness / contrast / saturation / hue",
+         "params": [_p("brightness", "Brightness", -1, 1, 0),
+                    _p("contrast", "Contrast", 0, 3, 1),
+                    _p("saturation", "Saturation", 0, 3, 1),
+                    _p("hue", "Hue", -180, 180, 0, "%.0f deg")]},
+        {"id": "blur", "label": "Blur", "category": "Tools",
+         "description": "Soft gaussian-style blur  ·  dreamy diffusion",
+         "params": [_p("blur", "Radius", 0, 14, 6, "%.1f px")]},
+        {"id": "vignette", "label": "Vignette", "category": "Film",
+         "description": "Darkened corners  ·  cinematic frame focus",
+         "params": [_p("vignette", "Amount", 0, 1, 0.4)]},
+        {"id": "glitch", "label": "Glitch (Classic)", "category": "Glitch",
+         "description": "RGB split + row jitter + block corruption  ·  the original",
+         "params": [_p("glitch_chroma", "Chroma (px)", 0, 20, 8, "%.0f px"),
+                    _p("glitch_jitter", "Jitter", 0, 1, 0.3),
+                    _p("glitch_corruption", "Corruption", 0, 1, 0.2),
+                    _p("glitch_corruption_bleed", "Corruption Bleed", 0, 1, 0)]},
+        {"id": "vhs", "label": "VHS (Classic)", "category": "Film",
+         "description": "Chroma bleed + grain + tracking glitch  ·  worn-tape look",
+         "params": [_p("vhs_noise", "Noise", 0, 1, 0.3),
+                    _p("vhs_bleed", "Bleed (px)", 0, 20, 8, "%.0f px"),
+                    _p("vhs_tracking", "Tracking", 0, 1, 0.3)]},
+        {"id": "light_leak", "label": "Light Leak (Classic)", "category": "Light",
+         "description": "Drifting warm flares  ·  analog film leak",
+         "params": [_p("leak_intensity", "Intensity", 0, 1, 0.6),
+                    _p("leak_speed", "Speed", 0, 4, 1)]},
+        {"id": "datamosh", "label": "Datamosh (Classic)", "category": "Glitch",
+         "description": "Saturation-matted chroma drag  ·  compression corruption look",
+         "params": [_p("datamosh_intensity", "Intensity", 0, 1, 0.6),
+                    _p("datamosh_spread", "Spread", 0, 1, 0.3)]},
+    ]
+
     manifest = []
     for e in effects:
         visible_params = [p for p in e["params"] if not p.get("hidden")]
         manifest.append({
             "id":          e["id"],
             "label":       e["label"],
+            "category":    e.get("category", "Other"),
             "description": e["description"],
             "params": [
                 {
@@ -415,6 +490,9 @@ def main():
                 for p in visible_params
             ],
         })
+    # Appended (not prepended): iOS derives category chip order from manifest
+    # first-appearance, so the registry ordering stays authoritative.
+    manifest.extend(LEGACY_MANIFEST_EXTRAS)
     mcp_path = os.path.join(ROOT, "effects", "mcp_manifest.json")
     with open(mcp_path, "w") as f:
         json.dump(manifest, f, indent=2)

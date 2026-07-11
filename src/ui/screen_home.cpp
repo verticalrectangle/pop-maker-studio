@@ -1,5 +1,6 @@
 #include "screens.h"
 #include "studio_shared.h"
+#include <chrono>
 #include "filepicker.h"
 #include "theme.h"
 #include "app.h"
@@ -22,48 +23,9 @@ namespace fs = std::filesystem;
 extern ImFont* g_font_black;
 extern ImFont* g_font_bold;
 
-// ── Recent-projects persistence (mirrors recent_media) ────────────────────────
-static std::string recents_path() {
-    const char* h = getenv("HOME");
-    return h ? std::string(h) + "/.config/pop-maker-studio/recent_projects.json"
-             : "/tmp/pop_maker_recent_projects.json";
-}
 
-static std::vector<std::string>& recents_store() {
-    static std::vector<std::string> s;
-    static bool loaded = false;
-    if (!loaded) {
-        loaded = true;
-        try {
-            std::ifstream f(recents_path());
-            if (f) {
-                auto j = nlohmann::json::parse(f, nullptr, false);
-                if (!j.is_discarded() && j.is_array())
-                    s = j.get<std::vector<std::string>>();
-            }
-        } catch (...) {}
-    }
-    return s;
-}
 
-std::vector<std::string> recent_projects_list() {
-    std::vector<std::string> out;
-    for (auto& p : recents_store())
-        if (!p.empty() && fs::exists(p)) out.push_back(p);
-    return out;
-}
 
-void recent_projects_push(const std::string& path) {
-    if (path.empty()) return;
-    auto& v = recents_store();
-    v.erase(std::remove(v.begin(), v.end(), path), v.end());
-    v.insert(v.begin(), path);
-    if (v.size() > 30) v.resize(30);
-    try {
-        fs::create_directories(fs::path(recents_path()).parent_path());
-        std::ofstream(recents_path()) << nlohmann::json(v).dump(2);
-    } catch (...) {}
-}
 
 // ── Autosave / crash recovery ───────────────────────────────────────────────────
 // We continuously write the live project to a fixed recovery slot while editing.
@@ -72,15 +34,6 @@ void recent_projects_push(const std::string& path) {
 extern std::string g_managed_dir;  // ~/.local/share/pop-maker-studio
 static std::string mtime_str(const std::string& path);  // defined below
 
-static std::string recovery_dir() {
-    std::string base = !g_managed_dir.empty()
-        ? g_managed_dir
-        : (getenv("HOME") ? std::string(getenv("HOME")) + "/.local/share/pop-maker-studio"
-                          : std::string("/tmp/pop-maker-studio"));
-    return base + "/recovery";
-}
-static std::string recovery_pms()  { return recovery_dir() + "/autosave.pms"; }
-static std::string recovery_meta() { return recovery_dir() + "/autosave.json"; }
 
 static bool project_has_content(const AppState& s) {
     for (auto& tr : s.tracks)
@@ -88,11 +41,6 @@ static bool project_has_content(const AppState& s) {
     return false;
 }
 
-void recovery_clear() {
-    std::error_code ec;
-    fs::remove(recovery_pms(), ec);
-    fs::remove(recovery_meta(), ec);
-}
 
 void autosave_tick(AppState& state, float dt) {
     static float    accum    = 0.f;
@@ -108,29 +56,29 @@ void autosave_tick(AppState& state, float dt) {
     if (pos == last_pos) return;         // nothing changed since the last write
 
     try {
-        fs::create_directories(recovery_dir());
-        std::string tmp = recovery_pms() + ".tmp";
+        fs::create_directories(fs::path(recovery_pms_path()).parent_path());
+        std::string tmp = recovery_pms_path() + ".tmp";
         if (project_save(state, tmp)) {
             std::error_code ec;
-            fs::rename(tmp, recovery_pms(), ec);   // atomic swap
+            fs::rename(tmp, recovery_pms_path(), ec);   // atomic swap
             if (ec) { fs::remove(tmp, ec); return; }
             nlohmann::json m;
             m["orig_path"] = state.project_path;
             m["name"]      = state.project_path.empty()
                                  ? std::string("Untitled project")
                                  : fs::path(state.project_path).stem().string();
-            std::ofstream(recovery_meta()) << m.dump(2);
+            std::ofstream(recovery_meta_path()) << m.dump(2);
             last_pos = pos;
         }
     } catch (...) {}
 }
 
 bool recovery_available(std::string* name, std::string* when) {
-    if (!fs::exists(recovery_pms())) return false;
+    if (!fs::exists(recovery_pms_path())) return false;
     if (name) {
         *name = "Recovered project";
         try {
-            std::ifstream f(recovery_meta());
+            std::ifstream f(recovery_meta_path());
             if (f) {
                 auto j = nlohmann::json::parse(f, nullptr, false);
                 if (!j.is_discarded() && j.contains("name"))
@@ -138,7 +86,7 @@ bool recovery_available(std::string* name, std::string* when) {
             }
         } catch (...) {}
     }
-    if (when) *when = mtime_str(recovery_pms());
+    if (when) *when = mtime_str(recovery_pms_path());
     return true;
 }
 
@@ -155,40 +103,19 @@ void enter_new_project(AppState& state) {
     state.in_studio    = true;
     audio_init();
     history_push(state, "New project");
+    mark_project_clean(state);
 }
 
-static void open_project_path(AppState& state, const std::string& path) {
-    if (path.empty()) return;
-    AppState loaded;
-    if (!project_load(loaded, path)) return;
-    bool mr = state.models_ready, ms = state.models_skipped;
-    transcribe_cancel(); history_clear();
-    audio_shutdown(); audio_clips_clear(); video_close();
-    state = std::move(loaded);
-    state.models_ready = mr; state.models_skipped = ms;
-    state.project_path = path;
-    state.splash_timer = 0.f;
-    state.in_studio    = true;
-    audio_init();
-    if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
-    reopen_video_slots(state);
-    for (auto& tr : state.tracks)
-        for (auto& cl : tr.clips)
-            if (cl.clip_type == ClipType::Audio && !cl.text.empty())
-                audio_source_ensure(cl.text);
-    recent_projects_push(path);
-    history_push(state, "Open project");
-}
 
 // Restore the crash-recovery slot into the live editor. Unlike open_project_path
 // we point project_path at the *original* location (from the meta sidecar), so the
 // next Save lands where the user expected — not on the recovery file itself.
 static void restore_recovery(AppState& state) {
     AppState loaded;
-    if (!project_load(loaded, recovery_pms())) return;
+    if (!project_load(loaded, recovery_pms_path())) return;
     std::string orig;
     try {
-        std::ifstream f(recovery_meta());
+        std::ifstream f(recovery_meta_path());
         if (f) {
             auto j = nlohmann::json::parse(f, nullptr, false);
             if (!j.is_discarded() && j.contains("orig_path"))
@@ -205,12 +132,13 @@ static void restore_recovery(AppState& state) {
     state.in_studio    = true;
     audio_init();
     if (!state.audio_path.empty()) audio_load(state.audio_path.c_str());
-    reopen_video_slots(state);
+    queue_video_slot_opens(state);
     for (auto& tr : state.tracks)
         for (auto& cl : tr.clips)
             if (cl.clip_type == ClipType::Audio && !cl.text.empty())
                 audio_source_ensure(cl.text);
     history_push(state, "Recovered project");
+    mark_project_clean(state);
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -327,26 +255,51 @@ void ui_home(AppState& state) {
 
     const float grid_top = 176.f + yoff;
     const float card_w = 224.f, card_h = 150.f, gap = 16.f;
-    int cols = std::max(1, (int)((W - pad * 2 + gap) / (card_w + gap)));
+    // The grid lives in a scrolling child clipped ABOVE the cache footer
+    // (bottom-left, at H-48) — with enough recents the absolutely-positioned
+    // cards used to march straight over the "Media cache / Clear cache" row.
+    const float FOOTER_H = 64.f;
+    float grid_h = fmaxf(card_h, H - grid_top - FOOTER_H);
+    ImGui::SetCursorPos({pad, grid_top});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    ImGui::BeginChild("##recent_grid", {W - pad * 2.f, grid_h});
+    float grid_w = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, (int)((grid_w + gap) / (card_w + gap)));
     ImDrawList* dl = ImGui::GetWindowDrawList();
     std::string to_open;
     for (int i = 0; i < (int)recents.size(); ++i) {
         int r = i / cols, c = i % cols;
-        ImVec2 cp = {pad + c * (card_w + gap), grid_top + r * (card_h + gap)};
+        ImVec2 cp = {c * (card_w + gap), r * (card_h + gap)};
         ImGui::SetCursorPos(cp);
         ImGui::PushID(i);
         ImGui::InvisibleButton("##proj", {card_w, card_h});
         bool hov = ImGui::IsItemHovered();
         if (ImGui::IsItemClicked()) to_open = recents[i];
         ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-        // Card: a "thumbnail" band (no real thumb yet) + a name/date footer.
+        // Card: thumbnail band (written by the canvas on every save) + footer.
         dl->AddRectFilled(a, b, hov ? IM_COL32(34, 34, 46, 255) : IM_COL32(24, 24, 33, 255), 8.f);
         float foot = b.y - 44.f;
         dl->AddRectFilled(a, {b.x, foot}, IM_COL32(40, 40, 56, 255),
                           8.f, ImDrawFlags_RoundCornersTop);
-        // Film-strip glyph in the band
-        dl->AddText(g_font_black, 30.f, {a.x + 16.f, a.y + (foot - a.y) * 0.5f - 18.f},
-                    IM_COL32(90, 92, 120, 255), "\xe2\x96\xb6");
+        int tw = 0, th = 0;
+        uintptr_t thumb = video_load_thumb(project_thumb_path(recents[i]), &tw, &th);
+        if (thumb && tw > 0 && th > 0) {
+            // Cover-fit crop into the band (UVs trimmed on the long axis).
+            float bw2 = b.x - a.x, bh2 = foot - a.y;
+            float su = 1.f, sv = 1.f;
+            float img_asp = (float)tw / (float)th, band_asp = bw2 / bh2;
+            if (img_asp > band_asp) su = band_asp / img_asp;
+            else                    sv = img_asp / band_asp;
+            ImVec2 uv0{0.5f - su * 0.5f, 0.5f - sv * 0.5f};
+            ImVec2 uv1{0.5f + su * 0.5f, 0.5f + sv * 0.5f};
+            dl->AddImageRounded((ImTextureID)thumb, a, {b.x, foot}, uv0, uv1,
+                                IM_COL32(255,255,255,255), 8.f,
+                                ImDrawFlags_RoundCornersTop);
+        } else {
+            // No thumb yet (never saved since this feature landed) — glyph band.
+            dl->AddText(g_font_black, 30.f, {a.x + 16.f, a.y + (foot - a.y) * 0.5f - 18.f},
+                        IM_COL32(90, 92, 120, 255), "\xe2\x96\xb6");
+        }
         dl->AddRect(a, b, hov ? IM_COL32(120, 130, 230, 220) : IM_COL32(50, 50, 68, 200),
                     8.f, 0, hov ? 2.f : 1.f);
         std::string name = fs::path(recents[i]).stem().string();
@@ -358,5 +311,13 @@ void ui_home(AppState& state) {
                     mtime_str(recents[i]).c_str());
         ImGui::PopID();
     }
+    // Reserve the last row's full height so the child scrolls to it cleanly
+    // (a real item — a bare SetCursorPos doesn't grow the region and trips
+    // ImGui's extend-boundaries warning).
+    int rows = ((int)recents.size() + cols - 1) / cols;
+    ImGui::SetCursorPos({0.f, rows * (card_h + gap) - 1.f});
+    ImGui::Dummy({1.f, 1.f});
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
     if (!to_open.empty()) open_project_path(state, to_open);
 }

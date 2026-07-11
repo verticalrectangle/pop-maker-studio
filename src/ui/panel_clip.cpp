@@ -139,241 +139,253 @@ static void draw_clip_header(AppState& state, Clip& clip, Track& track, float w)
 
 // ── Word strip (deep lyrics word editor) ─────────────────────────────────────
 
-static int  s_word_sel = -1;
+// ── Subtitle / lyric line-list editor ──────────────────────────────────────────
+// A whole-track text editor: every line of one source, click to select + seek, edit
+// its text, find/replace. `show_timing` adds the timing/structural controls (used by
+// Subtitle clips); Lyrics pass false — their timing lives on the timeline and their
+// split/merge/add/delete live on the clip context menu.
+static void draw_line_list_editor(AppState& state, Clip& clip, float w,
+                                  ClipType wanted, bool show_timing) {
+    int sel_ti = state.selected_track, sel_ci = state.selected_clip;
 
-static void draw_word_strip(AppState& state, Clip& clip, float w) {
-    if (clip.words.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextWrapped("No word-level data — run ML Processing or apply grouping to populate.");
-        ImGui::PopStyleColor();
-        return;
+    // Re-seed the edit buffer whenever the selected clip changes (selecting via the
+    // timeline or via this list both pass through here).
+    static int s_ll_last_ti = -1, s_ll_last_ci = -1;
+    if (s_ll_last_ti != sel_ti || s_ll_last_ci != sel_ci) {
+        strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
+        s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
+        s_ll_last_ti = sel_ti; s_ll_last_ci = sel_ci;
     }
 
-    float dur = clip.end - clip.start;
-    if (dur <= 0.f) return;
-
-    ImDrawList* dl  = ImGui::GetWindowDrawList();
-    ImVec2 origin   = ImGui::GetCursorScreenPos();
-    const float sh  = 36.f;  // strip height
-    const float gap = 2.f;   // pixel gap between word rects
-
-    // Background
-    dl->AddRectFilled(origin, {origin.x+w, origin.y+sh}, IM_COL32(15,15,25,255), 4.f);
-
-    ImU32 hl_col = ImGui::ColorConvertFloat4ToU32(
-        {clip.karaoke_highlight_color[0], clip.karaoke_highlight_color[1],
-         clip.karaoke_highlight_color[2], clip.karaoke_highlight_color[3]});
-
-    int n = (int)clip.words.size();
-
-    // Word rects + invisible buttons
-    for (int i = 0; i < n; ++i) {
-        WordEntry& we = clip.words[i];
-        float x0 = origin.x + (we.start - clip.start) / dur * w + gap;
-        float x1 = origin.x + (we.end   - clip.start) / dur * w - gap;
-        if (x1 <= x0 + 2.f) x1 = x0 + 4.f;
-
-        bool active = (state.playhead >= we.start && state.playhead < we.end);
-        bool sel    = (s_word_sel == i);
-
-        ImU32 bg = active ? hl_col :
-                   sel    ? IM_COL32(110,80,200,220) :
-                            IM_COL32(55,55,75,220);
-        dl->AddRectFilled({x0, origin.y+3.f}, {x1, origin.y+sh-3.f}, bg, 3.f);
-
-        // Label
-        float rw = x1 - x0;
-        if (rw > 14.f) {
-            std::string lbl = we.text;
-            while (!lbl.empty() && ImGui::CalcTextSize(lbl.c_str()).x > rw - 4.f)
-                lbl.pop_back();
-            if (lbl.size() < we.text.size() && lbl.size() > 1)
-                lbl.back() = '\xe2', lbl += "\x80\xa6";  // UTF-8 ellipsis
-            dl->AddText({x0+3.f, origin.y+sh*0.5f-6.f},
-                IM_COL32(255,255,255, sel||active ? 255 : 180), lbl.c_str());
+    // Cross-track list of this type's clips for the same source, sorted by start.
+    struct LineEntry { int ti, ci; };
+    std::vector<LineEntry> entries;
+    for (int ti2 = 0; ti2 < (int)state.tracks.size(); ++ti2)
+        for (int ci2 = 0; ci2 < (int)state.tracks[ti2].clips.size(); ++ci2) {
+            const Clip& c2 = state.tracks[ti2].clips[ci2];
+            if (c2.clip_type == wanted &&
+                // Lyrics: show the whole track regardless of provenance (generated bricks
+                // carry the audio source_id, manual/dragged ones are freestanding).
+                // Subtitles: scope to the selected source so multiple sources stay apart.
+                (wanted == ClipType::Lyrics || clip.source_id.empty() ||
+                 c2.source_id == clip.source_id))
+                entries.push_back({ti2, ci2});
         }
+    std::sort(entries.begin(), entries.end(), [&](const LineEntry& a, const LineEntry& b){
+        return state.tracks[a.ti].clips[a.ci].start < state.tracks[b.ti].clips[b.ci].start;
+    });
+    int n_total = (int)entries.size();
 
-        // Click target
-        ImGui::SetCursorScreenPos({x0, origin.y});
-        char wid[32]; snprintf(wid, sizeof(wid), "##word%d", i);
-        if (ImGui::InvisibleButton(wid, {x1-x0, sh})) {
-            s_word_sel = (s_word_sel == i) ? -1 : i;
-            if (s_word_sel == i) seek_to(state, we.start);
-        }
-    }
-
-    // Boundary drag handles between words
-    for (int i = 0; i < n - 1; ++i) {
-        float bx = origin.x + (clip.words[i].end - clip.start) / dur * w;
-        bool hov_or_drag = false;
-
-        ImGui::SetCursorScreenPos({bx - 5.f, origin.y});
-        char bid[32]; snprintf(bid, sizeof(bid), "##bound%d", i);
-        ImGui::InvisibleButton(bid, {10.f, sh});
-
-        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0)) {
-            float dt = ImGui::GetIO().MouseDelta.x / w * dur;
-            float new_t = clip.words[i].end + dt;
-            float lo = clip.words[i].start + 0.02f;
-            float hi = clip.words[i+1].end  - 0.02f;
-            new_t = fmaxf(lo, fminf(hi, new_t));
-            clip.words[i].end      = new_t;
-            clip.words[i+1].start  = new_t;
-            hov_or_drag = true;
-        }
-        hov_or_drag |= ImGui::IsItemHovered();
-
-        // Draw handle line on top (foreground draw list to clear z-order issues)
-        ImU32 hcol = IM_COL32(255,255,255, hov_or_drag ? 220 : 70);
-        dl->AddLine({bx, origin.y+2.f}, {bx, origin.y+sh-2.f}, hcol, hov_or_drag ? 2.f : 1.f);
-    }
-
-    // Playhead cursor
-    if (state.playhead >= clip.start && state.playhead < clip.end) {
-        float px = origin.x + (state.playhead - clip.start) / dur * w;
-        dl->AddLine({px, origin.y}, {px, origin.y+sh}, IM_COL32(255,80,80,220), 1.5f);
-    }
-
-    // Advance cursor past strip
-    ImGui::SetCursorScreenPos({origin.x, origin.y + sh + 6.f});
-
-    // ── Selected word controls ────────────────────────────────────────────────
-    if (s_word_sel >= 0 && s_word_sel < n) {
-        WordEntry& sel = clip.words[s_word_sel];
+    // Find / Replace (text only — always available)
+    static char s_find[128] = {}, s_replace[128] = {};
+    if (ImGui::CollapsingHeader("Find & Replace")) {
         ImGui::Dummy({0.f, 4.f});
-
-        // Word text edit
         ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
         ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-        static char s_word_buf[128] = {};
-        static int  s_word_buf_for  = -1;
-        if (s_word_buf_for != s_word_sel) {
-            strncpy(s_word_buf, sel.text.c_str(), sizeof(s_word_buf)-1);
-            s_word_buf[sizeof(s_word_buf)-1] = '\0';
-            s_word_buf_for = s_word_sel;
-        }
-        ImGui::SetNextItemWidth(w * 0.45f);
-        if (ImGui::InputText("##wtext", s_word_buf, sizeof(s_word_buf),
-                ImGuiInputTextFlags_EnterReturnsTrue)) {
-            sel.text = s_word_buf;
-            // Rebuild clip text
-            std::string full;
-            for (int i2 = 0; i2 < n; ++i2) {
-                if (i2) full += ' ';
-                full += clip.words[i2].text;
-            }
-            clip.text = full;
-            history_push(state, "Edit word text");
-        }
-        if (ImGui::IsItemDeactivated()) {
-            sel.text = s_word_buf;
-            std::string full;
-            for (int i2 = 0; i2 < n; ++i2) { if (i2) full+=' '; full+=clip.words[i2].text; }
-            clip.text = full;
-        }
+        ImGui::SetNextItemWidth(w - 16.f);
+        ImGui::InputText("Find##fr_find", s_find, sizeof(s_find));
+        ImGui::SetNextItemWidth(w - 16.f);
+        ImGui::InputText("Replace##fr_rep", s_replace, sizeof(s_replace));
         ImGui::PopStyleColor(2);
-
-        // Start / End fields side by side
-        ImGui::SameLine(0.f, 8.f);
-        float fw = (w - ImGui::GetItemRectSize().x - 32.f) * 0.5f;
-        ImGui::SetNextItemWidth(fw);
-        float ws = sel.start - clip.start;
-        if (ImGui::InputFloat("##ws", &ws, 0.001f, 0.01f, "%.3f")) {
-            float abs_t = clip.start + fmaxf(0.f, ws);
-            if (abs_t < sel.end - 0.02f) { sel.start = abs_t; if (s_word_sel > 0) clip.words[s_word_sel-1].end = abs_t; }
-        }
-        ImGui::SameLine(0.f, 4.f);
-        ImGui::SetNextItemWidth(fw);
-        float we2 = sel.end - clip.start;
-        if (ImGui::InputFloat("##we", &we2, 0.001f, 0.01f, "%.3f")) {
-            float abs_t = clip.start + we2;
-            if (abs_t > sel.start + 0.02f) { sel.end = abs_t; if (s_word_sel < n-1) clip.words[s_word_sel+1].start = abs_t; }
-        }
-
-        // Nudge start row
-        ImGui::Dummy({0.f, 3.f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim); ImGui::TextUnformatted("Start:"); ImGui::PopStyleColor();
-        ImGui::SameLine();
-        struct WNudge { float dt; const char* l; };
-        static const WNudge wn[] = {{-0.05f,"-50ms"},{-0.01f,"-10ms"},{0.01f,"+10ms"},{0.05f,"+50ms"}};
-        for (auto& nb : wn) {
-            if (ui_btn(nb.l, false, true)) {
-                float nt = sel.start + nb.dt;
-                if (nt >= clip.start && nt < sel.end - 0.02f) {
-                    sel.start = nt;
-                    if (s_word_sel > 0) clip.words[s_word_sel-1].end = nt;
-                    history_push(state, "Nudge word start");
-                }
-            }
-            ImGui::SameLine(0.f, 3.f);
-        }
-        ImGui::NewLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim); ImGui::TextUnformatted("End:  "); ImGui::PopStyleColor();
-        ImGui::SameLine();
-        for (auto& nb : wn) {
-            if (ui_btn(nb.l, false, true)) {
-                float nt = sel.end + nb.dt;
-                if (nt > sel.start + 0.02f && nt <= clip.end) {
-                    sel.end = nt;
-                    if (s_word_sel < n-1) clip.words[s_word_sel+1].start = nt;
-                    history_push(state, "Nudge word end");
-                }
-            }
-            ImGui::SameLine(0.f, 3.f);
-        }
-        ImGui::NewLine();
-
-        // Split / Merge / Delete
         ImGui::Dummy({0.f, 4.f});
-        if (s_word_sel > 0 && ui_btn("Split here", false, true)) {
-            // Split clip at this word's start, word goes to right clip
-            float split_t = sel.start;
-            if (split_t > clip.start + 0.02f && split_t < clip.end - 0.02f) {
-                Clip right = clip_split_at(clip, split_t);
-                right.words.assign(clip.words.begin() + s_word_sel, clip.words.end());
-                clip.words.erase(clip.words.begin() + s_word_sel, clip.words.end());
-                // Rebuild texts
-                std::string lt, rt;
-                for (auto& we3 : clip.words)  { if (!lt.empty()) lt+=' '; lt+=we3.text; }
-                for (auto& we3 : right.words) { if (!rt.empty()) rt+=' '; rt+=we3.text; }
-                clip.text = lt; right.text = rt;
-                int ins = state.selected_clip + 1;
-                state.tracks[state.selected_track].clips.insert(
-                    state.tracks[state.selected_track].clips.begin() + ins, right);
-                s_word_sel = -1;
-                history_push(state, "Split clip at word");
+        if (ui_btn("Replace all##frbtn", false, true) && s_find[0]) {
+            std::string from(s_find), to(s_replace);
+            int count = 0;
+            for (auto& e : entries) {
+                Clip& sc2 = state.tracks[e.ti].clips[e.ci];
+                std::string& txt = sc2.text;
+                std::string out; size_t pos = 0, found;
+                while ((found = txt.find(from, pos)) != std::string::npos) {
+                    out += txt.substr(pos, found - pos); out += to;
+                    pos = found + from.size(); ++count;
+                }
+                out += txt.substr(pos);
+                if (count) txt = out;
+            }
+            if (count) history_push(state, "Find & Replace");
+        }
+        ImGui::Dummy({0.f, 4.f});
+    }
+
+    // Bulk timing shift — timing, so subtitles only
+    if (show_timing && ImGui::CollapsingHeader("Bulk Shift")) {
+        ImGui::Dummy({0.f, 4.f});
+        static float s_shift_amt = 0.f;
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+        ImGui::SetNextItemWidth(w * 0.55f);
+        ImGui::InputFloat("seconds##shift", &s_shift_amt, 0.01f, 0.1f, "%.3f");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+        if (ui_btn("Shift all##shiftbtn", false, true)) {
+            for (auto& e : entries) {
+                state.tracks[e.ti].clips[e.ci].start += s_shift_amt;
+                state.tracks[e.ti].clips[e.ci].end   += s_shift_amt;
+                if (state.tracks[e.ti].clips[e.ci].start < 0.f) {
+                    state.tracks[e.ti].clips[e.ci].end -= state.tracks[e.ti].clips[e.ci].start;
+                    state.tracks[e.ti].clips[e.ci].start = 0.f;
+                }
+            }
+            history_push(state, "Bulk shift");
+        }
+        ImGui::Dummy({0.f, 4.f});
+    }
+
+    const char* list_hdr = (wanted == ClipType::Lyrics) ? "Lyrics" : "Subtitles";
+    if (ImGui::CollapsingHeader(list_hdr, ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Dummy({0.f, 4.f});
+        char info[64];
+        if (!clip.source_id.empty()) {
+            std::string fn = fs::path(clip.source_id).filename().string();
+            snprintf(info, sizeof(info), "%d lines  ·  %s", n_total, fn.c_str());
+        } else {
+            snprintf(info, sizeof(info), "%d lines", n_total);
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(info); ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        int sel_row = -1;
+        for (int i = 0; i < n_total; ++i)
+            if (entries[i].ti == sel_ti && entries[i].ci == sel_ci) { sel_row = i; break; }
+
+        static int s_ll_last_row = -1;
+        float row_h  = 22.f;
+        float list_h = fminf(200.f, n_total * row_h + 6.f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg_soft);
+        ImGui::BeginChild("##line_list", {0.f, list_h}, false);
+        for (int i = 0; i < n_total; ++i) {
+            const LineEntry& e = entries[i];
+            Clip& sc2          = state.tracks[e.ti].clips[e.ci];
+            bool  is_sel       = (i == sel_row);
+            if (is_sel && s_ll_last_row != i) ImGui::SetScrollHereY(0.5f);
+            ImGui::PushStyleColor(ImGuiCol_Text, is_sel ? Col::fg : Col::muted);
+            char row_id[32]; snprintf(row_id, sizeof(row_id), "##line%d", i);
+            if (ImGui::Selectable(row_id, is_sel, 0, {0.f, row_h})) {
+                state.selected_track = e.ti; state.selected_clip = e.ci;
+                strncpy(s_edit_buf, sc2.text.c_str(), sizeof(s_edit_buf)-1);
+                s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
+                seek_to(state, sc2.start);
+            }
+            ImGui::SameLine(0.f, 4.f);
+            float dur2 = sc2.end - sc2.start;
+            std::string preview = sc2.text.size() > 30 ? sc2.text.substr(0, 28) + "\xe2\x80\xa6" : sc2.text;
+            char rowlbl[96];
+            snprintf(rowlbl, sizeof(rowlbl), "%2d  %s  %.2fs  %s",
+                i+1, fmt_time(sc2.start).c_str(), dur2, preview.c_str());
+            ImGui::TextUnformatted(rowlbl);
+            ImGui::PopStyleColor();
+        }
+        s_ll_last_row = sel_row;
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 4.f});
+
+        // Edit selected line
+        if (sel_row >= 0 && sel_row < n_total) {
+            Clip& sc2 = state.tracks[entries[sel_row].ti].clips[entries[sel_row].ci];
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::SetNextItemWidth(w - 16.f);
+            if (s_edit_focus_next) { ImGui::SetKeyboardFocusHere(); s_edit_focus_next = false; }
+            if (ImGui::InputText("##line_text", s_edit_buf, sizeof(s_edit_buf),
+                    ImGuiInputTextFlags_EnterReturnsTrue))
+                sc2.text = s_edit_buf;
+            if (ImGui::IsItemDeactivated()) {
+                std::string new_text = s_edit_buf;
+                if (new_text != sc2.text) {
+                    // Lyrics: record per-word text edits so they replay across a regen
+                    // (only when the token count still matches the word list).
+                    if (wanted == ClipType::Lyrics && !sc2.words.empty()) {
+                        auto tokens = split_words_panel(new_text);
+                        if (tokens.size() == sc2.words.size()) {
+                            for (int wi = 0; wi < (int)sc2.words.size(); ++wi)
+                                if (tokens[wi] != sc2.words[wi].text) {
+                                    int frame = (int)(sc2.words[wi].start * (float)state.fps);
+                                    state.lyrics_edits[frame] = tokens[wi];
+                                    sc2.words[wi].text = tokens[wi];
+                                }
+                        }
+                    }
+                    history_push(state, wanted == ClipType::Lyrics ? "Edit lyrics text" : "Edit subtitle text");
+                }
+                sc2.text = new_text;
+            }
+            ImGui::PopStyleColor(2);
+
+            if (show_timing) {
+                float half = (w - 24.f) * 0.5f;
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+                ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+                ImGui::BeginGroup();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Start"); ImGui::PopStyleColor();
+                ImGui::SetNextItemWidth(half);
+                float ss = sc2.start;
+                if (ImGui::InputFloat("##line_s", &ss, 0.01f, 0.1f, "%.3f"))
+                    if (ss < sc2.end - 0.01f) { sc2.start = fmaxf(0.f, ss); history_push(state, "Line timing"); }
+                ImGui::EndGroup(); ImGui::SameLine(0.f, 8.f); ImGui::BeginGroup();
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("End"); ImGui::PopStyleColor();
+                ImGui::SetNextItemWidth(half);
+                float se = sc2.end;
+                if (ImGui::InputFloat("##line_e", &se, 0.01f, 0.1f, "%.3f"))
+                    if (se > sc2.start + 0.01f) { sc2.end = se; history_push(state, "Line timing"); }
+                ImGui::EndGroup();
+                ImGui::PopStyleColor(2);
+
+                ImGui::Dummy({0.f, 4.f});
+                bool nudged = false;
+                if (ui_btn("-100ms", false, true)) { sc2.start-=0.1f; sc2.end-=0.1f; if(sc2.start<0.f){sc2.end-=sc2.start;sc2.start=0.f;} nudged=true; }
+                ImGui::SameLine(0.f, 4.f);
+                if (ui_btn("-10ms",  false, true)) { sc2.start-=0.01f; sc2.end-=0.01f; nudged=true; }
+                ImGui::SameLine(0.f, 4.f);
+                if (ui_btn("+10ms",  false, true)) { sc2.start+=0.01f; sc2.end+=0.01f; nudged=true; }
+                ImGui::SameLine(0.f, 4.f);
+                if (ui_btn("+100ms", false, true)) { sc2.start+=0.1f;  sc2.end+=0.1f;  nudged=true; }
+                if (nudged) history_push(state, "Nudge line");
+
+                ImGui::Dummy({0.f, 6.f});
+                if (ui_btn("+ Add below", false, true)) {
+                    Clip nc; nc.clip_type = wanted; nc.source_id = sc2.source_id;
+                    nc.start = sc2.end; nc.end = sc2.end + 2.f;
+                    Track& tgt_track = state.tracks[entries[sel_row].ti];
+                    int ins = entries[sel_row].ci + 1;
+                    tgt_track.clips.insert(tgt_track.clips.begin() + ins, nc);
+                    state.selected_clip = ins;
+                    strncpy(s_edit_buf, "", 1); s_edit_focus_next = true;
+                    history_push(state, "Add line");
+                }
+                ImGui::SameLine(0.f, 4.f);
+                if (ui_btn("Delete##linedel", false, true)) {
+                    Track& del_track = state.tracks[entries[sel_row].ti];
+                    del_track.clips.erase(del_track.clips.begin() + entries[sel_row].ci);
+                    int new_row = std::min(sel_row, n_total - 2);
+                    if (new_row >= 0 && new_row < n_total - 1) {
+                        state.selected_track = entries[new_row].ti;
+                        state.selected_clip  = entries[new_row].ci;
+                        if (entries[sel_row].ti == entries[new_row].ti &&
+                            entries[sel_row].ci  < entries[new_row].ci)
+                            state.selected_clip--;
+                        if (state.selected_clip >= 0 &&
+                            state.selected_clip < (int)state.tracks[state.selected_track].clips.size()) {
+                            strncpy(s_edit_buf,
+                                state.tracks[state.selected_track].clips[state.selected_clip].text.c_str(),
+                                sizeof(s_edit_buf)-1);
+                            s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
+                        }
+                    } else { state.selected_clip = -1; }
+                    history_push(state, "Delete line");
+                }
             }
         }
-        ImGui::SameLine(0.f, 6.f);
-
-        // Merge with next clip on same track
-        bool can_merge = false;
-        int nc_idx = state.selected_clip + 1;
-        Track& tr2 = state.tracks[state.selected_track];
-        if (nc_idx < (int)tr2.clips.size() && tr2.clips[nc_idx].clip_type == clip.clip_type)
-            can_merge = true;
-        if (!can_merge) ImGui::BeginDisabled();
-        if (ui_btn("Merge with next", false, true) && can_merge) {
-            Clip& next = tr2.clips[nc_idx];
-            clip.end = next.end;
-            for (auto& we3 : next.words) clip.words.push_back(we3);
-            if (!clip.text.empty() && !next.text.empty()) clip.text += ' ';
-            clip.text += next.text;
-            tr2.clips.erase(tr2.clips.begin() + nc_idx);
-            history_push(state, "Merge clips");
-        }
-        if (!can_merge) ImGui::EndDisabled();
-        ImGui::SameLine(0.f, 6.f);
-
-        if (ui_btn("Del word", false, true)) {
-            clip.words.erase(clip.words.begin() + s_word_sel);
-            s_word_sel = -1;
-            std::string full;
-            for (auto& we3 : clip.words) { if (!full.empty()) full+=' '; full+=we3.text; }
-            clip.text = full;
-            history_push(state, "Delete word");
-        }
+        ImGui::Dummy({0.f, 4.f});
     }
+
+    // Style is owned track-wide by the Typography tab so the whole track stays uniform.
+    ImGui::Dummy({0.f, 4.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+    ImGui::TextWrapped(wanted == ClipType::Lyrics
+        ? "Grouping, style, color & karaoke for the whole lyric track are set in the Typography tab."
+        : "Font, color, position & alignment for the whole subtitle track are set in the Typography tab.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
 }
 
 // ── Shared section helpers ────────────────────────────────────────────────────
@@ -418,10 +430,14 @@ static void section_position(AppState& state, Clip& clip, float w) {
                 &clip.sub_wrap_w, 0.1f, 1.f, "%.2f");
 
     ImGui::Dummy({0.f, 4.f});
-    // Font size is stored as a fraction of canvas height; expose as 1–50 percent
-    // (disp=100). The Reset button clears it back to auto (0).
+    // Font size is stored as a fraction of canvas height; expose it in output
+    // PIXELS (disp = canvas height, exactly what the renderer multiplies by —
+    // render.cpp: font px = font_size * out_h). The old percent display made
+    // 0.2 read as "20" with no visible unit anchor. The Reset button clears
+    // back to auto (0).
+    float out_h = output_px_height(state);
     ::kf_slider(state, clip, sti, sci, bar_w - 52.f, "font_size", "Font size",
-                &clip.font_size, 1.f, 50.f, "%.1f%%", 100.f);
+                &clip.font_size, 0.01f * out_h, 0.5f * out_h, "%.0f px", out_h);
     ImGui::SameLine(0.f, 4.f);
     if (ui_btn("Reset##fs", clip.font_size == 0.f, true)) {
         clip.font_size = 0.f;
@@ -693,6 +709,14 @@ static void section_color(AppState& state, Clip& clip, float w) {
             ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Clip color");
         palette_widget("##pal_subcol", clip.sub_color);
+        ImGui::SameLine(0.f, 6.f);
+        {
+            float dp[3];
+            if (ui_dropper_button("##dp_subcol", dp)) {
+                clip.sub_color[0] = dp[0]; clip.sub_color[1] = dp[1]; clip.sub_color[2] = dp[2];
+                history_push(state, "Clip color (picked)");
+            }
+        }
     }
     ImGui::PopStyleColor();
 }
@@ -705,9 +729,11 @@ bool section_fade(AppState& state, float& fade_in, float& fade_out, float w) {
     ImGui::SetNextItemWidth(sw);
     if (ImGui::SliderFloat("Fade in##fi",  &fade_in,  0.f, 4.f, "%.2fs")) edited = true;
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fade in");
+    if (ui_slider_home(state, &fade_in, 0.f, "Fade in")) edited = true;
     ImGui::SetNextItemWidth(sw);
     if (ImGui::SliderFloat("Fade out##fo", &fade_out, 0.f, 4.f, "%.2fs")) edited = true;
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Fade out");
+    if (ui_slider_home(state, &fade_out, 0.f, "Fade out")) edited = true;
     ImGui::PopStyleColor(2);
     ImGui::Dummy({0.f, 2.f});
     ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
@@ -729,12 +755,23 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("ox##ts_sox", &ts.shadow_ox, -20.f, 20.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow offset");
+        if (ui_slider_home(state, &ts.shadow_ox, struct_field_default(ts, &ts.shadow_ox), "Shadow ox")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("oy##ts_soy", &ts.shadow_oy, -20.f, 20.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow offset");
+        if (ui_slider_home(state, &ts.shadow_oy, struct_field_default(ts, &ts.shadow_oy), "Shadow oy")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 130.f);
         if (ImGui::ColorEdit4("##ts_scol", ts.shadow_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        ImGui::SameLine(0.f, 4.f);
+        {
+            float dp_[3];
+            if (ui_dropper_button("##dp_scol", dp_)) {
+                ts.shadow_col[0] = dp_[0]; ts.shadow_col[1] = dp_[1]; ts.shadow_col[2] = dp_[2];
+                edited = true;
+                history_push(state, "Shadow color (picked)");
+            }
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Shadow color");
     }
 
@@ -747,9 +784,19 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
         if (ImGui::SliderFloat("w##ts_sw", &ts.stroke_w, 0.5f, 10.f, "%.1f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke width");
+        if (ui_slider_home(state, &ts.stroke_w, struct_field_default(ts, &ts.stroke_w), "Stroke width")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
         if (ImGui::ColorEdit4("##ts_stkcol", ts.stroke_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        ImGui::SameLine(0.f, 4.f);
+        {
+            float dp_[3];
+            if (ui_dropper_button("##dp_stkcol", dp_)) {
+                ts.stroke_col[0] = dp_[0]; ts.stroke_col[1] = dp_[1]; ts.stroke_col[2] = dp_[2];
+                edited = true;
+                history_push(state, "Stroke color (picked)");
+            }
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Stroke color");
     }
 
@@ -762,9 +809,19 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
         if (ImGui::SliderFloat("r##ts_gr", &ts.glow_r, 1.f, 30.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow radius");
+        if (ui_slider_home(state, &ts.glow_r, struct_field_default(ts, &ts.glow_r), "Glow radius")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 100.f);
         if (ImGui::ColorEdit4("##ts_gcol", ts.glow_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        ImGui::SameLine(0.f, 4.f);
+        {
+            float dp_[3];
+            if (ui_dropper_button("##dp_gcol", dp_)) {
+                ts.glow_col[0] = dp_[0]; ts.glow_col[1] = dp_[1]; ts.glow_col[2] = dp_[2];
+                edited = true;
+                history_push(state, "Glow color (picked)");
+            }
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Glow color");
     }
 
@@ -777,20 +834,205 @@ bool section_text_style(AppState& state, TextStyle& ts, float w) {
         ImGui::SetNextItemWidth(sw);
         if (ImGui::ColorEdit4("##ts_bgcol", ts.bg_col,
                 ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) edited = true;
+        ImGui::SameLine(0.f, 4.f);
+        {
+            float dp_[3];
+            if (ui_dropper_button("##dp_bgcol", dp_)) {
+                ts.bg_col[0] = dp_[0]; ts.bg_col[1] = dp_[1]; ts.bg_col[2] = dp_[2];
+                edited = true;
+                history_push(state, "Background color (picked)");
+            }
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background color");
         ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("pad x##ts_bpx", &ts.bg_pad_x, 0.f, 40.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
+        if (ui_slider_home(state, &ts.bg_pad_x, struct_field_default(ts, &ts.bg_pad_x), "BG pad x")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(54.f);
         if (ImGui::SliderFloat("pad y##ts_bpy", &ts.bg_pad_y, 0.f, 40.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background padding");
+        if (ui_slider_home(state, &ts.bg_pad_y, struct_field_default(ts, &ts.bg_pad_y), "BG pad y")) edited = true;
         ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(60.f);
         if (ImGui::SliderFloat("corner##ts_bc", &ts.bg_corner, 0.f, 20.f, "%.0f")) edited = true;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Background corner");
+        if (ui_slider_home(state, &ts.bg_corner, struct_field_default(ts, &ts.bg_corner), "BG corner")) edited = true;
     }
 
     ImGui::PopStyleColor(2);
     return edited;
+}
+
+// Shared AI-pipeline progress readout (bar + message + cancel).
+static void ai_pipeline_progress(AppState& state, float bar_w) {
+    ImVec2 bp = ImGui::GetCursorScreenPos();
+    ImDrawList* bdl = ImGui::GetWindowDrawList();
+    bdl->AddRectFilled(bp, {bp.x + bar_w, bp.y + 4.f}, to_u32(Col::line), 2.f);
+    bdl->AddRectFilled(bp, {bp.x + bar_w * state.pipeline.progress, bp.y + 4.f}, to_u32(Col::fg), 2.f);
+    ImGui::Dummy({0.f, 8.f});
+    std::string msg = state.pipeline.message.empty() ? "Processing…" : state.pipeline.message;
+    char pbuf[128];
+    snprintf(pbuf, sizeof(pbuf), "%s  %d%%", msg.c_str(), (int)(state.pipeline.progress * 100.f));
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(pbuf); ImGui::PopStyleColor();
+    if (!state.pipeline.raw_line.empty()) {
+        std::string raw = state.pipeline.raw_line;
+        if (raw.size() > 100) raw = raw.substr(0, 97) + "...";
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim); ImGui::TextUnformatted(raw.c_str()); ImGui::PopStyleColor();
+    }
+    ImGui::Dummy({0.f, 4.f});
+    if (ui_btn("Cancel##aipipe_take", false, true)) transcribe_cancel();
+}
+
+// Extract Lyrics / Subtitles from a record brick's SELECTED take. The take is a
+// clean recording, so it transcribes directly — no MDX vocal separation
+// (TranscribeOnly), which also avoids over-zeroing quiet singing. The pipeline
+// source is the take path; clip_for_pipeline_source() lands the result at the
+// brick's timeline spot rather than t=0.
+static void ai_extract_from_take(AppState& state, Clip& clip, float bar_w, bool dry_vocal) {
+    bool busy     = transcribe_running();
+    bool has_take = clip.rec_take_sel >= 0 && clip.rec_take_sel < (int)clip.rec_takes.size();
+    std::string take = has_take ? clip.rec_takes[(size_t)clip.rec_take_sel] : "";
+
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+    ui_label("Extract Lyrics");
+    ImGui::Dummy({0.f, 6.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped(!has_take
+        ? "Record or select a take first."
+        : dry_vocal
+            ? "Transcribes the selected take into lyric clips synced to it. The take is "
+              "already a clean recording, so no vocal separation is run."
+            : "Transcribes the selected take into lyric clips synced to it. Isolates "
+              "vocals first, so it works even with backing music in the recording.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+    if (!has_take || busy) ImGui::BeginDisabled();
+    if (ui_btn("Extract Lyrics##take", false, true)) {
+        state.pipeline_on_done = apply_subtitle_mode;
+        kick_pipeline(state, take, dry_vocal ? PipelineMode::TranscribeOnly : PipelineMode::Both);
+    }
+    if (!has_take || busy) ImGui::EndDisabled();
+
+    ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+    ui_label("Extract Subtitles");
+    ImGui::Dummy({0.f, 6.f});
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Generates subtitle clips from the selected take — no word-level timing.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy({0.f, 4.f});
+    if (!has_take || busy) ImGui::BeginDisabled();
+    if (ui_btn("Extract Subtitles##take", false, true)) {
+        state.pipeline_on_done = apply_subtitle_pipeline;
+        kick_pipeline(state, take, PipelineMode::TranscribeOnly);
+    }
+    if (!has_take || busy) ImGui::EndDisabled();
+
+    if (busy) {
+        ImGui::Dummy({0.f, 8.f});
+        ai_pipeline_progress(state, bar_w);
+    }
+}
+
+// Face filter picker + strength — shared by the camera brick's internal
+// Filters tab and the top-level Filters panel tab.
+static void face_filters_ui(AppState& state, Clip& clip, float bar_w) {
+
+        ui_label("Face filters");
+        ImGui::Dummy({0.f, 6.f});
+        if (!face_track_available()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped("Face models missing (models/face) \xe2\x80\x94 filters still "
+                               "record, but the previews can't render the warp.");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+        }
+        // Preview grid — each card shows the filter applied to a base face.
+        {
+            int pw = 0, ph = 0; face_filter_preview_dims(&pw, &ph);
+            float aspect = (ph > 0) ? (float)pw / (float)ph : 0.75f;
+            const int   cols = 3;
+            const float gap  = 8.f;
+            float cardw = (bar_w - gap * (cols - 1)) / (float)cols;
+            float imgh  = cardw / aspect;
+            float cardh = imgh + 20.f;
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            for (int fi = 0; fi < face_filter_count(); ++fi) {
+                if (fi % cols) ImGui::SameLine(0.f, gap);
+                ImGui::PushID(30000 + fi);
+                ImGui::InvisibleButton("##ff", {cardw, cardh});
+                bool hov = ImGui::IsItemHovered();
+                bool on  = (clip.face_filter == fi);
+                if (ImGui::IsItemClicked()) {
+                    clip.face_filter = fi;
+                    history_push(state, std::string("Face filter: ") + face_filter_name(fi));
+                    if (fi != 0 && !clip.text.empty()) {
+                        int rq = ((int)lroundf(clip.rotation / 90.f) % 4 + 4) % 4;
+                        face_cache_request(clip.text, rq);
+                    }
+                }
+                ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                uintptr_t tex = face_filter_preview_texture(fi, 1.f);
+                if (tex)
+                    dl->AddImageRounded((ImTextureID)tex, a, {b.x, a.y + imgh},
+                                        {0, 0}, {1, 1}, IM_COL32_WHITE, 7.f);
+                else
+                    dl->AddRectFilled(a, {b.x, a.y + imgh}, IM_COL32(30, 30, 40, 255), 7.f);
+                dl->AddText({a.x + 4.f, a.y + imgh + 3.f},
+                            on ? IM_COL32(245, 180, 120, 255) : to_u32(Col::muted),
+                            face_filter_name(fi));
+                dl->AddRect(a, b, on ? IM_COL32(235, 120, 60, 255)
+                                     : (hov ? IM_COL32(120, 120, 150, 220)
+                                            : IM_COL32(55, 55, 72, 200)),
+                            7.f, 0, on ? 2.f : 1.f);
+                ImGui::PopID();
+            }
+        }
+        if (clip.face_filter != 0) {
+            ImGui::Dummy({0.f, 8.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Strength");
+            ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
+            ImGui::SetNextItemWidth(bar_w);
+            ImGui::SliderFloat("##face_amt", &clip.face_filter_amt, 0.f, 1.5f, "%.2f");
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                history_push(state, "Face filter strength");
+            ui_slider_home(state, &clip.face_filter_amt,
+                           struct_field_default(clip, &clip.face_filter_amt), "Face filter strength");
+            if (!clip.text.empty()) {
+                float fp = 0.f;
+                FaceCacheStatus fst = face_cache_status(clip.text, &fp);
+                if (fst == FaceCacheStatus::Building) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::Text("Tracking face in take\xe2\x80\xa6 %d%%", (int)(fp * 100.f));
+                    ImGui::PopStyleColor();
+                } else if (fst == FaceCacheStatus::Failed) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("No face found in this take.");
+                    ImGui::PopStyleColor();
+                }
+            }
+        }
+}
+
+// Top-level Filters panel tab: resolves the selected camera brick.
+void panel_face_filters(AppState& state, float w) {
+    float bar_w = w - 16.f;
+    bool have = state.selected_track >= 0 &&
+                state.selected_track < (int)state.tracks.size() &&
+                state.selected_clip >= 0 &&
+                state.selected_clip < (int)state.tracks[state.selected_track].clips.size();
+    Clip* cl = have ? &state.tracks[state.selected_track].clips[state.selected_clip] : nullptr;
+    if (!cl || cl->clip_type != ClipType::VideoRecord || cl->rec_photo) {
+        ImGui::Dummy({0.f, 8.f});
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Select a camera brick to pick a face filter.");
+        ImGui::PopStyleColor();
+        return;
+    }
+    ImGui::Dummy({0.f, 8.f});
+    face_filters_ui(state, *cl, bar_w);
 }
 
 void panel_clip(AppState& state, float w) {
@@ -861,6 +1103,7 @@ void panel_clip(AppState& state, float w) {
     // Interp bar for whichever keyframe is selected
     auto kf_interp_bar = [&]() {
         bool sel_this = (state.kf_sel_track == sel_ti && state.kf_sel_clip == sel_ci &&
+                         state.kf_sel_source < 0 &&
                          !state.kf_sel_prop.empty() && state.kf_sel_idx >= 0);
         if (!sel_this) return;
         auto it2 = clip.ktracks.find(state.kf_sel_prop);
@@ -931,368 +1174,16 @@ void panel_clip(AppState& state, float w) {
     // LYRICS CLIP
     // ═══════════════════════════════════════════════════════════════════════════
     else if (clip.clip_type == ClipType::Lyrics) {
-        // Sync s_edit_buf to current clip text when selection changes
-        static int s_last_lyrics_clip = -1;
-        if (s_last_lyrics_clip != state.selected_clip) {
-            strncpy(s_edit_buf, clip.text.c_str(), sizeof(s_edit_buf)-1);
-            s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
-            s_last_lyrics_clip = state.selected_clip;
-        }
-
-        if (ImGui::CollapsingHeader("Content", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-            ImGui::SetNextItemWidth(w - 16.f);
-            if (ImGui::InputText("##lyr_text", s_edit_buf, sizeof(s_edit_buf),
-                    ImGuiInputTextFlags_EnterReturnsTrue))
-                clip.text = s_edit_buf;
-            if (ImGui::IsItemDeactivated()) {
-                std::string new_text = s_edit_buf;
-                if (new_text != clip.text) {
-                    // Diff against original word entries to record which words changed.
-                    // Only store when token count matches — structural edits (adding/
-                    // removing words) can't be reliably replayed across regroupings.
-                    if (!clip.words.empty()) {
-                        auto tokens = split_words_panel(new_text);
-                        if (tokens.size() == clip.words.size()) {
-                            for (int wi = 0; wi < (int)clip.words.size(); ++wi) {
-                                if (tokens[wi] != clip.words[wi].text) {
-                                    int frame = (int)(clip.words[wi].start * (float)state.fps);
-                                    state.lyrics_edits[frame] = tokens[wi];
-                                    clip.words[wi].text = tokens[wi];
-                                }
-                            }
-                        }
-                    }
-                    history_push(state, "Edit lyrics text");
-                }
-                clip.text = new_text;
-            }
-            ImGui::PopStyleColor(2);
-            ImGui::Dummy({0.f, 4.f});
-        }
-
-        if (ImGui::CollapsingHeader("Words", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Dummy({0.f, 4.f}); draw_word_strip(state, clip, w - 8.f); ImGui::Dummy({0.f, 4.f});
-        }
-
-        if (ImGui::CollapsingHeader("Karaoke")) {
-            ImGui::Dummy({0.f, 4.f});
-            bool kar = clip.karaoke;
-            if (ImGui::Checkbox("Enable karaoke highlight##kar", &kar)) {
-                clip.karaoke = kar; history_push(state, "Karaoke toggle");
-            }
-            if (clip.karaoke) {
-                ImGui::Dummy({0.f, 6.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Base color"); ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(w - 16.f);
-                ImGui::ColorEdit4("##lyr_base_col", clip.sub_color,
-                    ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Base color");
-                ImGui::Dummy({0.f, 4.f});
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Highlight color"); ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(w - 16.f);
-                ImGui::ColorEdit4("##lyr_hl_col", clip.karaoke_highlight_color,
-                    ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar);
-                if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Highlight color");
-            }
-            ImGui::Dummy({0.f, 4.f});
-        }
-
-        // Style for a managed Lyrics track is owned by the Typography tab so it
-        // stays uniform across the track — per-clip style controls here used to
-        // desync individual lines. The Clip tab keeps content/words/grouping.
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextWrapped("Font, color, position & alignment for the whole lyric "
-                           "track are set in the Typography tab.");
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 4.f});
-
-        if (ImGui::CollapsingHeader("Grouping")) {
-            ImGui::Dummy({0.f, 4.f});
-            if (!state.words_json_path.empty() && fs::exists(state.words_json_path)) {
-                struct ModeBtn { SubtitleMode m; const char* label; const char* tip; };
-                static const ModeBtn modes[] = {
-                    {SubtitleMode::Word,    "Word",    "One clip per word"},
-                    {SubtitleMode::Phrase,  "Phrase",  "Group by short pauses (>0.3s)"},
-                    {SubtitleMode::Line,    "Line",    "Group by breath gaps (>0.8s)"},
-                    {SubtitleMode::Segment, "Segment", "Sentence boundaries"},
-                    {SubtitleMode::CustomN, "Custom",  "N words per clip"},
-                };
-                for (auto& mb : modes) {
-                    bool sel2 = state.subtitle_mode == mb.m;
-                    if (ui_btn(mb.label, sel2, true)) state.subtitle_mode = mb.m;
-                    if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::TextUnformatted(mb.tip); ImGui::EndTooltip(); }
-                    ImGui::SameLine(0.f, 4.f);
-                }
-                ImGui::NewLine();
-                if (state.subtitle_mode == SubtitleMode::CustomN) {
-                    ImGui::Dummy({0.f, 4.f});
-                    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-                    ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-                    ImGui::SetNextItemWidth(80.f);
-                    int n = state.subtitle_n;
-                    if (ImGui::InputInt("words/clip##cn", &n))
-                        state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-                    ImGui::PopStyleColor(2);
-                }
-                ImGui::Dummy({0.f, 6.f});
-                if (ui_btn("Apply grouping", true, true)) {
-                    apply_subtitle_mode(state);
-                    const char* mn = state.subtitle_mode == SubtitleMode::Word ? "Word" :
-                        state.subtitle_mode == SubtitleMode::Phrase  ? "Phrase"  :
-                        state.subtitle_mode == SubtitleMode::Line    ? "Line"    :
-                        state.subtitle_mode == SubtitleMode::Segment ? "Segment" : "Custom";
-                    history_push(state, std::string("Grouping — ") + mn);
-                }
-                // Propagate to multi-selection
-                int sel_count = 0;
-                for (auto& [st2, sc2] : state.clip_selection) {
-                    if (st2 == sel_ti && sc2 == sel_ci) continue;
-                    if (st2 < (int)state.tracks.size() && sc2 < (int)state.tracks[st2].clips.size() &&
-                        state.tracks[st2].clips[sc2].clip_type == ClipType::Lyrics) ++sel_count;
-                }
-                if (sel_count > 0) {
-                    ImGui::SameLine(0.f, 6.f);
-                    char slbl[48]; snprintf(slbl, sizeof(slbl), "Apply to %d selected##lyr", sel_count);
-                    if (ui_btn(slbl, false, true)) {
-                        for (auto& [st2, sc2] : state.clip_selection) {
-                            if (st2 == sel_ti && sc2 == sel_ci) continue;
-                            if (st2 >= (int)state.tracks.size() || sc2 >= (int)state.tracks[st2].clips.size()) continue;
-                            Clip& tgt = state.tracks[st2].clips[sc2];
-                            if (tgt.clip_type != ClipType::Lyrics) continue;
-                            tgt.karaoke = clip.karaoke; tgt.sub_pos = clip.sub_pos;
-                            tgt.sub_pos_y = clip.sub_pos_y;
-                            tgt.sub_color_override = clip.sub_color_override;
-                            memcpy(tgt.sub_color, clip.sub_color, sizeof(clip.sub_color));
-                            memcpy(tgt.karaoke_highlight_color, clip.karaoke_highlight_color,
-                                   sizeof(clip.karaoke_highlight_color));
-                            tgt.ts = clip.ts;
-                        }
-                        history_push(state, "Apply style to selected");
-                    }
-                }
-            } else {
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                ImGui::TextWrapped("Run ML Processing on an audio clip to generate word JSON, then grouping controls appear here.");
-                ImGui::PopStyleColor();
-            }
-            ImGui::Dummy({0.f, 4.f});
-        }
+        // Whole-track, text-only line editor. Timing lives on the timeline; split /
+        // merge / add / delete live on the lyric brick's right-click context menu.
+        draw_line_list_editor(state, clip, w, ClipType::Lyrics, /*show_timing=*/false);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SUBTITLE CLIP
     // ═══════════════════════════════════════════════════════════════════════════
     else if (clip.clip_type == ClipType::Subtitle) {
-        // Build cross-track list sorted by start time
-        struct SRTEntry { int ti, ci; };
-        std::vector<SRTEntry> entries;
-        for (int ti2 = 0; ti2 < (int)state.tracks.size(); ++ti2)
-            for (int ci2 = 0; ci2 < (int)state.tracks[ti2].clips.size(); ++ci2) {
-                const Clip& c2 = state.tracks[ti2].clips[ci2];
-                if (c2.clip_type == ClipType::Subtitle &&
-                    (clip.source_id.empty() || c2.source_id == clip.source_id))
-                    entries.push_back({ti2, ci2});
-            }
-        std::sort(entries.begin(), entries.end(), [&](const SRTEntry& a, const SRTEntry& b){
-            return state.tracks[a.ti].clips[a.ci].start < state.tracks[b.ti].clips[b.ci].start;
-        });
-        int n_total = (int)entries.size();
-
-        // Find / Replace bar
-        static char s_find[128] = {}, s_replace[128] = {};
-        if (ImGui::CollapsingHeader("Find & Replace")) {
-            ImGui::Dummy({0.f, 4.f});
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-            ImGui::SetNextItemWidth(w - 16.f);
-            ImGui::InputText("Find##fr_find", s_find, sizeof(s_find));
-            ImGui::SetNextItemWidth(w - 16.f);
-            ImGui::InputText("Replace##fr_rep", s_replace, sizeof(s_replace));
-            ImGui::PopStyleColor(2);
-            ImGui::Dummy({0.f, 4.f});
-            if (ui_btn("Replace all##frbtn", false, true) && s_find[0]) {
-                std::string from(s_find), to(s_replace);
-                int count = 0;
-                for (auto& e : entries) {
-                    Clip& sc2 = state.tracks[e.ti].clips[e.ci];
-                    std::string& txt = sc2.text;
-                    std::string out; size_t pos = 0, found;
-                    while ((found = txt.find(from, pos)) != std::string::npos) {
-                        out += txt.substr(pos, found - pos); out += to;
-                        pos = found + from.size(); ++count;
-                    }
-                    out += txt.substr(pos);
-                    if (count) txt = out;
-                }
-                if (count) history_push(state, "Find & Replace");
-            }
-            ImGui::Dummy({0.f, 4.f});
-        }
-
-        // Bulk timing shift
-        if (ImGui::CollapsingHeader("Bulk Shift")) {
-            ImGui::Dummy({0.f, 4.f});
-            static float s_shift_amt = 0.f;
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-            ImGui::SetNextItemWidth(w * 0.55f);
-            ImGui::InputFloat("seconds##shift", &s_shift_amt, 0.01f, 0.1f, "%.3f");
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 4.f});
-            if (ui_btn("Shift all##shiftbtn", false, true)) {
-                for (auto& e : entries) {
-                    state.tracks[e.ti].clips[e.ci].start += s_shift_amt;
-                    state.tracks[e.ti].clips[e.ci].end   += s_shift_amt;
-                    if (state.tracks[e.ti].clips[e.ci].start < 0.f) {
-                        state.tracks[e.ti].clips[e.ci].end -= state.tracks[e.ti].clips[e.ci].start;
-                        state.tracks[e.ti].clips[e.ci].start = 0.f;
-                    }
-                }
-                history_push(state, "Bulk shift subtitles");
-            }
-            ImGui::Dummy({0.f, 4.f});
-        }
-
-        if (ImGui::CollapsingHeader("Subtitles", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Dummy({0.f, 4.f});
-            char info[64];
-            if (!clip.source_id.empty()) {
-                std::string fn = fs::path(clip.source_id).filename().string();
-                snprintf(info, sizeof(info), "%d clips  ·  %s", n_total, fn.c_str());
-            } else {
-                snprintf(info, sizeof(info), "%d clips", n_total);
-            }
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted(info); ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 4.f});
-
-            int sel_row = -1;
-            for (int i = 0; i < n_total; ++i)
-                if (entries[i].ti == sel_ti && entries[i].ci == sel_ci) { sel_row = i; break; }
-
-            static int s_srt_last_row = -1;
-            float row_h  = 22.f;
-            float list_h = fminf(200.f, n_total * row_h + 6.f);
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, Col::bg_soft);
-            ImGui::BeginChild("##srt_list", {0.f, list_h}, false);
-            for (int i = 0; i < n_total; ++i) {
-                const SRTEntry& e  = entries[i];
-                Clip& sc2          = state.tracks[e.ti].clips[e.ci];
-                bool  is_sel       = (i == sel_row);
-                if (is_sel && s_srt_last_row != i) ImGui::SetScrollHereY(0.5f);
-                ImGui::PushStyleColor(ImGuiCol_Text, is_sel ? Col::fg : Col::muted);
-                char row_id[32]; snprintf(row_id, sizeof(row_id), "##srt%d", i);
-                if (ImGui::Selectable(row_id, is_sel, 0, {0.f, row_h})) {
-                    state.selected_track = e.ti; state.selected_clip = e.ci;
-                    strncpy(s_edit_buf, sc2.text.c_str(), sizeof(s_edit_buf)-1);
-                    s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
-                    seek_to(state, sc2.start);
-                }
-                ImGui::SameLine(0.f, 4.f);
-                float dur2 = sc2.end - sc2.start;
-                std::string preview = sc2.text.size() > 30 ? sc2.text.substr(0, 28) + "\xe2\x80\xa6" : sc2.text;
-                char rowlbl[96];
-                snprintf(rowlbl, sizeof(rowlbl), "%2d  %s  %.2fs  %s",
-                    i+1, fmt_time(sc2.start).c_str(), dur2, preview.c_str());
-                ImGui::TextUnformatted(rowlbl);
-                ImGui::PopStyleColor();
-            }
-            s_srt_last_row = sel_row;
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 4.f});
-
-            // Edit selected
-            if (sel_row >= 0 && sel_row < n_total) {
-                Clip& sc2 = state.tracks[entries[sel_row].ti].clips[entries[sel_row].ci];
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-                ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-                ImGui::SetNextItemWidth(w - 16.f);
-                if (s_edit_focus_next) { ImGui::SetKeyboardFocusHere(); s_edit_focus_next = false; }
-                if (ImGui::InputText("##srt_text", s_edit_buf, sizeof(s_edit_buf),
-                        ImGuiInputTextFlags_EnterReturnsTrue))
-                    sc2.text = s_edit_buf;
-                if (ImGui::IsItemDeactivated()) {
-                    if (sc2.text != s_edit_buf) history_push(state, "Edit subtitle text");
-                    sc2.text = s_edit_buf;
-                }
-                ImGui::PopStyleColor(2);
-
-                float half = (w - 24.f) * 0.5f;
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-                ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
-                ImGui::BeginGroup();
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("Start"); ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(half);
-                float ss = sc2.start;
-                if (ImGui::InputFloat("##srt_s", &ss, 0.01f, 0.1f, "%.3f"))
-                    if (ss < sc2.end - 0.01f) { sc2.start = fmaxf(0.f, ss); history_push(state, "Subtitle timing"); }
-                ImGui::EndGroup(); ImGui::SameLine(0.f, 8.f); ImGui::BeginGroup();
-                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted); ImGui::TextUnformatted("End"); ImGui::PopStyleColor();
-                ImGui::SetNextItemWidth(half);
-                float se = sc2.end;
-                if (ImGui::InputFloat("##srt_e", &se, 0.01f, 0.1f, "%.3f"))
-                    if (se > sc2.start + 0.01f) { sc2.end = se; history_push(state, "Subtitle timing"); }
-                ImGui::EndGroup();
-                ImGui::PopStyleColor(2);
-
-                ImGui::Dummy({0.f, 4.f});
-                bool nudged = false;
-                if (ui_btn("-100ms", false, true)) { sc2.start-=0.1f; sc2.end-=0.1f; if(sc2.start<0.f){sc2.end-=sc2.start;sc2.start=0.f;} nudged=true; }
-                ImGui::SameLine(0.f, 4.f);
-                if (ui_btn("-10ms",  false, true)) { sc2.start-=0.01f; sc2.end-=0.01f; nudged=true; }
-                ImGui::SameLine(0.f, 4.f);
-                if (ui_btn("+10ms",  false, true)) { sc2.start+=0.01f; sc2.end+=0.01f; nudged=true; }
-                ImGui::SameLine(0.f, 4.f);
-                if (ui_btn("+100ms", false, true)) { sc2.start+=0.1f;  sc2.end+=0.1f;  nudged=true; }
-                if (nudged) history_push(state, "Nudge subtitle");
-
-                ImGui::Dummy({0.f, 6.f});
-                if (ui_btn("+ Add below", false, true)) {
-                    Clip nc; nc.clip_type = ClipType::Subtitle; nc.source_id = sc2.source_id;
-                    nc.start = sc2.end; nc.end = sc2.end + 2.f;
-                    Track& tgt_track = state.tracks[entries[sel_row].ti];
-                    int ins = entries[sel_row].ci + 1;
-                    tgt_track.clips.insert(tgt_track.clips.begin() + ins, nc);
-                    state.selected_clip = ins;
-                    strncpy(s_edit_buf, "", 1); s_edit_focus_next = true;
-                    history_push(state, "Add subtitle");
-                }
-                ImGui::SameLine(0.f, 4.f);
-                if (ui_btn("Delete##srtdel", false, true)) {
-                    Track& del_track = state.tracks[entries[sel_row].ti];
-                    del_track.clips.erase(del_track.clips.begin() + entries[sel_row].ci);
-                    int new_row = std::min(sel_row, n_total - 2);
-                    if (new_row >= 0 && new_row < n_total - 1) {
-                        state.selected_track = entries[new_row].ti;
-                        state.selected_clip  = entries[new_row].ci;
-                        if (entries[sel_row].ti == entries[new_row].ti &&
-                            entries[sel_row].ci  < entries[new_row].ci)
-                            state.selected_clip--;
-                        if (state.selected_clip >= 0 &&
-                            state.selected_clip < (int)state.tracks[state.selected_track].clips.size()) {
-                            strncpy(s_edit_buf,
-                                state.tracks[state.selected_track].clips[state.selected_clip].text.c_str(),
-                                sizeof(s_edit_buf)-1);
-                            s_edit_buf[sizeof(s_edit_buf)-1] = '\0';
-                        }
-                    } else { state.selected_clip = -1; }
-                    history_push(state, "Delete subtitle");
-                }
-            }
-            ImGui::Dummy({0.f, 4.f});
-        }
-
-        // Style is owned track-wide by the Typography tab so all subtitle lines
-        // stay uniform (Option A). The Clip tab keeps the per-line text/timing list.
-        ImGui::Dummy({0.f, 4.f});
-        ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        ImGui::TextWrapped("Font, color, position & alignment for the whole subtitle "
-                           "track are set in the Typography tab.");
-        ImGui::PopStyleColor();
-        ImGui::Dummy({0.f, 4.f});
+        draw_line_list_editor(state, clip, w, ClipType::Subtitle, /*show_timing=*/true);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1312,6 +1203,7 @@ void panel_clip(AppState& state, float w) {
             bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt, flags);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            if (ui_slider_home(state, v, struct_field_default(clip, v), label)) ch = true;
             return ch;
         };
 
@@ -1683,6 +1575,8 @@ void panel_clip(AppState& state, float w) {
                 ImGui::SetNextItemWidth(bar_w);
                 if (ImGui::SliderFloat("##bgrsoft", &clip.bg_remove_softness, -1.f, 1.f, "%.2f"))
                     history_push(state, "BG Matte");
+                ui_slider_home(state, &clip.bg_remove_softness,
+                               struct_field_default(clip, &clip.bg_remove_softness), "BG Matte");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Drag left if the cutout eats into the subject; right to trim the edge tighter.");
                 ImGui::PopStyleColor(2);
@@ -1701,23 +1595,27 @@ void panel_clip(AppState& state, float w) {
                     ImGui::SetNextItemWidth(half_w);
                     if (ImGui::SliderFloat("##bgrl", &clip.bg_remove_box_l, 0.f, clip.bg_remove_box_r - 0.01f, "%.2f"))
                         history_push(state, "BG Box");
+                    ui_slider_home(state, &clip.bg_remove_box_l, struct_field_default(clip, &clip.bg_remove_box_l), "BG Box left");
                     ImGui::SameLine(0.f, 4.f);
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
                     ImGui::TextUnformatted("Right"); ImGui::PopStyleColor();
                     ImGui::SetNextItemWidth(half_w);
                     if (ImGui::SliderFloat("##bgrr", &clip.bg_remove_box_r, clip.bg_remove_box_l + 0.01f, 1.f, "%.2f"))
                         history_push(state, "BG Box");
+                    ui_slider_home(state, &clip.bg_remove_box_r, struct_field_default(clip, &clip.bg_remove_box_r), "BG Box right");
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
                     ImGui::TextUnformatted("Top"); ImGui::PopStyleColor();
                     ImGui::SetNextItemWidth(half_w);
                     if (ImGui::SliderFloat("##bgrt", &clip.bg_remove_box_t, 0.f, clip.bg_remove_box_b - 0.01f, "%.2f"))
                         history_push(state, "BG Box");
+                    ui_slider_home(state, &clip.bg_remove_box_t, struct_field_default(clip, &clip.bg_remove_box_t), "BG Box top");
                     ImGui::SameLine(0.f, 4.f);
                     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
                     ImGui::TextUnformatted("Bottom"); ImGui::PopStyleColor();
                     ImGui::SetNextItemWidth(half_w);
                     if (ImGui::SliderFloat("##bgrb", &clip.bg_remove_box_b, clip.bg_remove_box_t + 0.01f, 1.f, "%.2f"))
                         history_push(state, "BG Box");
+                    ui_slider_home(state, &clip.bg_remove_box_b, struct_field_default(clip, &clip.bg_remove_box_b), "BG Box bottom");
                     ImGui::PopStyleColor(2);
                 }
                 ImGui::Dummy({0.f, 4.f});
@@ -1796,6 +1694,7 @@ void panel_clip(AppState& state, float w) {
             bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt, flags);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            if (ui_slider_home(state, v, struct_field_default(clip, v), label)) ch = true;
             return ch;
         };
 
@@ -2086,6 +1985,7 @@ void panel_clip(AppState& state, float w) {
             bool ch = ImGui::SliderFloat(id, v, vmin, vmax, fmt);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            if (ui_slider_home(state, v, struct_field_default(clip, v), label)) ch = true;
             return ch;
         };
 
@@ -2132,8 +2032,27 @@ void panel_clip(AppState& state, float w) {
             static std::string s_rec_error;
             if (ImGui::Button("\xe2\x97\x8f Record", {bar_w, 34.f})) {
                 s_rec_error.clear();
-                if (!recorder_start(state, state.selected_track, state.selected_clip))
+                // Paired MIC brick: hand off to the camera side — it warms the
+                // camera first, then starts this recorder in lockstep so the
+                // take trays pair by pass. Solo brick records audio directly.
+                int cam_ti = -1, cam_ci = -1;
+                if (clip.rec_pair_id != 0 && !vrecorder_active()) {
+                    for (int pti = 0; pti < (int)state.tracks.size() && cam_ti < 0; ++pti)
+                        for (int pci = 0; pci < (int)state.tracks[pti].clips.size(); ++pci) {
+                            Clip& pc = state.tracks[pti].clips[pci];
+                            if (pc.clip_type == ClipType::VideoRecord && !pc.rec_photo &&
+                                pc.rec_pair_id == clip.rec_pair_id) {
+                                cam_ti = pti; cam_ci = pci;
+                                break;
+                            }
+                        }
+                }
+                if (cam_ti >= 0) {
+                    if (!vrecorder_start(state, cam_ti, cam_ci))
+                        s_rec_error = "Could not start the paired camera.";
+                } else if (!recorder_start(state, state.selected_track, state.selected_clip)) {
                     s_rec_error = "Could not open the microphone.";
+                }
             }
             ImGui::PopStyleColor(3);
             if (busy) ImGui::EndDisabled();
@@ -2178,6 +2097,23 @@ void panel_clip(AppState& state, float w) {
 
             ImGui::Dummy({0.f, 4.f});
             bool mon = audio_monitor_get();
+            {
+                bool vm = audio_vmic_get();
+                if (ImGui::Checkbox("Virtual mic (calls)", &vm)) {
+                    if (vm) audio_vmic_set(true);   // silently unavailable
+                    else    audio_vmic_set(false);   // without PipeWire — the
+                                                     // checkbox just won't stick
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(
+                        "Expose this brick's processed signal (gate, noise\n"
+                        "reduction, live FX) as a system microphone \xe2\x80\x94 pick\n"
+                        "'Pop Maker Studio Mic' in your call app. Works with\n"
+                        "'Hear yourself' off.");
+                    ImGui::EndTooltip();
+                }
+            }
             if (ImGui::Checkbox("Hear yourself", &mon)) {
                 if (mon) {
                     // Monitoring swaps in the low-latency duplex device so
@@ -2332,6 +2268,10 @@ void panel_clip(AppState& state, float w) {
                 return;
             }
         }
+
+        // Extract lyrics / subtitles straight from the selected take (dry mic
+        // vocal — transcribe directly, no separation).
+        ai_extract_from_take(state, clip, bar_w, /*dry_vocal=*/true);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -2482,259 +2422,83 @@ void panel_clip(AppState& state, float w) {
                 ImGui::EndTooltip();
             }
 
-            // Audio capture — record the mic with the webcam (video takes only).
-            // Mirrors the Audio Record brick's mic settings 1:1 (device picker,
-            // hear-yourself, noise gate, hear-effects) so both bricks behave the
-            // same — plus the video-specific A/V offset.
+            // Record A/V pair: audio lives on the paired MIC brick (same
+            // pair id) — one Record press runs both recorders on the shared
+            // loop clock, so video take N and audio take N are the same pass.
+            // Mic device / monitoring / gate settings live on the MIC brick's
+            // own panel. (Legacy pre-pair bricks recorded a muxed mkv; those
+            // takes still play, new recordings are video-only unless paired.)
             if (!clip.rec_photo) {
                 ImGui::Dummy({0.f, 6.f});
-                ImGui::Checkbox("Record mic", &clip.rec_audio);
-                if (ImGui::IsItemHovered()) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextUnformatted("Capture the microphone with the webcam so each\n"
-                                           "take is a synced audio + video clip.");
-                    ImGui::EndTooltip();
+                int pair_ti = -1, pair_ci = -1;
+                if (clip.rec_pair_id != 0) {
+                    for (int pti = 0; pti < (int)state.tracks.size() && pair_ti < 0; ++pti)
+                        for (int pci = 0; pci < (int)state.tracks[pti].clips.size(); ++pci) {
+                            Clip& pc = state.tracks[pti].clips[pci];
+                            if (&pc != &clip && pc.clip_type == ClipType::Record &&
+                                pc.rec_pair_id == clip.rec_pair_id) {
+                                pair_ti = pti; pair_ci = pci;
+                                break;
+                            }
+                        }
                 }
-                if (clip.rec_audio) {
-                    // ── Mic device picker (shared with Audio Record) + camera-mic ─
-                    static std::vector<std::string> s_mic_devs;
-                    static bool s_mic_devs_init = false;
-                    if (!s_mic_devs_init) { s_mic_devs = audio_capture_devices(); s_mic_devs_init = true; }
-                    // Which capture device is the camera's own mic. Cached — the
-                    // lookup re-enumerates V4L2 + audio, so only recompute when the
-                    // camera selection changes.
-                    static int s_cam_mic = -1, s_cam_mic_for = -2;
-                    int cur_cam = vrecorder_device_selected();
-                    if (cur_cam != s_cam_mic_for) {
-                        s_cam_mic = vrecorder_camera_mic(cur_cam);
-                        s_cam_mic_for = cur_cam;
-                    }
-                    int cam_mic = s_cam_mic;
-                    bool busy = recorder_active();
-                    int  mic_sel = audio_capture_selected();
-                    const char* mcur = (mic_sel >= 0 && mic_sel < (int)s_mic_devs.size())
-                                       ? s_mic_devs[mic_sel].c_str() : "System default";
-                    ImGui::Dummy({0.f, 4.f});
-                    if (busy) ImGui::BeginDisabled();
-                    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-                    ImGui::SetNextItemWidth(bar_w);
-                    if (ImGui::BeginCombo("##vrec_mic", mcur)) {
-                        if (ImGui::IsWindowAppearing()) {
-                            s_mic_devs = audio_capture_devices();
-                            s_cam_mic = vrecorder_camera_mic(cur_cam); cam_mic = s_cam_mic;
-                        }
-                        if (ImGui::Selectable("System default", mic_sel < 0))
-                            audio_capture_select(-1);
-                        for (int di = 0; di < (int)s_mic_devs.size(); ++di) {
-                            ImGui::PushID(di);
-                            char lbl[176];
-                            if (di == cam_mic)
-                                snprintf(lbl, sizeof(lbl), "\xf0\x9f\x93\xb7 %s  (camera mic)",
-                                         s_mic_devs[(size_t)di].c_str());
-                            else
-                                snprintf(lbl, sizeof(lbl), "%s", s_mic_devs[(size_t)di].c_str());
-                            if (ImGui::Selectable(lbl, mic_sel == di))
-                                audio_capture_select(di);
-                            ImGui::PopID();
-                        }
-                        ImGui::EndCombo();
-                    }
+                if (pair_ti >= 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(90, 200, 120, 255));
+                    ImGui::TextWrapped("\xe2\x9c\x93 Paired with MIC brick on '%s' \xe2\x80\x94 "
+                                       "Record runs both; takes pair by pass.",
+                                       state.tracks[(size_t)pair_ti].name.c_str());
                     ImGui::PopStyleColor();
-                    if (busy) ImGui::EndDisabled();
-
-                    // Which device the synced take records from — and whether it's
-                    // the camera's own mic (consistent latency → tight sync) or a
-                    // separate one (the A/V offset may need a nudge).
-                    ImGui::Dummy({0.f, 2.f});
-                    if (cam_mic >= 0 && mic_sel == cam_mic) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(90, 200, 120, 255));
-                        ImGui::TextWrapped("\xe2\x9c\x93 Camera's own mic (%s) \xe2\x80\x94 tightest A/V sync.",
-                                           s_mic_devs[(size_t)cam_mic].c_str());
-                        ImGui::PopStyleColor();
-                    } else if (cam_mic >= 0) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
-                        ImGui::TextWrapped("Recording a separate mic. The camera's own mic (%s) is "
-                                           "available \xe2\x80\x94 it gives steadier A/V sync.",
-                                           s_mic_devs[(size_t)cam_mic].c_str());
-                        ImGui::PopStyleColor();
-                    } else {
-                        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                        ImGui::TextWrapped("No camera mic detected \xe2\x80\x94 recording from %s. "
-                                           "Tune the A/V offset if lips drift.", mcur);
-                        ImGui::PopStyleColor();
+                    ImGui::SameLine(0.f, 8.f);
+                    if (ui_btn("Select##recpair", false, true)) {
+                        state.selected_track = pair_ti;
+                        state.selected_clip  = pair_ci;
+                        clip_flash(state, pair_ti, pair_ci, /*reveal=*/true);
                     }
-
+                } else if (clip.rec_pair_id != 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
+                    ImGui::TextWrapped("Paired MIC brick was deleted \xe2\x80\x94 recording is "
+                                       "video-only.");
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextWrapped("Video-only brick \xe2\x80\x94 no paired mic.");
+                    ImGui::PopStyleColor();
+                }
+                // Re-create (or first-time create) the mic twin.
+                if (pair_ti < 0) {
                     ImGui::Dummy({0.f, 4.f});
-                    ImGui::SetNextItemWidth(bar_w - 70.f);
-                    ImGui::SliderFloat("A/V offset", &clip.rec_av_offset_ms,
-                                       -200.f, 200.f, "%.0f ms");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::BeginTooltip();
-                        ImGui::TextUnformatted("Nudge audio against video to dial out fixed\n"
-                                               "camera latency. + delays the audio. Only needed\n"
-                                               "if the lips drift on playback.");
-                        ImGui::EndTooltip();
-                    }
-
-                    // ── Measure A/V offset (GCC-PHAT) + A/B ───────────────────
-                    // Only meaningful when a SEPARATE mic is the source and the
-                    // camera has its own mic: we record both for a few seconds
-                    // (the cam mic rides the video pipeline, so it stands in for
-                    // the video's timing) and cross-correlate to find the lag.
-                    // If you're already on the camera mic there's nothing to
-                    // measure — you're aligned by construction.
-                    if (cam_mic >= 0 && mic_sel != cam_mic) {
-                        static bool  s_m_has = false;
-                        static float s_m_off = 0.f, s_m_conf = 0.f;
-                        static std::string s_m_err;
-
-                        // Pick up a finished run and apply it to this clip.
-                        AVMeasureResult mr;
-                        if (av_measure_poll(mr)) {
-                            if (mr.ok) {
-                                s_m_has = true; s_m_off = mr.offset_ms; s_m_conf = mr.confidence;
-                                s_m_err.clear();
-                                clip.rec_av_offset_ms =
-                                    mr.offset_ms < -200.f ? -200.f :
-                                    (mr.offset_ms > 200.f ? 200.f : mr.offset_ms);
-                            } else {
-                                s_m_has = false; s_m_err = mr.error;
-                            }
+                    if (ui_btn("Add paired MIC brick", false, true)) {
+                        int pid = clip.rec_pair_id;
+                        if (pid == 0) {
+                            for (auto& tr : state.tracks)
+                                for (auto& c2 : tr.clips)
+                                    if (c2.rec_pair_id > pid) pid = c2.rec_pair_id;
+                            ++pid;
+                            clip.rec_pair_id = pid;
                         }
-
-                        bool measuring = av_measure_active();
-                        ImGui::Dummy({0.f, 2.f});
-                        if (measuring) {
-                            ImGui::BeginDisabled();
-                            char lbl[48];
-                            snprintf(lbl, sizeof(lbl), "Listening\xe2\x80\xa6 %.1fs", av_measure_elapsed());
-                            ImGui::Button(lbl, {bar_w - 70.f, 0.f});
-                            ImGui::EndDisabled();
-                        } else if (ImGui::Button("Measure A/V offset", {bar_w - 70.f, 0.f})) {
-                            std::string clean = audio_capture_pulse_source(mic_sel);
-                            std::string camsr = audio_capture_pulse_source(cam_mic);
-                            if (clean.empty()) clean = "default";
-                            av_measure_start(clean, camsr, 3.5f);
-                            s_m_err.clear();
+                        Clip mic;
+                        mic.clip_type   = ClipType::Record;
+                        mic.rec_pair_id = pid;
+                        mic.start       = clip.start;
+                        mic.end         = clip.end;
+                        // Re-created twin joins the camera's selection group
+                        // (make one if the camera brick has none).
+                        if (clip.group_id == 0) {
+                            int gid2 = 0;
+                            for (auto& tr2 : state.tracks)
+                                for (auto& c3 : tr2.clips)
+                                    if (c3.group_id > gid2) gid2 = c3.group_id;
+                            clip.group_id = gid2 + 1;
                         }
-                        if (!measuring && ImGui::IsItemHovered()) {
-                            ImGui::BeginTooltip();
-                            ImGui::TextUnformatted("Make a sharp sound (a clap) for ~3 seconds.\n"
-                                                   "Records your mic and the camera's mic together\n"
-                                                   "and measures the lag between them, then sets\n"
-                                                   "the A/V offset for you.");
-                            ImGui::EndTooltip();
-                        }
-
-                        if (measuring) {
-                            ImGui::SameLine(0.f, 8.f);
-                            ImGui::TextColored(ImVec4(0.62f, 0.78f, 1.f, 1.f), "clap now");
-                        }
-
-                        if (s_m_has && !measuring) {
-                            // A/B: flip the live offset between the measured value
-                            // and 0 so you can play a take both ways and judge it.
-                            bool on_meas = fabsf(clip.rec_av_offset_ms - s_m_off) < 0.5f;
-                            ImGui::Dummy({0.f, 2.f});
-                            if (ImGui::RadioButton("Measured", on_meas))
-                                clip.rec_av_offset_ms =
-                                    s_m_off < -200.f ? -200.f : (s_m_off > 200.f ? 200.f : s_m_off);
-                            ImGui::SameLine(0.f, 10.f);
-                            if (ImGui::RadioButton("Off", fabsf(clip.rec_av_offset_ms) < 0.5f))
-                                clip.rec_av_offset_ms = 0.f;
-                            ImGui::SameLine(0.f, 10.f);
-                            ImGui::TextDisabled("(%+.0f ms)", s_m_off);
-
-                            if (s_m_conf < 0.5f) {
-                                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 184, 74, 255));
-                                ImGui::TextWrapped("Weak match \xe2\x80\x94 the room may have been too "
-                                                   "quiet. Try again with a clear clap.");
-                                ImGui::PopStyleColor();
-                            }
-                        }
-                        if (!s_m_err.empty() && !measuring) {
-                            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(232, 120, 100, 255));
-                            ImGui::TextWrapped("%s", s_m_err.c_str());
-                            ImGui::PopStyleColor();
-                        }
-                    }
-
-                    // Clean input monitoring — same as the Audio Record brick:
-                    // hear yourself + a live mic meter while you frame the shot.
-                    ImGui::Dummy({0.f, 6.f});
-                    bool amon = audio_monitor_get();
-                    if (ImGui::Checkbox("Hear yourself", &amon)) {
-                        if (amon) { if (audio_capture_start()) audio_monitor_set(true); }
-                        else {
-                            audio_monitor_set(false);
-                            if (!recorder_active()) audio_capture_stop();
-                        }
-                    }
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::BeginTooltip();
-                        ImGui::TextUnformatted("Hear your mic in your headphones and watch the\n"
-                                               "level while you set up \xe2\x80\x94 doesn't affect the\n"
-                                               "recorded take.");
-                        ImGui::EndTooltip();
-                    }
-
-                    // Noise gate — same controls as Audio Record.
-                    ImGui::SameLine(0.f, 12.f);
-                    bool gate = audio_gate_get();
-                    if (ImGui::Checkbox("Reduce mic noise", &gate)) audio_gate_set(gate);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::BeginTooltip();
-                        ImGui::TextUnformatted("Mutes the mic between phrases so hiss and room\n"
-                                               "noise don't pile up.");
-                        ImGui::EndTooltip();
-                    }
-                    if (gate) {
-                        ImGui::Dummy({0.f, 2.f});
-                        ImGui::Indent(22.f);
-                        bool bake = audio_gate_bake_get();
-                        if (ImGui::Checkbox("Apply to recordings", &bake)) audio_gate_bake_set(bake);
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::BeginTooltip();
-                            ImGui::TextUnformatted("Off: the take keeps the raw mic and only what you\n"
-                                                   "hear is cleaned. On: the noise cleanup is baked\n"
-                                                   "into the recorded take itself.");
-                            ImGui::EndTooltip();
-                        }
-                        ImGui::Unindent(22.f);
-                    }
-
-                    // Hear effects — sing/talk through the brick's coupled audio FX.
-                    {
-                        auto segs = collect_audio_fx_segments(state, state.selected_track, clip);
-                        bool has_fx = !segs.empty();
-                        if (!has_fx) ImGui::BeginDisabled();
-                        bool hfx = audio_monitor_fx_get();
-                        if (ImGui::Checkbox("Hear effects", &hfx)) audio_monitor_fx_set(hfx);
-                        if (!has_fx) ImGui::EndDisabled();
-                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                            ImGui::BeginTooltip();
-                            ImGui::TextUnformatted(has_fx
-                                ? "Monitor through this brick's audio effects live.\n"
-                                  "Recordings stay dry \xe2\x80\x94 playback applies them."
-                                : "Drop an audio effect on this brick first \xe2\x80\x94\n"
-                                  "autotune, reverb, delay\xe2\x80\xa6");
-                            ImGui::EndTooltip();
-                        }
-                    }
-
-                    if (audio_capture_active()) {
-                        ImGui::Dummy({0.f, 4.f});
-                        static float s_cam_mic_lvl = 0.f;
-                        s_cam_mic_lvl = fmaxf(audio_input_peak(), s_cam_mic_lvl * 0.85f);
-                        float lvl = fminf(1.f, s_cam_mic_lvl);
-                        ImDrawList* pdl = ImGui::GetWindowDrawList();
-                        ImVec2 mp = ImGui::GetCursorScreenPos();
-                        pdl->AddRectFilled(mp, {mp.x + bar_w, mp.y + 6.f}, IM_COL32(35,35,50,255), 3.f);
-                        ImU32 lc = lvl > 0.9f ? IM_COL32(230,60,60,255)
-                                 : lvl > 0.7f ? IM_COL32(230,180,60,255)
-                                              : IM_COL32(70,200,110,255);
-                        pdl->AddRectFilled(mp, {mp.x + bar_w*lvl, mp.y + 6.f}, lc, 3.f);
-                        ImGui::Dummy({0.f, 10.f});
+                        mic.group_id = clip.group_id;
+                        Track tm;
+                        char tn[32];
+                        snprintf(tn, sizeof(tn), "Cam Mic %d", (int)state.tracks.size() + 1);
+                        tm.name = tn;
+                        tm.clips.push_back(std::move(mic));
+                        int at = state.selected_track + 1;
+                        state.tracks.insert(state.tracks.begin() + at, std::move(tm));
+                        history_push(state, "Add paired MIC brick");
                     }
                 }
             }
@@ -2754,6 +2518,7 @@ void panel_clip(AppState& state, float w) {
             ImGui::SliderFloat("##vrec_rot", &clip.rotation, -180.f, 180.f, "%.0f\xc2\xb0");
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Rotate camera");
+            ui_slider_home(state, &clip.rotation, 0.f, "Rotation");
             ImGui::SameLine(0.f, 6.f);
             if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
                 clip.rotation = fmodf(clip.rotation + 90.f + 180.f, 360.f) - 180.f;
@@ -2837,83 +2602,8 @@ void panel_clip(AppState& state, float w) {
 
         // ── Filters tab: face-warp picker with live previews ──────────────────
         else if (s_rec_tab == 1) {
-        ui_label("Face filters");
-        ImGui::Dummy({0.f, 6.f});
-        if (!face_track_available()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-            ImGui::TextWrapped("Face models missing (models/face) \xe2\x80\x94 filters still "
-                               "record, but the previews can't render the warp.");
-            ImGui::PopStyleColor();
-            ImGui::Dummy({0.f, 6.f});
-        }
-        // Preview grid — each card shows the filter applied to a base face.
-        {
-            int pw = 0, ph = 0; face_filter_preview_dims(&pw, &ph);
-            float aspect = (ph > 0) ? (float)pw / (float)ph : 0.75f;
-            const int   cols = 3;
-            const float gap  = 8.f;
-            float cardw = (bar_w - gap * (cols - 1)) / (float)cols;
-            float imgh  = cardw / aspect;
-            float cardh = imgh + 20.f;
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            for (int fi = 0; fi < face_filter_count(); ++fi) {
-                if (fi % cols) ImGui::SameLine(0.f, gap);
-                ImGui::PushID(30000 + fi);
-                ImGui::InvisibleButton("##ff", {cardw, cardh});
-                bool hov = ImGui::IsItemHovered();
-                bool on  = (clip.face_filter == fi);
-                if (ImGui::IsItemClicked()) {
-                    clip.face_filter = fi;
-                    history_push(state, std::string("Face filter: ") + face_filter_name(fi));
-                    if (fi != 0 && !clip.text.empty()) {
-                        int rq = ((int)lroundf(clip.rotation / 90.f) % 4 + 4) % 4;
-                        face_cache_request(clip.text, rq);
-                    }
-                }
-                ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-                uintptr_t tex = face_filter_preview_texture(fi, 1.f);
-                if (tex)
-                    dl->AddImageRounded((ImTextureID)tex, a, {b.x, a.y + imgh},
-                                        {0, 0}, {1, 1}, IM_COL32_WHITE, 7.f);
-                else
-                    dl->AddRectFilled(a, {b.x, a.y + imgh}, IM_COL32(30, 30, 40, 255), 7.f);
-                dl->AddText({a.x + 4.f, a.y + imgh + 3.f},
-                            on ? IM_COL32(245, 180, 120, 255) : to_u32(Col::muted),
-                            face_filter_name(fi));
-                dl->AddRect(a, b, on ? IM_COL32(235, 120, 60, 255)
-                                     : (hov ? IM_COL32(120, 120, 150, 220)
-                                            : IM_COL32(55, 55, 72, 200)),
-                            7.f, 0, on ? 2.f : 1.f);
-                ImGui::PopID();
-            }
-        }
-        if (clip.face_filter != 0) {
-            ImGui::Dummy({0.f, 8.f});
-            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-            ImGui::TextUnformatted("Strength");
-            ImGui::PopStyleColor();
-            ImGui::PushStyleColor(ImGuiCol_SliderGrab, to_u32(Col::fg));
-            ImGui::PushStyleColor(ImGuiCol_FrameBg,    Col::bg_soft);
-            ImGui::SetNextItemWidth(bar_w);
-            ImGui::SliderFloat("##face_amt", &clip.face_filter_amt, 0.f, 1.5f, "%.2f");
-            ImGui::PopStyleColor(2);
-            if (ImGui::IsItemDeactivatedAfterEdit())
-                history_push(state, "Face filter strength");
-            if (!clip.text.empty()) {
-                float fp = 0.f;
-                FaceCacheStatus fst = face_cache_status(clip.text, &fp);
-                if (fst == FaceCacheStatus::Building) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-                    ImGui::Text("Tracking face in take\xe2\x80\xa6 %d%%", (int)(fp * 100.f));
-                    ImGui::PopStyleColor();
-                } else if (fst == FaceCacheStatus::Failed) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-                    ImGui::TextWrapped("No face found in this take.");
-                    ImGui::PopStyleColor();
-                }
-            }
-        }
-        }   // ── end Filters tab ──
+            face_filters_ui(state, clip, bar_w);
+                }   // ── end Filters tab ──
 
         // ── Takes tab ─────────────────────────────────────────────────────────
         else if (s_rec_tab == 2) {
@@ -2978,6 +2668,10 @@ void panel_clip(AppState& state, float w) {
             history_push(state, "Place take on track");
             return;
         }
+
+        // Extract lyrics / subtitles from the selected camera take (camera audio
+        // may carry backing music, so lyrics isolate vocals first).
+        ai_extract_from_take(state, clip, bar_w, /*dry_vocal=*/false);
         }   // ── end Takes tab ──
     }
 
@@ -3019,6 +2713,7 @@ void panel_clip(AppState& state, float w) {
         ImGui::SliderFloat("##bus_gain", &clip.volume, 0.f, 2.f, "%.2f");
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Bus gain");
+        ui_slider_home(state, &clip.volume, 1.f, "Bus gain");
 
         // ── Audio FX chain (clip.fx_chain) ────────────────────────────────────
         ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -3106,6 +2801,7 @@ void panel_clip(AppState& state, float w) {
                 {}
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Amount");
+            ui_slider_home(state, &clip.body_fx_amount, 1.f, "Body FX amount");
 
             const BodyFXInfo* info = body_fx_find_info(clip.body_fx_type);
             if (info && info->n_params > 0) {
@@ -3122,6 +2818,7 @@ void panel_clip(AppState& state, float w) {
                     ImGui::SliderFloat(id, &clip.body_fx_params[pi], pd.min_val, pd.max_val, "%.3f");
                     ImGui::PopStyleColor(2);
                     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, pd.label);
+                    ui_slider_home(state, &clip.body_fx_params[pi], pd.default_val, pd.label);
                     ImGui::Dummy({0.f, 2.f});
                 }
             }
@@ -3215,6 +2912,8 @@ void panel_clip(AppState& state, float w) {
                 ImGui::SetNextItemWidth(bar_w);
                 if (ImGui::SliderFloat("##bfx_bgrsoft", &vc.bg_remove_softness, 0.f, 1.f, "%.2f"))
                     history_push(state, "BG Softness");
+                ui_slider_home(state, &vc.bg_remove_softness,
+                               struct_field_default(vc, &vc.bg_remove_softness), "BG Softness");
                 ImGui::PopStyleColor(2);
                 ImGui::Dummy({0.f, 6.f});
                 if (ui_btn("Re-run", false, true))

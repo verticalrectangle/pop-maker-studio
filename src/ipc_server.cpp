@@ -1,4 +1,7 @@
 #include "ipc_server.h"
+#ifdef __APPLE__
+#include "metal_render.h"   // metal_render_fx_debug for the fx_debug command
+#endif
 #include "audio.h"
 #include "recorder.h"
 #include "video_recorder.h"
@@ -9,13 +12,7 @@
 #include "bg_remove.h"
 #include "history.h"
 #include "runtime_fx.h"
-#include "ui/canvas.h"
-#include "ui/timeline.h"
-#include "ui/pipeline.h"
-#include "ui/screens.h"   // recent_projects_push
-#include "ui/panel_animation.h"
-#include "ui/panel_media.h"
-#include "ui/studio_shared.h"
+#include "engine_seams.h"
 #include "project.h"
 #include "beat_detect.h"
 #include "scene_detect.h"
@@ -33,6 +30,7 @@ static const char* k_gen_fx_names[] = {
 };
 
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -101,6 +99,37 @@ static bool        g_in_batch    = false;
 static bool        g_auto_batched = false;   // true when batch was opened implicitly
 static std::string g_batch_label;
 static AppState*   g_batch_state = nullptr;
+// Pre-batch snapshot captured at begin_batch so abort_batch can roll the
+// state back to exactly where the batch started (same fields history.cpp's
+// capture/restore covers) without pushing a history entry.
+static TimelineSnapshot g_batch_snapshot;
+static bool             g_batch_has_snapshot = false;
+
+static void batch_snapshot_capture(const AppState& state) {
+    g_batch_snapshot                = TimelineSnapshot{};
+    g_batch_snapshot.tracks         = state.tracks;
+    g_batch_snapshot.selected_track = state.selected_track;
+    g_batch_snapshot.selected_clip  = state.selected_clip;
+    g_batch_snapshot.subtitle_mode  = state.subtitle_mode;
+    g_batch_snapshot.subtitle_n     = state.subtitle_n;
+    g_batch_snapshot.style          = state.style;
+    g_batch_snapshot.font_weight    = state.font_weight;
+    g_batch_snapshot.format         = state.format;
+    g_batch_snapshot.lyrics_edits   = state.lyrics_edits;
+    g_batch_has_snapshot            = true;
+}
+
+static void batch_snapshot_restore(AppState& state) {
+    state.tracks         = g_batch_snapshot.tracks;
+    state.selected_track = g_batch_snapshot.selected_track;
+    state.selected_clip  = g_batch_snapshot.selected_clip;
+    state.subtitle_mode  = g_batch_snapshot.subtitle_mode;
+    state.subtitle_n     = g_batch_snapshot.subtitle_n;
+    state.style          = g_batch_snapshot.style;
+    state.font_weight    = g_batch_snapshot.font_weight;
+    state.format         = g_batch_snapshot.format;
+    state.lyrics_edits   = g_batch_snapshot.lyrics_edits;
+}
 
 // ── Async progress streaming ──────────────────────────────────────────────────
 // Long-running ops mark the client fd "busy", stream {"type":"progress"} lines,
@@ -329,6 +358,9 @@ static FXType parse_fx_type(const std::string& s) {
     if (s == "vhs")        return FXType::VHS;
     if (s == "datamosh")   return FXType::Datamosh;
     if (s == "chroma_key") return FXType::ChromaKey;
+    if (s == "chroma_melt") return FXType::ChromaMelt;
+    if (s == "chroma_echo") return FXType::ChromaEcho;
+    if (s == "chroma_frame") return FXType::ChromaFrame;
     if (s == "ken_burns")  return FXType::KenBurns;
     if (s == "audio_autotune") return FXType::AudioAutotune;
     if (s == "audio_pitch")    return FXType::AudioPitch;
@@ -384,6 +416,26 @@ static bool apply_effect_params(Clip& cl, const json& params,
         else if (k == "chroma_key_b")            { cl.fx_chroma_key_b         = fv; }
         else if (k == "chroma_key_threshold")    { cl.fx_chroma_key_threshold = fv; }
         else if (k == "chroma_key_softness")     { cl.fx_chroma_key_softness  = fv; }
+        // ChromaMelt
+        else if (k == "chroma_melt_r")           { cl.fx_chroma_melt_r         = fv; }
+        else if (k == "chroma_melt_g")           { cl.fx_chroma_melt_g         = fv; }
+        else if (k == "chroma_melt_b")           { cl.fx_chroma_melt_b         = fv; }
+        else if (k == "chroma_melt_threshold")   { cl.fx_chroma_melt_threshold = fv; }
+        else if (k == "chroma_melt_persist")     { cl.fx_chroma_melt_persist   = fv; }
+        // ChromaEcho
+        else if (k == "chroma_echo_r")           { cl.fx_chroma_echo_r         = fv; }
+        else if (k == "chroma_echo_g")           { cl.fx_chroma_echo_g         = fv; }
+        else if (k == "chroma_echo_b")           { cl.fx_chroma_echo_b         = fv; }
+        else if (k == "chroma_echo_threshold")   { cl.fx_chroma_echo_threshold = fv; }
+        else if (k == "chroma_echo_persist")     { cl.fx_chroma_echo_persist   = fv; }
+        // ChromaFrame
+        else if (k == "chroma_frame_r")          { cl.fx_chroma_frame_r         = fv; }
+        else if (k == "chroma_frame_g")          { cl.fx_chroma_frame_g         = fv; }
+        else if (k == "chroma_frame_b")          { cl.fx_chroma_frame_b         = fv; }
+        else if (k == "chroma_frame_threshold")  { cl.fx_chroma_frame_threshold = fv; }
+        else if (k == "chroma_frame_taps")       { cl.fx_chroma_frame_taps      = fv; }
+        else if (k == "chroma_frame_spacing")    { cl.fx_chroma_frame_spacing   = fv; }
+        else if (k == "chroma_frame_falloff")    { cl.fx_chroma_frame_falloff   = fv; }
         // All generated shader FX params — dispatched by fx_id + param name
         else if (!fx_clip_set_param(cl, fx_id, k, fv)) {
             err = "unknown param '" + k + "' for fx_type '" + fx_id + "'";
@@ -424,6 +476,160 @@ static InterpType interp_from_str(const std::string& s) {
     if (s == "ease_out") return InterpType::EaseOut;
     if (s == "hold")     return InterpType::Hold;
     return InterpType::EaseBoth;
+}
+
+// Inverse of parse_fx_type: FXType → the snake_case id string the handlers
+// (add_effect_brick, set_clip_fx, add_multifx_brick) accept.
+static std::string fx_type_str(FXType t) {
+    switch (t) {
+        case FXType::Grade:        return "grade";
+        case FXType::Blur:         return "blur";
+        case FXType::Vignette:     return "vignette";
+        case FXType::Glitch:       return "glitch";
+        case FXType::ZoomPunch:    return "zoom_punch";
+        case FXType::LUT:          return "lut";
+        case FXType::LightLeak:    return "light_leak";
+        case FXType::VHS:          return "vhs";
+        case FXType::Datamosh:     return "datamosh";
+        case FXType::ChromaKey:    return "chroma_key";
+        case FXType::ChromaMelt:   return "chroma_melt";
+        case FXType::ChromaEcho:   return "chroma_echo";
+        case FXType::ChromaFrame:  return "chroma_frame";
+        case FXType::KenBurns:     return "ken_burns";
+        case FXType::AudioAutotune:     return "audio_autotune";
+        case FXType::AudioPitch:        return "audio_pitch";
+        case FXType::AudioFormant:      return "audio_formant";
+        case FXType::AudioDelay:        return "audio_delay";
+        case FXType::AudioReverb:       return "audio_reverb";
+        case FXType::AudioVoiceConvert: return "audio_voice_convert";
+        default: break;
+    }
+    for (int i = 0; i < k_gen_fx_count; ++i)
+        if (k_gen_fx_types[i] == t) return k_gen_fx_names[i];
+    return "unknown";
+}
+
+static const char* format_str(OutputFormat f) {
+    switch (f) {
+        case OutputFormat::Horizontal: return "horizontal";
+        case OutputFormat::Square:     return "square";
+        default:                       return "vertical";
+    }
+}
+
+// Inverse of apply_effect_params: emit the current param values of an Effect
+// clip as {name: value}, using exactly the names apply_effect_params /
+// set_clip_fx accept — so a client can round-trip fx bricks losslessly.
+static json effect_params_to_json(const Clip& c, const std::string& fx_id) {
+    json p = json::object();
+    switch (c.fx_type) {
+        case FXType::Grade:
+            p["brightness"] = c.fx_brightness;
+            p["contrast"]   = c.fx_contrast;
+            p["saturation"] = c.fx_saturation;
+            p["hue"]        = c.fx_hue;
+            break;
+        case FXType::Blur:     p["blur"]     = c.fx_blur;     break;
+        case FXType::Vignette: p["vignette"] = c.fx_vignette; break;
+        case FXType::Glitch:
+            p["glitch_chroma"]           = c.fx_glitch_chroma;
+            p["glitch_jitter"]           = c.fx_glitch_jitter;
+            p["glitch_corruption"]       = c.fx_glitch_corruption;
+            p["glitch_corruption_bleed"] = c.fx_glitch_corruption_bleed;
+            break;
+        case FXType::ZoomPunch:
+            p["zoom_strength"] = c.fx_zoom_strength;
+            p["zoom_decay"]    = c.fx_zoom_decay;
+            p["zoom_shake"]    = c.fx_zoom_shake;
+            break;
+        case FXType::LUT: break;   // LUT file path rides in the clip, not params
+        case FXType::LightLeak:
+            p["leak_intensity"] = c.fx_leak_intensity;
+            p["leak_speed"]     = c.fx_leak_speed;
+            break;
+        case FXType::VHS:
+            p["vhs_noise"]    = c.fx_vhs_noise;
+            p["vhs_bleed"]    = c.fx_vhs_bleed;
+            p["vhs_tracking"] = c.fx_vhs_tracking;
+            break;
+        case FXType::Datamosh:
+            p["datamosh_intensity"] = c.fx_datamosh_intensity;
+            p["datamosh_spread"]    = c.fx_datamosh_spread;
+            break;
+        case FXType::ChromaKey:
+            p["chroma_key_r"]         = c.fx_chroma_key_r;
+            p["chroma_key_g"]         = c.fx_chroma_key_g;
+            p["chroma_key_b"]         = c.fx_chroma_key_b;
+            p["chroma_key_threshold"] = c.fx_chroma_key_threshold;
+            p["chroma_key_softness"]  = c.fx_chroma_key_softness;
+            break;
+        case FXType::ChromaMelt:
+            p["chroma_melt_r"]         = c.fx_chroma_melt_r;
+            p["chroma_melt_g"]         = c.fx_chroma_melt_g;
+            p["chroma_melt_b"]         = c.fx_chroma_melt_b;
+            p["chroma_melt_threshold"] = c.fx_chroma_melt_threshold;
+            p["chroma_melt_persist"]   = c.fx_chroma_melt_persist;
+            break;
+        case FXType::ChromaEcho:
+            p["chroma_echo_r"]         = c.fx_chroma_echo_r;
+            p["chroma_echo_g"]         = c.fx_chroma_echo_g;
+            p["chroma_echo_b"]         = c.fx_chroma_echo_b;
+            p["chroma_echo_threshold"] = c.fx_chroma_echo_threshold;
+            p["chroma_echo_persist"]   = c.fx_chroma_echo_persist;
+            break;
+        case FXType::ChromaFrame:
+            p["chroma_frame_r"]         = c.fx_chroma_frame_r;
+            p["chroma_frame_g"]         = c.fx_chroma_frame_g;
+            p["chroma_frame_b"]         = c.fx_chroma_frame_b;
+            p["chroma_frame_threshold"] = c.fx_chroma_frame_threshold;
+            p["chroma_frame_taps"]      = c.fx_chroma_frame_taps;
+            p["chroma_frame_spacing"]   = c.fx_chroma_frame_spacing;
+            p["chroma_frame_falloff"]   = c.fx_chroma_frame_falloff;
+            break;
+        // Audio FX bricks: the creation-param names add_effect_brick accepts.
+        case FXType::AudioAutotune:
+            p["key"]      = c.audio_fx.autotune_key;
+            p["scale"]    = c.audio_fx.autotune_scale;
+            p["speed_ms"] = c.audio_fx.autotune_speed;
+            p["dry_wet"]  = c.audio_fx.mix;
+            break;
+        case FXType::AudioPitch:
+            p["semitones"] = c.audio_fx.pitch_semitones;
+            p["dry_wet"]   = c.audio_fx.mix;
+            break;
+        case FXType::AudioFormant:
+            p["shift"]   = c.audio_fx.formant_shift;
+            p["dry_wet"] = c.audio_fx.mix;
+            break;
+        case FXType::AudioDelay:
+            p["time"]     = c.audio_fx.delay_time;
+            p["feedback"] = c.audio_fx.delay_feedback;
+            p["mix"]      = c.audio_fx.delay_mix;
+            p["dry_wet"]  = c.audio_fx.mix;
+            break;
+        case FXType::AudioReverb:
+            p["room"]    = c.audio_fx.reverb_room;
+            p["damp"]    = c.audio_fx.reverb_damp;
+            p["mix"]     = c.audio_fx.reverb_mix;
+            p["dry_wet"] = c.audio_fx.mix;
+            break;
+        default: {
+            // Generated shader FX: registry fields are named fx_<id>_<param>.
+            // Verify each suffix against fx_clip_set_param on a scratch clip so
+            // an id that happens to prefix another id's fields can't leak params.
+            static Clip probe;
+            const std::string prefix = "fx_" + fx_id + "_";
+            for (int i = 0; i < kClipKfFieldCount; ++i) {
+                const char* n = kClipKfFields[i].name;
+                if (strncmp(n, prefix.c_str(), prefix.size()) != 0) continue;
+                std::string pname = n + prefix.size();
+                if (!fx_clip_set_param(probe, fx_id, pname, 0.f)) continue;
+                p[pname] = c.*(kClipKfFields[i].f);
+            }
+            break;
+        }
+    }
+    return p;
 }
 
 static json clip_to_json_slim(int idx, const Clip& c) {
@@ -469,6 +675,20 @@ static json clip_to_json(int idx, const Clip& c) {
     j["speed"]       = c.speed;
     j["opacity"]     = c.opacity;
     j["muted"]       = c.muted;
+    // Canvas transform + crop + flips (base values; keyframes project separately
+    // under "keyframes"). The iOS canvas surface round-trips these via
+    // set_clip_prop(s), so the verbose projection must carry them.
+    j["pos_x"]       = c.pos_x;
+    j["pos_y"]       = c.pos_y;
+    j["scale_x"]     = c.scale_x;
+    j["scale_y"]     = c.scale_y;
+    j["rotation"]    = c.rotation;
+    j["crop_l"]      = c.crop_l;
+    j["crop_t"]      = c.crop_t;
+    j["crop_r"]      = c.crop_r;
+    j["crop_b"]      = c.crop_b;
+    j["flip_h"]      = c.flip_h;
+    j["flip_v"]      = c.flip_v;
     j["clip_style"]  = anim_style_str(c.clip_style);
     j["font_size"]   = c.font_size;
     j["karaoke"]     = c.karaoke;
@@ -544,6 +764,45 @@ static json clip_to_json(int idx, const Clip& c) {
         j["selected_take"] = c.rec_take_sel;
         if (c.clip_type == ClipType::VideoRecord) j["photo_mode"] = c.rec_photo;
     }
+    // FX projection — WHICH effect an Effect brick holds + its params, so a
+    // client (iOS projection) can hydrate/rebuild the brick losslessly.
+    if (c.clip_type == ClipType::Effect) {
+        std::string fid = fx_type_str(c.fx_type);
+        j["fx_type"]   = fid;
+        j["fx_params"] = effect_params_to_json(c, fid);
+        if (fx_type_is_audio_fx(c.fx_type)) {
+            json a;
+            a["autotune_on"]     = c.audio_fx.autotune_on;
+            a["pitch_on"]        = c.audio_fx.pitch_on;
+            a["pitch_semitones"] = c.audio_fx.pitch_semitones;
+            a["formant_on"]      = c.audio_fx.formant_on;
+            a["delay_on"]        = c.audio_fx.delay_on;
+            a["reverb_on"]       = c.audio_fx.reverb_on;
+            j["audio_fx"]        = a;
+        }
+    }
+    if (c.clip_type == ClipType::MultiFX || c.clip_type == ClipType::AudioMultiFX) {
+        json chain = json::array();
+        for (const Clip& se : c.fx_chain) {
+            json e;
+            e["rel_start"] = se.rel_start;
+            e["rel_end"]   = se.rel_end;
+            if (se.clip_type == ClipType::BodyFX) {
+                const BodyFXInfo* info = body_fx_find_info(se.body_fx_type);
+                e["fx_type"]        = "body_fx";
+                e["body_fx_type"]   = info ? info->name : "None";
+                e["body_fx_amount"] = se.body_fx_amount;
+                e["body_fx_params"] = {se.body_fx_params[0], se.body_fx_params[1],
+                                       se.body_fx_params[2], se.body_fx_params[3]};
+            } else {
+                std::string fid = fx_type_str(se.fx_type);
+                e["fx_type"]   = fid;
+                e["fx_params"] = effect_params_to_json(se, fid);
+            }
+            chain.push_back(e);
+        }
+        j["fx_chain"] = chain;
+    }
     if (c.fx_coupled) j["coupled"] = true;
     return j;
 }
@@ -558,6 +817,7 @@ static json state_to_json_slim(const AppState& state) {
     j["transcript_ready"] = !state.words_json_path.empty() &&
                             (bool)std::ifstream(state.words_json_path);
     j["playhead"]         = state.playhead;
+    j["format"]           = format_str(state.format);
     json tracks_arr = json::array();
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         const Track& t = state.tracks[ti];
@@ -600,6 +860,7 @@ static json state_to_json(const AppState& state) {
     j["transcript_ready"] = !state.words_json_path.empty() &&
                             (bool)std::ifstream(state.words_json_path);
     j["playhead"]        = state.playhead;
+    j["format"]          = format_str(state.format);
 
     // Beats (truncated to 3 decimal places)
     json beats_arr = json::array();
@@ -646,6 +907,39 @@ static json state_to_json(const AppState& state) {
     j["bin"] = bin_arr;
 
     return j;
+}
+
+// Read-only project summary: parse the .pms at `path` into a TEMPORARY
+// AppState (project_load only parses — no audio/video/render teardown, unlike
+// open_project_path) and report card-level metadata. Shared by
+// get_project_summary and list_recent_projects.
+static json project_summary_json(const std::string& path, std::string& err) {
+    struct stat st{};
+    if (::stat(path.c_str(), &st) != 0) { err = "cannot stat " + path; return {}; }
+    AppState tmp;
+    if (!project_load(tmp, path)) { err = "project_load failed for " + path; return {}; }
+    float dur = tmp.duration;
+    int clip_count = 0, fx_count = 0;
+    for (const auto& t : tmp.tracks) {
+        for (const auto& c : t.clips) {
+            if (c.end > dur) dur = c.end;
+            if (c.clip_type == ClipType::Effect  || c.clip_type == ClipType::MultiFX ||
+                c.clip_type == ClipType::AudioMultiFX || c.clip_type == ClipType::BodyFX)
+                ++fx_count;
+            else
+                ++clip_count;
+        }
+    }
+    json r;
+    r["path"]          = path;
+    r["name"]          = std::filesystem::path(path).stem().string();
+    r["duration"]      = dur;
+    r["fps"]           = tmp.fps;
+    r["format"]        = format_str(tmp.format);
+    r["clip_count"]    = clip_count;
+    r["fx_count"]      = fx_count;
+    r["modified_unix"] = (int64_t)st.st_mtime;
+    return r;
 }
 
 // ── ClipType parsing ──────────────────────────────────────────────────────────
@@ -717,6 +1011,52 @@ static bool fx_overlap_on_track(const AppState& state, int ti,
                      "add_multifx_brick chain, or use another track or time range.",
                      start, end, ci, oc.start, oc.end);
             err = buf;
+            return true;
+        }
+    }
+    return false;
+}
+
+// One row, one stream: content (video/audio/background/record) and text
+// (text/subtitle/lyrics) clips each occupy the timeline exclusively — no two
+// of them may overlap on the same track. FX/adjustment bricks are exempt
+// (they ride over content and have fx_overlap_on_track above). The 1 ms slack
+// keeps frame-adjacent clips (touching at a boundary) legal under snap
+// rounding. skip_ci: the clip being moved/trimmed, -1 when adding. This is
+// the ONE overlap rule for every IPC mutation (add/add_sequence/move/trim) —
+// it used to live only in add_clip, so the other paths let agents stack
+// clips the UI would have rejected.
+static bool clip_type_is_text_kind(ClipType t) {
+    return t == ClipType::Text || t == ClipType::Subtitle || t == ClipType::Lyrics;
+}
+static bool clip_type_occupies_row(ClipType t) {
+    return clip_type_is_text_kind(t) ||
+           t == ClipType::Video  || t == ClipType::Audio ||
+           t == ClipType::Background ||
+           t == ClipType::VideoRecord || t == ClipType::Record;
+}
+static bool row_overlap_on_track(const AppState& state, int ti, ClipType ct,
+                                 float start, float end, int skip_ci,
+                                 std::string& err) {
+    if (!clip_type_occupies_row(ct)) return false;
+    for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
+        if (ci == skip_ci) continue;
+        const Clip& oc = state.tracks[ti].clips[ci];
+        if (!clip_type_occupies_row(oc.clip_type)) continue;
+        if (start < oc.end - 1e-3f && end > oc.start + 1e-3f) {
+            if (clip_type_is_text_kind(ct) != clip_type_is_text_kind(oc.clip_type)) {
+                err = "text and content can't share a track — put the text "
+                      "on its own track (it still renders on top)";
+            } else {
+                char buf[224];
+                snprintf(buf, sizeof(buf),
+                         "clip overlap: [%.3fs \xe2\x80\x93 %.3fs] collides with clip %d "
+                         "[%.3fs \xe2\x80\x93 %.3fs] on this track. Clips on one track "
+                         "can't overlap — choose a free slot, trim/move the existing "
+                         "clip, or use another track.",
+                         start, end, ci, oc.start, oc.end);
+                err = buf;
+            }
             return true;
         }
     }
@@ -797,6 +1137,47 @@ void ipc_debug_input_tick() {
 // ── Command dispatch ──────────────────────────────────────────────────────────
 
 static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err,
+                     int client_fd, const std::string& req_id);
+
+// Close an implicitly opened batch: one mutation = one undo step. The socket
+// path does this in process_client; in-process callers (pms_command, the
+// agent harness) come through engine_command, which must close it too or the
+// first mutation leaves a stale open batch (undo never advances, and the next
+// explicit begin_batch errors out).
+static void close_auto_batch(AppState& state) {
+    if (!(g_auto_batched && g_in_batch)) return;
+    history_push(state, g_batch_label);
+    g_in_batch     = false;
+    g_auto_batched = false;
+    g_batch_label.clear();
+    g_batch_state  = nullptr;
+}
+
+std::string engine_command(AppState& state, const std::string& json_request) {
+    json reply;
+    try {
+        json req = json::parse(json_request);
+        std::string method = req.value("method", "");
+        json params = req.value("params", json::object());
+        std::string err;
+        json result;
+        try {
+            result = dispatch(state, method, params, err, /*client_fd=*/-1,
+                              req.value("id", std::string("engine")));
+        } catch (...) {
+            close_auto_batch(state);
+            throw;
+        }
+        close_auto_batch(state);
+        if (!err.empty()) reply = {{"id", req.value("id", "engine")}, {"error", err}};
+        else              reply = {{"id", req.value("id", "engine")}, {"result", result}};
+    } catch (const std::exception& e) {
+        reply = {{"id", "engine"}, {"error", std::string("JSON parse error: ") + e.what()}};
+    }
+    return reply.dump();
+}
+
+static json dispatch(AppState& state, const std::string& method, const json& params, std::string& err,
                      int client_fd = -1, const std::string& req_id = "") {
     // ── Log to agent activity panel ───────────────────────────────────────────
     {
@@ -828,6 +1209,28 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         // ASCII map of the track-layering system (Z-order, timing, overlaps) so a
         // non-vision agent can actually picture the editing surface.
         r["timeline"] = build_timeline_ascii(state);
+        return r;
+    }
+
+    if (method == "get_project_summary") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path is required"; return {}; }
+        return project_summary_json(path, err);
+    }
+
+    if (method == "list_recent_projects") {
+        json arr = json::array();
+        for (const auto& p : recent_projects_list()) {
+            std::string serr;
+            json s = project_summary_json(p, serr);
+            if (!serr.empty()) {   // unreadable entry: visible, not silently dropped
+                json bad; bad["path"] = p; bad["error"] = serr;
+                arr.push_back(std::move(bad));
+            } else {
+                arr.push_back(std::move(s));
+            }
+        }
+        json r; r["projects"] = arr;
         return r;
     }
 
@@ -1301,7 +1704,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             static const std::unordered_set<std::string> aud =
                 {"flac","wav","mp3","m4a","aac","ogg","opus","aiff","aif","wma","alac"};
             static const std::unordered_set<std::string> img =
-                {"png","jpg","jpeg","gif","bmp","webp","tif","tiff","heic","heif"};
+                {"png","jpg","jpeg","gif","bmp","webp","tif","tiff","heic","heif","svg"};
             if (vid.count(e)) return "video";
             if (aud.count(e)) return "audio";
             if (img.count(e)) return "image";
@@ -1530,6 +1933,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         std::string path = params.value("path", state.project_path);
         if (path.empty()) { err = "no project path — provide 'path' param or save once from UI"; return {}; }
         if (!project_save(state, path)) { err = "project_save failed"; return {}; }
+        mark_project_saved(state, path);
         state.project_path = path;   // exports default next to the .pms
         recent_projects_push(path);  // surface on the home/launcher page
         recovery_clear();            // saved → no stale crash-recovery slot
@@ -1721,12 +2125,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (ok) {
             r["score"] = obs.score;
             r["frame"] = {obs.w, obs.h};
-            r["nose"]  = {obs.pts[80][0], obs.pts[80][1]};
-            r["chin"]  = {obs.pts[0][0], obs.pts[0][1]};
-            r["eyeB"]  = {obs.pts[90][0], obs.pts[90][1]};
+            r["nose"]  = {obs.pts[1][0], obs.pts[1][1]};      // mesh nose tip
+            r["chin"]  = {obs.pts[152][0], obs.pts[152][1]};  // mesh chin
+            if (obs.has_blend) {
+                r["jaw_open"]  = obs.blend[FB_JAW_OPEN];
+                r["smile"]     = (obs.blend[FB_MOUTH_SMILE_L] +
+                                  obs.blend[FB_MOUTH_SMILE_R]) * 0.5f;
+                r["eye_blink"] = (obs.blend[FB_EYE_BLINK_L] +
+                                  obs.blend[FB_EYE_BLINK_R]) * 0.5f;
+            }
+            r["eyeA"]  = {obs.pts[468][0], obs.pts[468][1]};   // iris centers
+            r["eyeB"]  = {obs.pts[473][0], obs.pts[473][1]};
             if (params.value("full", false)) {
                 json pts = json::array();
-                for (int k = 0; k < 106; ++k)
+                for (int k = 0; k < FT_NPTS; ++k)
                     pts.push_back({obs.pts[k][0], obs.pts[k][1]});
                 r["pts"] = pts;
             }
@@ -1743,7 +2155,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             m["face_valid"] = mg.face_valid;
             if (mg.face_valid && params.value("full", false)) {
                 json pts = json::array();
-                for (int k = 0; k < 106; ++k)
+                for (int k = 0; k < FT_NPTS; ++k)
                     pts.push_back({mg.pts[k][0], mg.pts[k][1]});
                 m["pts"] = pts;
             }
@@ -1805,7 +2217,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["gate"]          = audio_gate_get();
         r["hear_fx"]       = audio_monitor_fx_get();
         r["chain_active"]  = audio_monitor_chain_active();
+        // External capture injection (audio_capture_push / pms_submit_mic_block):
+        // post-resample frames accepted into / rejected by the injected ring.
+        r["capture_injected_frames"] = audio_capture_injected_frames();
+        r["capture_dropped_frames"]  = audio_capture_dropped_frames();
         return r;
+    }
+
+    if (method == "set_virtual_mic") {
+        bool on = params.value("on", true);
+        if (!audio_vmic_set(on)) {
+            err = "virtual mic unavailable — needs PipeWire (build flag HAVE_PIPEWIRE + a running PipeWire session)";
+            return {};
+        }
+        return {{"on", audio_vmic_get()}};
     }
 
     if (method == "set_camera_monitor") {
@@ -1863,6 +2288,93 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return json::object();
     }
 
+    if (method == "set_live_fx") {
+        // Store the ordered render-time FX stack; the Metal backend parses it each
+        // frame via pms_render (platform-agnostic here — no Metal call).
+        bool has = params.contains("fx") && params["fx"].is_array();
+        state.live_fx_json = has ? params["fx"].dump() : std::string();
+        return json{{"ok", true}, {"count", has ? params["fx"].size() : 0}};
+    }
+
+    if (method == "list_body_fx") {
+        // The BodyFXInfo table (body_fx.h) as a manifest: names/taglines/
+        // categories/param defs only — frag_body (GLSL) and accent (ImU32)
+        // are renderer/UI internals and are deliberately not exposed.
+        auto slug = [](const char* label) {
+            std::string s;
+            for (const char* p = label; *p; ++p) {
+                char c = *p;
+                if (c >= 'A' && c <= 'Z') s.push_back((char)(c - 'A' + 'a'));
+                else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                    s.push_back(c);
+                else if (!s.empty() && s.back() != '_') s.push_back('_');
+            }
+            while (!s.empty() && s.back() == '_') s.pop_back();
+            return s;
+        };
+        json effects = json::array();
+        const BodyFXInfo* infos = body_fx_info_list();
+        int n = body_fx_info_count();
+        for (int i = 0; i < n; ++i) {
+            const BodyFXInfo& fx = infos[i];
+            json ps = json::array();
+            for (int pi = 0; pi < fx.n_params && pi < 4; ++pi) {
+                const BodyFXParamDef& pd = fx.params[pi];
+                ps.push_back({{"name", slug(pd.label)}, {"label", pd.label},
+                              {"min", pd.min_val}, {"max", pd.max_val},
+                              {"default", pd.default_val}});
+            }
+            effects.push_back({{"name", fx.name}, {"tagline", fx.tagline},
+                               {"category", fx.category}, {"params", ps}});
+        }
+        json r; r["effects"] = effects;
+        return r;
+    }
+
+    if (method == "fx_debug") {          // FX-runner state (manifest/stack/pso) — iOS only
+#ifdef __APPLE__
+        return json::parse(metal_render_fx_debug());
+#else
+        return json::object();
+#endif
+    }
+
+    if (method == "clear_layer_frames") {   // record mode: un-shadow the camera path
+#ifdef __APPLE__
+        metal_render_clear_layers();
+#endif
+        return json{{"ok", true}};
+    }
+
+    if (method == "face_track_enable") {    // camera side-feed to the face worker
+        bool on = params.value("on", true);
+        face_feed_enable(on);
+        if (params.contains("max_faces"))
+            face_track_set_max_faces(params.value("max_faces", 2));
+        return json{{"ok", true}, {"on", on},
+                    {"models_present", face_track_available()}};
+    }
+
+    if (method == "face_debug") {           // tracker status for the record UI / tests
+        extern std::atomic<int> g_dbg_cycle_us, g_dbg_lmk_us, g_dbg_read_age_us;
+        FaceObs faces[4];
+        int n = face_track_latest_all(faces, 4);
+        json j;
+        j["models_present"] = face_track_available();
+        j["feed_enabled"]   = face_feed_enabled();
+        j["n_faces"]        = n;
+        j["valid"]          = n > 0;
+        j["score"]          = n > 0 ? faces[0].score : 0.f;
+        j["has_blend"]      = n > 0 && faces[0].has_blend;
+        j["frame_w"]        = n > 0 ? faces[0].w : 0;
+        j["frame_h"]        = n > 0 ? faces[0].h : 0;
+        // Latency budget, observable on device (µs → ms).
+        j["worker_cycle_ms"] = g_dbg_cycle_us.load() / 1000.0;
+        j["landmark_ms"]     = g_dbg_lmk_us.load() / 1000.0;
+        j["read_age_ms"]     = g_dbg_read_age_us.load() / 1000.0;
+        return j;
+    }
+
     if (method == "validate_glsl") {
         std::string glsl = params.value("glsl", "");
         std::vector<RuntimeFXParam> ps;
@@ -1890,6 +2402,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         g_in_batch    = true;
         g_batch_label = params.value("label", "MCP edit");
         g_batch_state = &state;
+        batch_snapshot_capture(state);   // abort_batch rolls back to here
         state.agent_active = true;
         state.agent_msg    = g_batch_label;
         return json::object();
@@ -1898,17 +2411,38 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "end_batch") {
         if (!g_in_batch) { err = "not in a batch"; return {}; }
         history_push(state, g_batch_label);
-        g_in_batch         = false;
-        g_auto_batched     = false;
+        g_in_batch           = false;
+        g_auto_batched       = false;
+        g_batch_has_snapshot = false;
         g_batch_label.clear();
-        g_batch_state      = nullptr;
-        state.agent_active = false;
+        g_batch_state        = nullptr;
+        state.agent_active   = false;
         state.agent_msg.clear();
         json r;
         r["duration"]         = state.duration;
         r["project_path"]     = state.project_path;
         r["transcript_ready"] = !state.words_json_path.empty() &&
                                 (bool)std::ifstream(state.words_json_path);
+        return r;
+    }
+
+    if (method == "abort_batch") {
+        // Compound-edit failure recovery: roll the state back to the snapshot
+        // captured at begin_batch and drop the batch WITHOUT pushing history —
+        // as if the batch never happened. Lenient when no batch is open (the
+        // failure being recovered from may have been begin_batch itself).
+        json r;
+        if (!g_in_batch) { r["aborted"] = false; return r; }
+        if (g_batch_has_snapshot && g_batch_state == &state)
+            batch_snapshot_restore(state);
+        g_in_batch           = false;
+        g_auto_batched       = false;
+        g_batch_has_snapshot = false;
+        g_batch_label.clear();
+        g_batch_state        = nullptr;
+        state.agent_active   = false;
+        state.agent_msg.clear();
+        r["aborted"] = true;
         return r;
     }
 
@@ -2142,6 +2676,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (clip_is_fx(cl) &&
             fx_overlap_on_track(state, ti, start, start + dur, ci, err))
             return {};
+        if (row_overlap_on_track(state, ti, cl.clip_type, start, start + dur, ci, err))
+            return {};
         cl.start = start;
         cl.end   = start + dur;
         return json::object();
@@ -2151,12 +2687,15 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
-        if (clip_is_fx(cl)) {
+        {
             float ns = params.contains("start")
                 ? snap_to_frame(params["start"].get<float>(), state.fps) : cl.start;
             float ne = params.contains("end")
                 ? snap_end_to_frame(params["end"].get<float>(), state.fps) : cl.end;
-            if (fx_overlap_on_track(state, ti, ns, ne, ci, err)) return {};
+            if (clip_is_fx(cl) && fx_overlap_on_track(state, ti, ns, ne, ci, err))
+                return {};
+            if (row_overlap_on_track(state, ti, cl.clip_type, ns, ne, ci, err))
+                return {};
         }
         float old_start = cl.start;
         if (params.contains("start")) {
@@ -2241,6 +2780,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        if (is_group_head(state.tracks[ti])) { err = "that track is a group folder row — it holds no clips; target a member track"; return {}; }
         std::string type_s = params.value("type", "text");
         float start = snap_to_frame(params.value("start", 0.f), state.fps);
         float end   = snap_end_to_frame(params.value("end", start + 2.f), state.fps);
@@ -2270,36 +2810,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             !is_image_clip && state.audio_path.empty())
             state.audio_path = state.vocals_path = text;
 
-        // One row, one stream: content (video/audio/background) and text
-        // (text/subtitle/lyrics) clips each occupy the timeline exclusively, so no
-        // two of them may overlap on the same track. Catches BOTH text-vs-content
-        // AND content-vs-content / text-vs-text overlap — the latter is what let
-        // the agent stack video clips so the lower-index one rendered straight over
-        // its neighbour (it "kept playing" through the next clip). FX/adjustment
-        // bricks (Effect, MultiFX, BodyFX, AudioMultiFX, Bus) are exempt: they ride
-        // over content by design and have their own non-overlap rule above.
-        // Frame-adjacent clips (touching at a boundary) are fine — hence the 1ms
-        // slack so snap rounding can't trip a false overlap.
-        {
-            auto is_txt = [](ClipType t){ return t==ClipType::Text ||
-                t==ClipType::Subtitle || t==ClipType::Lyrics; };
-            auto is_con = [](ClipType t){ return t==ClipType::Video ||
-                t==ClipType::Audio || t==ClipType::Background ||
-                t==ClipType::VideoRecord || t==ClipType::Record; };
-            auto occupies_row = [&](ClipType t){ return is_txt(t) || is_con(t); };
-            if (occupies_row(cl.clip_type))
-                for (const auto& oc : state.tracks[ti].clips)
-                    if (occupies_row(oc.clip_type) &&
-                        cl.start < oc.end - 1e-3f && cl.end > oc.start + 1e-3f) {
-                        err = (is_txt(cl.clip_type) != is_txt(oc.clip_type))
-                            ? "text and content can't share a track — put the text "
-                              "on its own track (it still renders on top)"
-                            : "clip overlap: that time range is already occupied on "
-                              "this track. Clips on one track can't overlap — choose a "
-                              "free slot, trim/move the existing clip, or use another track.";
-                        return {};
-                    }
-        }
+        if (row_overlap_on_track(state, ti, cl.clip_type, cl.start, cl.end, -1, err))
+            return {};
         state.tracks[ti].clips.push_back(cl);
         int new_ci = (int)state.tracks[ti].clips.size() - 1;
         // Glow + scroll to it so an agent-placed brick is visibly surfaced.
@@ -2402,6 +2914,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = params.value("track", -1);
         if (!check_track(state, ti, err)) return {};
         if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        if (is_group_head(state.tracks[ti])) { err = "that track is a group folder row — it holds no clips; target a member track"; return {}; }
         if (!params.contains("clips") || !params["clips"].is_array()) { err = "clips array required"; return {}; }
         json ids = json::array();
         for (auto& entry : params["clips"]) {
@@ -2414,6 +2927,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             cl.start = start; cl.end = end; cl.text = text;
             if (!apply_bg_preset(cl, text, err)) return {};
             if (clip_is_fx(cl) && fx_overlap_on_track(state, ti, start, end, -1, err))
+                return {};
+            // Same one-row-one-stream rule as add_clip. Checked against the
+            // track as it grows, so entries within one batch can't stack either
+            // (this path had no content check at all — the source of agent-
+            // dropped overlapping clips).
+            if (row_overlap_on_track(state, ti, cl.clip_type, cl.start, cl.end, -1, err))
                 return {};
             if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio)
                 cl.source_id = text;
@@ -2549,6 +3068,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         std::string prop = params.value("prop", "");
         if (!check_clip(state, ti, ci, err)) return {};
+        // "amount" on a video FX brick is its runtime-shader intensity slider —
+        // accept the natural name (the one set_clip_fx uses) and map it to the
+        // real keyframe field so you can ride the Amount knob over time.
+        if (prop == "amount" && !state.tracks[ti].clips[ci].runtime_fx_id.empty())
+            prop = "runtime_fx_amount";
         bool ok_prop = (prop == "opacity");          // opacity is special-cased in eval_prop
         for (int i = 0; !ok_prop && i < kClipKfFieldCount; ++i)
             if (prop == kClipKfFields[i].name) ok_prop = true;
@@ -2707,9 +3231,45 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    if (method == "move_track") {
+        // Reorder the layer stack: track index IS canvas z-order (0 = top lane
+        // = frontmost; the scene composites bottom-to-top). {from, to} are
+        // indices in the current order; the track lands AT index `to`.
+        int from = params.value("from", -1);
+        int to   = params.value("to",   -1);
+        if (!check_track(state, from, err)) return {};
+        if (to < 0) to = 0;
+        if (to >= (int)state.tracks.size()) to = (int)state.tracks.size() - 1;
+        if (from != to) {
+            Track moved = std::move(state.tracks[(size_t)from]);
+            state.tracks.erase(state.tracks.begin() + from);
+            state.tracks.insert(state.tracks.begin() + to, std::move(moved));
+            // Re-map indices that address tracks by position.
+            auto remap = [&](int ti) {
+                if (ti == from) return to;
+                if (from < to  && ti > from && ti <= to) return ti - 1;
+                if (to  < from && ti >= to  && ti < from) return ti + 1;
+                return ti;
+            };
+            state.selected_track  = remap(state.selected_track);
+            state.crop_edit_track = remap(state.crop_edit_track);
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips)
+                    if (cl.beat_src_track >= 0) cl.beat_src_track = remap(cl.beat_src_track);
+        }
+        json r; r["track"] = to;
+        r["order"] = json::array();
+        for (auto& tr : state.tracks) r["order"].push_back(tr.name);
+        return r;
+    }
+
     if (method == "delete_track") {
         int ti = track_by_name_or_index(state, params);
         if (!check_track(state, ti, err)) return {};
+        {
+            int gh = group_head_of(state, ti);
+            if (gh >= 0) --state.tracks[(size_t)gh].group_children;
+        }
         state.tracks.erase(state.tracks.begin() + ti);
         if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
         // Return the new count so peeling tracks one-by-one (always track:0)
@@ -2874,18 +3434,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "load_project") {
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path is required"; return {}; }
-        bool mr = state.models_ready;
-        bool ms = state.models_skipped;
-        if (!project_load(state, path)) { err = "project_load failed"; return {}; }
-        state.project_path   = path;   // exports default next to the .pms
-        state.models_ready   = mr;
-        state.models_skipped = ms;
-        state.proxy_scan_needed = true;
-        // Fresh history with a baseline snapshot: the old project's entries
-        // must not bleed into this one, and history_undo() can't step back
-        // past entry 0, so the first edit needs a predecessor to restore.
-        history_clear();
-        history_push(state, "Load project");
+        // Same path the Home screen and Open menu use — full teardown/reboot,
+        // async slot opens (progress bar, no freeze) and in_studio=true so the
+        // human UI follows the agent into the loaded project. The old inline
+        // version skipped all of that: audio kept playing the previous
+        // project, the window stayed on Home, and its proxy_scan_needed flag
+        // triggered the SYNCHRONOUS all-sources slot sweep on the next studio
+        // frame — a multi-second freeze.
+        if (!open_project_path(state, path)) { err = "project_load failed"; return {}; }
         json r; r["path"] = path;
         return r;
     }
@@ -2917,11 +3473,27 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     }
 
     if (method == "set_clip_fx") {
-        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         std::string fx_id = params.value("fx_id", "");
         if (fx_id.empty()) { err = "fx_id is required"; return {}; }
-        Clip& cl = state.tracks[ti].clips[ci];
+        Clip& brick = state.tracks[ti].clips[ci];
+        // A MultiFX/AudioMultiFX brick (every auto-coupled brick is one) holds
+        // its effects in fx_chain — parameterise the matching sub-clip there,
+        // not the brick's own (unused) scalar fields.
+        Clip* target = &brick;
+        if (brick.clip_type == ClipType::MultiFX ||
+            brick.clip_type == ClipType::AudioMultiFX) {
+            FXType want = parse_fx_type(fx_id);
+            target = nullptr;
+            for (auto& se : brick.fx_chain)
+                if (se.clip_type == ClipType::Effect && se.fx_type == want) target = &se;
+            if (!target) {
+                err = "effect '" + fx_id + "' is not in this brick's chain";
+                return {};
+            }
+        }
+        Clip& cl = *target;
         if (params.contains("amount"))
             fx_clip_set_param(cl, fx_id, "amount", params["amount"].get<float>());
         if (params.contains("params") && params["params"].is_object()) {
@@ -2933,8 +3505,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 }
             }
         }
-        // Set FX type so the effect clip renders
-        cl.fx_type = FXType::Grade;  // will be overridden if clip is Effect type
+        // Keep the Effect brick's type in sync with the fx being parameterised
+        // so it renders (and projects) as that effect — the old hardcoded
+        // FXType::Grade reset e.g. a pixelate brick to grade on every edit.
+        if (cl.clip_type == ClipType::Effect)
+            cl.fx_type = parse_fx_type(fx_id);
         return json::object();
     }
 
@@ -3370,7 +3945,16 @@ static void process_client(Client& cl, AppState& state) {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 void ipc_server_start() {
-    g_sock_path = "/tmp/pop-maker-studio.sock";
+    // Test rig escape hatches: a second instance for measurement/debugging
+    // must not unlink+steal the live app's socket — disable entirely, or give
+    // the rig its own socket path (raw-socket IPC works against it).
+    if (getenv("PMS_NO_IPC")) {
+        fprintf(stdout, "[ipc] disabled (PMS_NO_IPC)\n");
+        return;
+    }
+    const char* sock_override = getenv("PMS_SOCK");
+    g_sock_path = sock_override && *sock_override
+                ? sock_override : "/tmp/pop-maker-studio.sock";
 
     // Remove stale socket
     ::unlink(g_sock_path.c_str());

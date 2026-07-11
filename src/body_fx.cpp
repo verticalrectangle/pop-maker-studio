@@ -1,14 +1,19 @@
+#include "platform.h"
 #include "body_fx.h"
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+// The effect INFO TABLE (names, params, GLSL sources — plain data) is
+// available in every build: headless/iOS builds serve it through
+// list_body_fx / clip projection even though the GL runtime below is stubbed.
+#if PMS_HAS_GL
+#include "gl_compat.h"
 
 // stb_image implementation is already compiled in video.cpp
 // Just include the header without the implementation define
 #include "stb_image.h"
 
 #include "bg_remove.h"
+#include "generated/body_fx_preview.h"   // embedded card-preview portrait + body mask
+#endif  // PMS_HAS_GL (GL-only includes)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -41,6 +46,8 @@ uniform sampler2D u_mask;
 uniform float t;
 uniform float u_amount;
 uniform float p0, p1, p2, p3;
+uniform vec4  u_bg_box;       // RemoveBackground: keep-region [x0,x1,y0,y1] in v_uv (0,1,0,1 = full)
+uniform float u_bg_softness;  // RemoveBackground: matte / edge gamma, -1..1
 
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){
@@ -67,6 +74,12 @@ static const char* k_frag_RemoveBackground = R"glsl(
 void main() {
     vec4 orig = texture(u_src, v_uv);
     float m   = texture(u_mask, v_uv).r;
+    // Bounding box: zero the mask outside the keep-region (u_bg_box = 0,1,0,1 = off).
+    if (v_uv.x < u_bg_box.x || v_uv.x > u_bg_box.y ||
+        v_uv.y < u_bg_box.z || v_uv.y > u_bg_box.w) m = 0.0;
+    // Matte / edge-softness gamma (-1..1), mirroring the old CPU path.
+    if (u_bg_softness > 0.001)       m = pow(m, 1.0 + u_bg_softness * 3.0);
+    else if (u_bg_softness < -0.001) m = pow(m, 1.0 / (1.0 - u_bg_softness * 3.0));
     vec4 result = vec4(orig.rgb, orig.a * m);
     frag = mix(orig, result, u_amount);
 }
@@ -80,7 +93,7 @@ void main() {
     float edge = edge_mask(p0 + 1.0);
     vec3 glow_col = hue2rgb(fract(p1 + t * 0.2));
     vec4 body_col = vec4(orig.rgb + glow_col * edge * 2.0, orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.1, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -140,7 +153,7 @@ void main() {
     float luma = dot(orig.rgb, vec3(0.299, 0.587, 0.114));
     vec3 retro_body = mix(vec3(1.0, 0.1, 0.8), vec3(0.8, 0.1, 1.0), luma);
     vec4 body_col = vec4(mix(orig.rgb, retro_body, p0), orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.2 * vec3(0.2, 0.8, 0.8), orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -472,7 +485,7 @@ void main() {
     float inside_glow = m * luma * 0.4;
     vec3 xray = vec3(0.6, 0.8, 1.0) * (edge * 2.0 + inside_glow);
     vec4 body_col = vec4(clamp(xray, 0.0, 1.0), orig.a);
-    vec4 bg_col   = vec4(0.0, 0.0, 0.0, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -488,7 +501,7 @@ void main() {
     float hue_v = fract(t * 0.15 + v_uv.y * 0.1);
     vec3 glow = hue2rgb(hue_v) * edge * pulse * 2.5;
     vec4 body_col = vec4(clamp(orig.rgb + glow, 0.0, 1.0), orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.1, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -502,7 +515,7 @@ void main() {
     float edge = edge_mask(p1);
     vec3 rim = hue2rgb(p0) * edge * 2.0;
     vec4 body_col = vec4(clamp(orig.rgb + rim, 0.0, 1.0), orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.3, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -598,7 +611,7 @@ void main() {
     vec3 bio_col = mix(vec3(0.0, 1.0, 0.6), vec3(0.0, 0.8, 1.0), pulse);
     vec3 glow = bio_col * edge * p0 * 2.0;
     vec4 body_col = vec4(clamp(orig.rgb + glow, 0.0, 1.0), orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.1, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -614,7 +627,7 @@ void main() {
     vec3 holo_col = orig.rgb * scan * flicker;
     holo_col *= vec3(0.3, 0.8, 1.0);
     vec4 body_col = vec4(holo_col, orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.05, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -728,7 +741,7 @@ void main() {
     float hue_v = fract(v_uv.y + t * p0 + v_uv.x * 0.3);
     vec3 rainbow = hue2rgb(hue_v);
     vec4 body_col = vec4(orig.rgb * rainbow, orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.1, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -743,7 +756,7 @@ void main() {
     float sat  = length(orig.rgb - vec3(luma));
     vec3 uv_body = clamp(orig.rgb * (1.0 + p0 * sat * 4.0), 0.0, 1.0);
     vec4 body_col = vec4(uv_body, orig.a);
-    vec4 bg_col   = vec4(orig.rgb * 0.05, orig.a);
+    vec4 bg_col   = orig;  // body-only: leave the background untouched
     vec4 result = mix(bg_col, body_col, m);
     frag = mix(orig, result, u_amount);
 }
@@ -1031,14 +1044,30 @@ static const BodyFXInfo g_body_fx_infos[] = {
 
 static const int k_n_body_fx = (int)(sizeof(g_body_fx_infos) / sizeof(g_body_fx_infos[0]));
 
+// Info accessors — metadata only, available in every build (headless included).
+const BodyFXInfo* body_fx_info_list() { return g_body_fx_infos; }
+int               body_fx_info_count() { return k_n_body_fx; }
+
+const BodyFXInfo* body_fx_find_info(BodyFXType t) {
+    for (int i = 0; i < k_n_body_fx; ++i)
+        if (g_body_fx_infos[i].type == t) return &g_body_fx_infos[i];
+    return nullptr;
+}
+
+#if PMS_HAS_GL
+
 // ── GL state ──────────────────────────────────────────────────────────────────
 
 static GLuint g_programs[(int)BodyFXType::Count] = {};
 static GLuint g_vao = 0;
 
-// Output FBO/texture (resized lazily)
+// Output FBO/texture — a PING-PONG PAIR (resized lazily). Chaining body-FX feeds one
+// effect's output as the next effect's source; with a single shared FBO that means
+// sampling u_src while rendering into the SAME texture (read-write feedback → undefined →
+// the cutout alpha randomly comes out opaque on a re-scrub). The pair lets each effect
+// read one buffer and write the OTHER, so source != destination always.
 static struct {
-    GLuint fbo = 0, tex = 0;
+    GLuint fbo[2] = {0, 0}, tex[2] = {0, 0};
     int w = 0, h = 0;
 } g_out;
 
@@ -1197,17 +1226,19 @@ static GLuint link_body_prog(const char* frag_body) {
 
 static void ensure_out(int w, int h) {
     if (g_out.w == w && g_out.h == h) return;
-    if (g_out.fbo) { glDeleteFramebuffers(1, &g_out.fbo); glDeleteTextures(1, &g_out.tex); }
-    glGenTextures(1, &g_out.tex);
-    glBindTexture(GL_TEXTURE_2D, g_out.tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenFramebuffers(1, &g_out.fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, g_out.fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_out.tex, 0);
+    for (int i = 0; i < 2; ++i) {
+        if (g_out.fbo[i]) { glDeleteFramebuffers(1, &g_out.fbo[i]); glDeleteTextures(1, &g_out.tex[i]); }
+        glGenTextures(1, &g_out.tex[i]);
+        glBindTexture(GL_TEXTURE_2D, g_out.tex[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &g_out.fbo[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_out.fbo[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_out.tex[i], 0);
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     g_out.w = w; g_out.h = h;
 }
@@ -1233,8 +1264,10 @@ void body_fx_shutdown() {
         if (g_programs[i]) { glDeleteProgram(g_programs[i]); g_programs[i] = 0; }
     }
     if (g_vao) { glDeleteVertexArrays(1, &g_vao); g_vao = 0; }
-    if (g_out.fbo) { glDeleteFramebuffers(1, &g_out.fbo); g_out.fbo = 0; }
-    if (g_out.tex) { glDeleteTextures(1, &g_out.tex); g_out.tex = 0; }
+    for (int i = 0; i < 2; ++i) {
+        if (g_out.fbo[i]) { glDeleteFramebuffers(1, &g_out.fbo[i]); g_out.fbo[i] = 0; }
+        if (g_out.tex[i]) { glDeleteTextures(1, &g_out.tex[i]); g_out.tex[i] = 0; }
+    }
     g_out.w = g_out.h = 0;
 
     // Free mask cache
@@ -1244,14 +1277,8 @@ void body_fx_shutdown() {
     g_mask_lru.clear();
 }
 
-const BodyFXInfo* body_fx_info_list() { return g_body_fx_infos; }
-int               body_fx_info_count() { return k_n_body_fx; }
-
-const BodyFXInfo* body_fx_find_info(BodyFXType t) {
-    for (int i = 0; i < k_n_body_fx; ++i)
-        if (g_body_fx_infos[i].type == t) return &g_body_fx_infos[i];
-    return nullptr;
-}
+// (body_fx_info_list / body_fx_info_count / body_fx_find_info live above the
+//  PMS_HAS_GL guard — the info table is metadata, available headless.)
 
 // Invalidate the seek-table cache for a mask directory (call after append/rewrite).
 void body_fx_invalidate_mask_index(const std::string& mask_dir) {
@@ -1334,14 +1361,24 @@ uintptr_t body_fx_apply(BodyFXType type,
                          uintptr_t src_tex, unsigned mask_tex,
                          int w, int h,
                          const float params[4],
-                         float amount, float t_sec) {
+                         float amount, float t_sec,
+                         const float bg_box[4], float bg_softness) {
     int idx = (int)type;
     if (idx < 0 || idx >= (int)BodyFXType::Count) return src_tex;
     GLuint prog = g_programs[idx];
-    if (!prog || !src_tex || !mask_tex) return src_tex;
+    if (!prog || !src_tex || !mask_tex) {
+        static int s_dbg_ap = 0;
+        if (s_dbg_ap++ < 12)
+            fprintf(stderr, "[body_fx] apply early-return: type=%d prog=%u src=%lu mask=%u\n",
+                    idx, prog, (unsigned long)src_tex, mask_tex);
+        return src_tex;
+    }
 
     ensure_out(w, h);
-    if (!g_out.fbo) return src_tex;
+    if (!g_out.fbo[0]) return src_tex;
+    // Ping-pong: render into whichever buffer is NOT the source, so a chained effect
+    // (src == a previous g_out result) never samples the texture it renders into.
+    int oi = (src_tex == (uintptr_t)g_out.tex[0]) ? 1 : 0;
 
     // Save GL state
     GLint prev_fbo = 0;
@@ -1352,8 +1389,15 @@ uintptr_t body_fx_apply(BodyFXType type,
     glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
     GLint prev_vp[4];
     glGetIntegerv(GL_VIEWPORT, prev_vp);
+    // This pass must OVERWRITE the output FBO. The preview leaves GL_BLEND enabled
+    // (ImGui backend), so without disabling it the fullscreen triangle src-overs onto the
+    // buffer's stale content from previous frames — the cutout alpha then accumulates
+    // toward opaque across a live scrub (the bug; export has blend off, hence stayed clean).
+    // scene_add_layer disables blend for exactly this reason.
+    GLboolean prev_blend = glIsEnabled(GL_BLEND);
+    glDisable(GL_BLEND);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, g_out.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_out.fbo[oi]);
     glViewport(0, 0, w, h);
     glUseProgram(prog);
     glBindVertexArray(g_vao);
@@ -1375,6 +1419,10 @@ uintptr_t body_fx_apply(BodyFXType type,
     glUniform1f(glGetUniformLocation(prog, "p1"), params ? params[1] : 0.f);
     glUniform1f(glGetUniformLocation(prog, "p2"), params ? params[2] : 0.f);
     glUniform1f(glGetUniformLocation(prog, "p3"), params ? params[3] : 0.f);
+    static const float full_box[4] = {0.f, 1.f, 0.f, 1.f};
+    const float* bx = bg_box ? bg_box : full_box;
+    glUniform4f(glGetUniformLocation(prog, "u_bg_box"), bx[0], bx[1], bx[2], bx[3]);
+    glUniform1f(glGetUniformLocation(prog, "u_bg_softness"), bg_softness);
 
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
@@ -1387,8 +1435,66 @@ uintptr_t body_fx_apply(BodyFXType type,
     glUseProgram(prev_prog);
     glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
     glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+    if (prev_blend) glEnable(GL_BLEND);
 
-    return (uintptr_t)g_out.tex;
+    return (uintptr_t)g_out.tex[oi];
+}
+
+// ── Body-FX card preview thumbnails ───────────────────────────────────────────
+// Render each effect onto the embedded preview portrait + its U2Net body mask so
+// the picker cards show a live thumbnail (and the hovered card animates over t).
+// body_fx_apply reuses one shared g_out fbo, so each effect's result is copied to
+// its own cache texture — otherwise every card would show the last one rendered.
+static unsigned g_bfx_prev_src = 0, g_bfx_prev_mask = 0;
+static std::unordered_map<int, unsigned> g_bfx_prev_cache;
+
+static void ensure_bfx_prev_source() {
+    if (g_bfx_prev_src) return;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    auto mk = [](unsigned& t, GLenum ifmt, GLenum fmt, const void* px) {
+        glGenTextures(1, &t);
+        glBindTexture(GL_TEXTURE_2D, t);
+        glTexImage2D(GL_TEXTURE_2D, 0, ifmt, body_fx_preview_w, body_fx_preview_h, 0,
+                     fmt, GL_UNSIGNED_BYTE, px);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    };
+    mk(g_bfx_prev_src,  GL_RGB, GL_RGB, body_fx_preview_rgb);
+    mk(g_bfx_prev_mask, GL_R8,  GL_RED, body_fx_preview_mask);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+uintptr_t body_fx_preview_texture(BodyFXType type, float t) {
+    ensure_bfx_prev_source();
+    const int W = body_fx_preview_w, H = body_fx_preview_h;
+    const BodyFXInfo* info = body_fx_find_info(type);
+    float params[4] = {0.f, 0.f, 0.f, 0.f};
+    if (info)
+        for (int i = 0; i < 4; ++i)
+            params[i] = i < info->n_params ? info->params[i].default_val : 0.5f;
+
+    body_fx_apply(type, (uintptr_t)g_bfx_prev_src, g_bfx_prev_mask, W, H, params, 1.f, t);
+
+    unsigned& cache = g_bfx_prev_cache[(int)type];
+    if (!cache) {
+        glGenTextures(1, &cache);
+        glBindTexture(GL_TEXTURE_2D, cache);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_out.fbo[0]);  // preview is a single effect → buffer 0
+    glBindTexture(GL_TEXTURE_2D, cache);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, W, H);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    return (uintptr_t)cache;
 }
 
 void body_fx_evict_mask_cache(const std::string& mask_dir) {
@@ -1407,3 +1513,11 @@ void body_fx_evict_mask_cache(const std::string& mask_dir) {
         }
     }
 }
+
+#else
+// GL runtime stubs only — the info table above stays live headless.
+uintptr_t body_fx_apply(BodyFXType, uintptr_t s, unsigned, int, int, const float*, float, float, const float*, float) { return s; }
+unsigned body_fx_mask_texture(const std::string&, int) { return 0; }
+void body_fx_evict_mask_cache(const std::string&) {}
+void body_fx_invalidate_mask_index(const std::string&) {}
+#endif  // PMS_HAS_GL

@@ -1,0 +1,32 @@
+# Engine CI — the headless engine proof (check_engine_deps + engine-smoke),
+# exactly the commands proven locally:
+#   cmake -B build-ci -S . -DPMS_ENGINE_ONLY=ON -DPMS_HEADLESS=ON
+#   cmake --build build-ci --target engine-smoke
+#   ./build-ci/engine-smoke
+# The engine links system whisper/ggml/onnxruntime, which GitHub's hosted
+# runners don't ship — this job requires a self-hosted Linux runner labeled
+# [self-hosted, linux, pms-engine] with those dev packages installed. Gated
+# behind vars.HAS_LINUX_RUNNER so missing infrastructure shows as skipped,
+# not as a fake green.
+name: engine
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  engine-smoke:
+    if: ${{ vars.HAS_LINUX_RUNNER == 'true' }}
+    runs-on: [self-hosted, linux, pms-engine]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Submodules (imgui)
+        run: git submodule update --init --depth 1 vendor/imgui
+      - name: Configure (engine only, headless)
+        run: cmake -B build-ci -S . -DPMS_ENGINE_ONLY=ON -DPMS_HEADLESS=ON
+      - name: Build engine-smoke (includes check_engine_deps boundary gate)
+        run: cmake --build build-ci --target engine-smoke -j"$(nproc)"
+      - name: Run engine-smoke
+        run: ./build-ci/engine-smoke

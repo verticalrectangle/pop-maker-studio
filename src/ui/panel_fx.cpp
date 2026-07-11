@@ -1,6 +1,7 @@
 #include "studio_types.h"
 #include "studio_shared.h"
 #include "panel_fx.h"
+#include "timeline.h"   // timeline_couple_fx_brick — click-to-weld body FX
 #include "app.h"
 #include "body_fx.h"
 #include "bg_remove.h"
@@ -86,8 +87,20 @@ static uintptr_t fx_preview_source_tex(AppState& state, bool* flip, int* sw, int
             }
         }
     }
+    // Composited-canvas fallback (nothing selected) — but only when there's real
+    // video on the timeline. With audio-only the canvas is empty and bottom-up, so
+    // returning it with flip=true drew the default preview upside down; fall through
+    // to the upright synthetic portrait (return 0) instead.
+    bool has_vid = false;
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips)
+            if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::VideoRecord) {
+                has_vid = true; break;
+            }
+        if (has_vid) break;
+    }
     for (auto& tr : state.tracks)
-        if (!tr.clips.empty()) {
+        if (has_vid && !tr.clips.empty()) {
             uintptr_t scn = scene_result();
             if (scn) {
                 // Composited frame fills the canvas — preview at the canvas aspect.
@@ -154,7 +167,10 @@ static EffectPreset preset_from_clip(const Clip& clip, const std::string& name) 
 // ── Shared FX card catalogue ──────────────────────────────────────────────────
 struct FXCard { FXType type; const char* name; const char* tagline; ImU32 accent; const char* category; };
 static const FXCard g_fx_cards[] = {
-    {FXType::ChromaKey, "Chroma Melt", "Trippy digital chroma smear  ·  color-melt, not a clean key", IM_COL32(180,90,230,255), "Glitch"},
+    {FXType::ChromaKey,  "Chroma Key",  "Clean color-range keyer  ·  composite over the layer below",     IM_COL32(90,200,180,255),  "Glitch"},
+    {FXType::ChromaMelt, "Chroma Melt", "Trippy chroma smear  ·  keyed feedback trail, not a clean key",  IM_COL32(180,90,230,255),  "Glitch"},
+    {FXType::ChromaEcho, "Chroma Echo", "Keyed feedback echo  ·  stacks the subject's past frames (crisp)", IM_COL32(230,120,90,255), "Glitch"},
+    {FXType::ChromaFrame,"Chroma Frame","Keyed multi-tap delay  ·  discrete frame echoes, beat-syncable",  IM_COL32(255,180,60,255), "Glitch"},
     {FXType::Glitch,    "Glitch",      "RGB split  ·  row corruption  ·  digital tear",       IM_COL32(0,210,220,255),  "Glitch"},
     {FXType::ZoomPunch, "Zoom Punch",  "Beat-synced scale spike  ·  shake",                   IM_COL32(255,135,40,255), "Motion"},
     {FXType::LUT,       "LUT Grade",   "Load any .cube file  ·  cinematic color grade",       IM_COL32(255,205,55,255), "Color"},
@@ -169,14 +185,18 @@ static const FXCard g_fx_cards[] = {
 // Toolbox display order. Cards keep registry order within a category; any
 // category not listed here lands in the trailing "Other" bucket.
 static const char* g_fx_categories[] = {
-    "Beauty", "Tools", "Glitch", "Color", "Film", "Light",
-    "Warp", "Pattern", "Art", "Motion", "Other",
+    "Beauty", "Makeup", "Tools", "Glitch", "Color", "Film", "Light",
+    "Warp", "Pattern", "Art", "Motion", "Trippy", "Cyberpunk", "Other",
 };
 static const int g_n_fx_cards = (int)(sizeof(g_fx_cards) / sizeof(g_fx_cards[0]));
 
 // ── Right panel: Adjustment Library tab ──────────────────────────────────────
 
 void panel_adjustment_library(AppState& state, float w) {
+    // Cycle the shared preview source so hovered grade/FX cards loop the motion
+    // clip (panel_fx_creative does the same) — without this the source is frozen
+    // here and the previews never move.
+    fxp_motion_advance(ImGui::GetTime());
     ImGui::Dummy({0.f, 8.f});
 
     ImGui::TextUnformatted("Adjustment Library");
@@ -187,14 +207,18 @@ void panel_adjustment_library(AppState& state, float w) {
 
     // Category filter pills (in place) — pick a group instead of scrolling.
     static std::string s_adj_cat;
+    static std::string* s_adj_q = nullptr;
     {
         std::vector<const char*> cats = {"Color", "Blur", "Vignette", "Combo"};
         if (!state.user_presets.empty()) cats.push_back("Mine");
         cats.push_back("Tone");
-        category_pills("adjcat", cats, s_adj_cat);
+        static std::string s_adj_query;
+        category_pills("adjcat", cats, s_adj_cat, s_adj_query);
         ImGui::Dummy({0.f, 6.f});
+        s_adj_q = &s_adj_query;
     }
     auto adj_vis = [&](const char* key) { return s_adj_cat.empty() || s_adj_cat == key; };
+    (void)0;
 
     float card_w  = w - 8.f;  // single column like FX cards
     float card_h  = 80.f;
@@ -218,7 +242,7 @@ void panel_adjustment_library(AppState& state, float w) {
             p.fx_color_on ? p.fx_saturation : 1.f,
             p.fx_color_on ? p.fx_hue        : 0.f,
             p.fx_blur_on     ? p.fx_blur     : 0.f,
-            p.fx_vignette_on ? p.fx_vignette : 0.f);
+            p.fx_vignette_on ? p.fx_vignette : 0.f, hov);
         if (prev_tex) {
             dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                 cp, {cp.x+thumb_w, cp.y+card_h},
@@ -306,6 +330,7 @@ void panel_adjustment_library(AppState& state, float w) {
 
         for (int i = 0; i < (int)g_builtin_presets.size(); ++i) {
             if (g_builtin_presets[i].category != cat) continue;
+            if (s_adj_q && !lib_search_match(*s_adj_q, g_builtin_presets[i].name.c_str())) continue;
             draw_preset_card(g_builtin_presets[i], i);
             ImGui::Dummy({0.f, 4.f});
         }
@@ -387,7 +412,7 @@ void panel_adjustment_library(AppState& state, float w) {
                 ui_card_image_popover(cp, (ImTextureID)(uintptr_t)big, (float)rw, (float)rh,
                                       flip, fc.name, fc.tagline);
             }
-            uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(19000 + i, hov));
+            uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(19000 + i, hov), hov);
             if (prev_tex)
                 dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                     cp, {cp.x+cg_thumb_w, cp.y+cg_card_h},
@@ -800,6 +825,7 @@ void panel_adjustment(AppState& state, float w) {
                 ImGui::SetNextItemWidth(sw);
                 ImGui::SliderFloat(p.label.c_str(), &clip.runtime_fx_params[pi], p.min_val, p.max_val, "%.3f");
                 if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Runtime FX: " + p.label);
+                ui_slider_home(state, &clip.runtime_fx_params[pi], p.default_val, p.label.c_str());
                 ImGui::SameLine(0.f, 6.f);
                 char rl[24]; snprintf(rl, sizeof(rl), "R##rfx%d", pi);
                 if (ui_btn(rl, false, true)) {
@@ -812,6 +838,7 @@ void panel_adjustment(AppState& state, float w) {
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("Amount##rfx", &clip.runtime_fx_amount, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Runtime FX: amount");
+            ui_slider_home(state, &clip.runtime_fx_amount, 1.f, "Runtime FX amount");
 
             ImGui::Dummy({0.f, 4.f});
             if (ui_btn("Remove custom FX", false, true)) {
@@ -894,12 +921,18 @@ void panel_background(AppState& state, float w, bool clip_only) {
             ImGui::SetNextItemWidth(w);
             ImGui::SliderFloat("##bg_speed", &bgclip->bg_speed, 0.1f, 4.f, "Speed %.1fx");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG speed");
+            ui_slider_home(state, &bgclip->bg_speed,
+                           struct_field_default(*bgclip, &bgclip->bg_speed), "BG speed");
             ImGui::SetNextItemWidth(w);
             {
                 float pct = bgclip->bg_intensity * 100.f;
                 if (ImGui::SliderFloat("##bg_int", &pct, 0.f, 100.f, "Intensity %.0f%%"))
                     bgclip->bg_intensity = pct / 100.f;
                 if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "BG intensity");
+                if (ui_slider_home(state, &pct,
+                        struct_field_default(*bgclip, &bgclip->bg_intensity) * 100.f,
+                        "BG intensity"))
+                    bgclip->bg_intensity = pct / 100.f;
             }
         }
         ImGui::Dummy({0.f, 4.f});
@@ -977,6 +1010,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
     // ── Preset grid ───────────────────────────────────────────────────────────
     // Category filter pills (in place) — pick a category instead of scrolling.
     static std::string s_bg_cat;
+    static std::string* s_bg_q = nullptr;
     {
         std::vector<const char*> cats;
         for (int pi = 0; pi < g_n_bg_presets; ++pi) {
@@ -985,8 +1019,10 @@ void panel_background(AppState& state, float w, bool clip_only) {
             for (auto* x : cats) if (strcmp(x, cc) == 0) { seen = true; break; }
             if (!seen) cats.push_back(cc);
         }
-        category_pills("bgcat", cats, s_bg_cat);
+        static std::string s_bg_query;
+        category_pills("bgcat", cats, s_bg_cat, s_bg_query);
         ImGui::Dummy({0.f, 6.f});
+        s_bg_q = &s_bg_query;
     }
 
     const char* cur_cat = nullptr;
@@ -999,6 +1035,7 @@ void panel_background(AppState& state, float w, bool clip_only) {
     for (int pi = 0; pi < g_n_bg_presets; ++pi) {
         const BgPreset& pr = g_bg_presets[pi];
         if (!s_bg_cat.empty() && strcmp(pr.category, s_bg_cat.c_str()) != 0) continue;
+        if (s_bg_q && !lib_search_match(*s_bg_q, pr.label)) continue;
 
         // Inline category label only in "All" mode; the pill names it otherwise.
         if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
@@ -1123,6 +1160,7 @@ void panel_fx_creative(AppState& state, float w) {
     // Category filter pills (in place) — pick a category instead of scrolling
     // the whole catalogue. Only categories that actually have cards are listed.
     static std::string s_fx_cat;
+    static std::string* s_fx_q = nullptr;   // set below; read by the card loops
     {
         std::vector<const char*> cats;
         for (int c = 0; c < n_cats; ++c) {
@@ -1130,8 +1168,10 @@ void panel_fx_creative(AppState& state, float w) {
                 if (!fx_type_is_adjustment_style(g_fx_cards[i].type) &&
                     card_in_cat(g_fx_cards[i], c)) { cats.push_back(g_fx_categories[c]); break; }
         }
-        category_pills("fxcat", cats, s_fx_cat);
+        static std::string s_fx_query;
+        category_pills("fxcat", cats, s_fx_cat, s_fx_query);
         ImGui::Dummy({0.f, 6.f});
+        s_fx_q = &s_fx_query;
     }
 
     for (int c = 0; c < n_cats; ++c) {
@@ -1139,7 +1179,8 @@ void panel_fx_creative(AppState& state, float w) {
     int cat_count = 0;
     for (int i = 0; i < g_n_fx_cards; ++i)
         if (!fx_type_is_adjustment_style(g_fx_cards[i].type) &&
-            card_in_cat(g_fx_cards[i], c)) ++cat_count;
+            card_in_cat(g_fx_cards[i], c) &&
+            lib_search_match(*s_fx_q, g_fx_cards[i].name, g_fx_cards[i].tagline)) ++cat_count;
     if (cat_count == 0) continue;
 
     // With a pill active there's only one category, so the pill is the header —
@@ -1160,6 +1201,7 @@ void panel_fx_creative(AppState& state, float w) {
     for (int i = 0; i < g_n_fx_cards; ++i) {
         if (fx_type_is_adjustment_style(g_fx_cards[i].type)) continue;
         if (!card_in_cat(g_fx_cards[i], c)) continue;
+        if (!lib_search_match(*s_fx_q, g_fx_cards[i].name, g_fx_cards[i].tagline)) continue;
         const FXCard& fc = g_fx_cards[i];
         ImGui::PushID(i + 9000);
         ImVec2 cp = ImGui::GetCursorScreenPos();
@@ -1181,7 +1223,7 @@ void panel_fx_creative(AppState& state, float w) {
             ui_card_image_popover(cp, (ImTextureID)(uintptr_t)big, (float)rw, (float)rh,
                                   flip, fc.name, fc.tagline);
         }
-        uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(9000 + i, hov));
+        uintptr_t prev_tex = video_fx_preview_texture(fc.type, fx_card_preview_t(9000 + i, hov), hov);
         if (prev_tex)
             dl->AddImageRounded((ImTextureID)(uintptr_t)prev_tex,
                                 cp, {cp.x+thumb_w, cp.y+card_h},
@@ -1410,6 +1452,8 @@ void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx
         if (ImGui::SliderFloat(id, &pct, mn*100.f, mx*100.f, fmt))
             *v = pct / 100.f;
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, lbl);
+        if (ui_slider_home(state, &pct, struct_field_default(afx, v) * 100.f, lbl))
+            *v = pct / 100.f;
     };
 
     // Brick dry/wet — blends the whole effect under the dry voice. Shown for
@@ -1436,6 +1480,8 @@ void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx
             ImGui::SetNextItemWidth(bar_w);
             ImGui::SliderFloat("##at_sp", &afx.autotune_speed, 0.f, 200.f, "Snap speed %.0f ms");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Autotune speed");
+            ui_slider_home(state, &afx.autotune_speed,
+                           struct_field_default(afx, &afx.autotune_speed), "Autotune speed");
             ImGui::Dummy({0.f, 6.f});
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
             ImGui::TextWrapped("Voice presets:");
@@ -1453,12 +1499,16 @@ void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx
             ImGui::SetNextItemWidth(bar_w);
             ImGui::SliderFloat("##pt_st", &afx.pitch_semitones, -24.f, 24.f, "%.0f semitones");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pitch semitones");
+            ui_slider_home(state, &afx.pitch_semitones,
+                           struct_field_default(afx, &afx.pitch_semitones), "Pitch semitones");
             break;
         }
         case FXType::AudioFormant: {
             ImGui::SetNextItemWidth(bar_w);
             ImGui::SliderFloat("##fm_sh", &afx.formant_shift, -1.f, 1.f, "Shift %.2f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Formant shift");
+            ui_slider_home(state, &afx.formant_shift,
+                           struct_field_default(afx, &afx.formant_shift), "Formant shift");
             ImGui::Dummy({0.f, 6.f});
             ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
             ImGui::TextWrapped("Voice presets:");
@@ -1476,6 +1526,8 @@ void audio_fx_settings_ui(AppState& state, float w, FXType fx_type, AudioFX& afx
             ImGui::SetNextItemWidth(bar_w);
             ImGui::SliderFloat("##dl_t", &afx.delay_time, 0.01f, 2.f, "Time %.2f s");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Delay time");
+            ui_slider_home(state, &afx.delay_time,
+                           struct_field_default(afx, &afx.delay_time), "Delay time");
             pct_slider("##dl_fb", "Delay feedback", &afx.delay_feedback, 0.f, 0.95f, "Feedback %.0f%%");
             pct_slider("##dl_mx", "Delay mix",      &afx.delay_mix,      0.f, 1.f,   "Mix %.0f%%");
             break;
@@ -1820,6 +1872,7 @@ void glass_host_layout(AppState& state, Clip& brick, float w, int b_ti) {
     ImGui::SliderFloat("##glass_host_rot", &hc.rotation, -180.f, 180.f, "%.0f\xc2\xb0");
     ImGui::PopStyleColor(2);
     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Rotate clip");
+    ui_slider_home(state, &hc.rotation, 0.f, "Rotation");
     ImGui::SameLine(0.f, 6.f);
     if (ui_btn("\xe2\x9f\xb3 90\xc2\xb0", false, true)) {
         hc.rotation = fmodf(hc.rotation + 90.f + 180.f, 360.f) - 180.f;
@@ -1890,6 +1943,8 @@ void beat_sync_source_ui(AppState& state, Clip& target, float w) {
         ImGui::SetNextItemWidth(w - 16.f);
         ImGui::SliderFloat("##bdecay", &target.beat_decay, 0.02f, 1.0f, "%.2fs");
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "FX: beat decay");
+        ui_slider_home(state, &target.beat_decay,
+                       struct_field_default(target, &target.beat_decay), "Beat decay");
     }
 }
 
@@ -2025,12 +2080,16 @@ void panel_fx_clip(AppState& state, float w) {
             ui_label("Spread");
             ImGui::SetNextItemWidth(sw2);
             ImGui::SliderFloat("##dmspread", &clip.fx_datamosh_spread, 0.f, 1.f, "%.2f");
+            ui_slider_home(state, &clip.fx_datamosh_spread,
+                           struct_field_default(clip, &clip.fx_datamosh_spread), "Datamosh spread");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Datamosh: spread");
             break;
         }
 
         case FXType::ChromaKey: {
             float sw2 = w - 16.f;
+            kf_color_diamond(state, clip, kti, kci, "fx_chroma_key");
+            ImGui::SameLine(0.f, 6.f);
             ui_label("Key Color");
             float col3[3] = { clip.fx_chroma_key_r, clip.fx_chroma_key_g, clip.fx_chroma_key_b };
             ImGui::SetNextItemWidth(sw2);
@@ -2039,23 +2098,157 @@ void panel_fx_clip(AppState& state, float w) {
                 clip.fx_chroma_key_r = col3[0];
                 clip.fx_chroma_key_g = col3[1];
                 clip.fx_chroma_key_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_key", col3[0], col3[1], col3[2]);
             }
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: color");
             palette_widget("##pal_ck", col3);
+            ImGui::SameLine(0.f, 6.f);
+            {
+                float dp[3];
+                if (ui_dropper_button("##dp_ck", dp)) {
+                    clip.fx_chroma_key_r = dp[0];
+                    clip.fx_chroma_key_g = dp[1];
+                    clip.fx_chroma_key_b = dp[2];
+                    // Keyframe-aware: mirrors the pick into the key at the
+                    // playhead when the color is animated (same path as the
+                    // wheel edit).
+                    kf_color_edit(state, clip, "fx_chroma_key", dp[0], dp[1], dp[2]);
+                    history_push(state, "Chroma Key: color (picked)");
+                }
+            }
             if (col3[0] != clip.fx_chroma_key_r || col3[1] != clip.fx_chroma_key_g || col3[2] != clip.fx_chroma_key_b) {
                 clip.fx_chroma_key_r = col3[0]; clip.fx_chroma_key_g = col3[1]; clip.fx_chroma_key_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_key", col3[0], col3[1], col3[2]);
                 history_push(state, "Chroma Key: color");
             }
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Threshold");
-            ImGui::SetNextItemWidth(sw2);
-            ImGui::SliderFloat("##ckbthresh", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: threshold");
+            kfs("fx_chroma_key_threshold", "Threshold", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
             ImGui::Dummy({0.f, 4.f});
-            ui_label("Softness");
+            kfs("fx_chroma_key_softness", "Softness", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
+            break;
+        }
+
+        case FXType::ChromaMelt: {
+            float sw2 = w - 16.f;
+            kf_color_diamond(state, clip, kti, kci, "fx_chroma_melt");
+            ImGui::SameLine(0.f, 6.f);
+            ui_label("Melt Color");
+            float col3[3] = { clip.fx_chroma_melt_r, clip.fx_chroma_melt_g, clip.fx_chroma_melt_b };
             ImGui::SetNextItemWidth(sw2);
-            ImGui::SliderFloat("##ckbsoft", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
-            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Key: softness");
+            if (ImGui::ColorEdit3("##cmcol", col3, ImGuiColorEditFlags_NoInputs |
+                                                    ImGuiColorEditFlags_PickerHueWheel)) {
+                clip.fx_chroma_melt_r = col3[0]; clip.fx_chroma_melt_g = col3[1]; clip.fx_chroma_melt_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_melt", col3[0], col3[1], col3[2]);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Melt: color");
+            palette_widget("##pal_cm", col3);
+            ImGui::SameLine(0.f, 6.f);
+            {
+                float dp[3];
+                if (ui_dropper_button("##dp_cm", dp)) {
+                    clip.fx_chroma_melt_r = dp[0];
+                    clip.fx_chroma_melt_g = dp[1];
+                    clip.fx_chroma_melt_b = dp[2];
+                    // Keyframe-aware: mirrors the pick into the key at the
+                    // playhead when the color is animated (same path as the
+                    // wheel edit).
+                    kf_color_edit(state, clip, "fx_chroma_melt", dp[0], dp[1], dp[2]);
+                    history_push(state, "Chroma Melt: color (picked)");
+                }
+            }
+            if (col3[0] != clip.fx_chroma_melt_r || col3[1] != clip.fx_chroma_melt_g || col3[2] != clip.fx_chroma_melt_b) {
+                clip.fx_chroma_melt_r = col3[0]; clip.fx_chroma_melt_g = col3[1]; clip.fx_chroma_melt_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_melt", col3[0], col3[1], col3[2]);
+                history_push(state, "Chroma Melt: color");
+            }
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_melt_threshold", "Threshold", &clip.fx_chroma_melt_threshold, 0.f, 1.f, "%.2f");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_melt_persist", "Trail", &clip.fx_chroma_melt_persist, 0.f, 0.98f, "%.2f");
+            break;
+        }
+
+        case FXType::ChromaEcho: {
+            float sw2 = w - 16.f;
+            kf_color_diamond(state, clip, kti, kci, "fx_chroma_echo");
+            ImGui::SameLine(0.f, 6.f);
+            ui_label("Echo Color");
+            float col3[3] = { clip.fx_chroma_echo_r, clip.fx_chroma_echo_g, clip.fx_chroma_echo_b };
+            ImGui::SetNextItemWidth(sw2);
+            if (ImGui::ColorEdit3("##cecol", col3, ImGuiColorEditFlags_NoInputs |
+                                                    ImGuiColorEditFlags_PickerHueWheel)) {
+                clip.fx_chroma_echo_r = col3[0]; clip.fx_chroma_echo_g = col3[1]; clip.fx_chroma_echo_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_echo", col3[0], col3[1], col3[2]);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Echo: color");
+            palette_widget("##pal_ce", col3);
+            ImGui::SameLine(0.f, 6.f);
+            {
+                float dp[3];
+                if (ui_dropper_button("##dp_ce", dp)) {
+                    clip.fx_chroma_echo_r = dp[0];
+                    clip.fx_chroma_echo_g = dp[1];
+                    clip.fx_chroma_echo_b = dp[2];
+                    // Keyframe-aware: mirrors the pick into the key at the
+                    // playhead when the color is animated (same path as the
+                    // wheel edit).
+                    kf_color_edit(state, clip, "fx_chroma_echo", dp[0], dp[1], dp[2]);
+                    history_push(state, "Chroma Echo: color (picked)");
+                }
+            }
+            if (col3[0] != clip.fx_chroma_echo_r || col3[1] != clip.fx_chroma_echo_g || col3[2] != clip.fx_chroma_echo_b) {
+                clip.fx_chroma_echo_r = col3[0]; clip.fx_chroma_echo_g = col3[1]; clip.fx_chroma_echo_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_echo", col3[0], col3[1], col3[2]);
+                history_push(state, "Chroma Echo: color");
+            }
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_echo_threshold", "Threshold", &clip.fx_chroma_echo_threshold, 0.f, 1.f, "%.2f");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_echo_persist", "Echo", &clip.fx_chroma_echo_persist, 0.f, 0.98f, "%.2f");
+            break;
+        }
+
+        case FXType::ChromaFrame: {
+            float sw2 = w - 16.f;
+            kf_color_diamond(state, clip, kti, kci, "fx_chroma_frame");
+            ImGui::SameLine(0.f, 6.f);
+            ui_label("Key Color");
+            float col3[3] = { clip.fx_chroma_frame_r, clip.fx_chroma_frame_g, clip.fx_chroma_frame_b };
+            ImGui::SetNextItemWidth(sw2);
+            if (ImGui::ColorEdit3("##cfcol", col3, ImGuiColorEditFlags_NoInputs |
+                                                    ImGuiColorEditFlags_PickerHueWheel)) {
+                clip.fx_chroma_frame_r = col3[0]; clip.fx_chroma_frame_g = col3[1]; clip.fx_chroma_frame_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_frame", col3[0], col3[1], col3[2]);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Chroma Frame: color");
+            palette_widget("##pal_cf", col3);
+            ImGui::SameLine(0.f, 6.f);
+            {
+                float dp[3];
+                if (ui_dropper_button("##dp_cf", dp)) {
+                    clip.fx_chroma_frame_r = dp[0];
+                    clip.fx_chroma_frame_g = dp[1];
+                    clip.fx_chroma_frame_b = dp[2];
+                    // Keyframe-aware: mirrors the pick into the key at the
+                    // playhead when the color is animated (same path as the
+                    // wheel edit).
+                    kf_color_edit(state, clip, "fx_chroma_frame", dp[0], dp[1], dp[2]);
+                    history_push(state, "Chroma Frame: color (picked)");
+                }
+            }
+            if (col3[0] != clip.fx_chroma_frame_r || col3[1] != clip.fx_chroma_frame_g || col3[2] != clip.fx_chroma_frame_b) {
+                clip.fx_chroma_frame_r = col3[0]; clip.fx_chroma_frame_g = col3[1]; clip.fx_chroma_frame_b = col3[2];
+                kf_color_edit(state, clip, "fx_chroma_frame", col3[0], col3[1], col3[2]);
+                history_push(state, "Chroma Frame: color");
+            }
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_frame_threshold", "Threshold", &clip.fx_chroma_frame_threshold, 0.f, 1.f, "%.2f");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_frame_taps", "Taps", &clip.fx_chroma_frame_taps, 1.f, 8.f, "%.0f");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_frame_spacing", "Spacing", &clip.fx_chroma_frame_spacing, 0.02f, 0.5f, "%.2fs");
+            ImGui::Dummy({0.f, 4.f});
+            kfs("fx_chroma_frame_falloff", "Falloff", &clip.fx_chroma_frame_falloff, 0.3f, 0.98f, "%.2f");
             break;
         }
 
@@ -2186,6 +2379,10 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
 
     float brick_dur = fmaxf(0.01f, brick.end - brick.start);
 
+    // Per-effect right-click actions, collected during the row loop, applied after.
+    int  dup_idx = -1, paste_idx = -1;
+    bool paste_append = false;
+
     // ── Add Effect dropdown ────────────────────────────────────────────────
     if (ImGui::BeginCombo("##mfx_add", "+ Add Effect", ImGuiComboFlags_NoArrowButton)) {
         for (int k = 0; k < g_n_fx_cards; ++k) {
@@ -2260,6 +2457,10 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         }
         ImGui::EndCombo();
     }
+    if (fx_clip_can_paste(brick)) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Paste FX")) paste_append = true;
+    }
     ImGui::Dummy({0.f, 8.f});
 
     // ── Chain list ─────────────────────────────────────────────────────────
@@ -2308,6 +2509,20 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                               ImGuiSelectableFlags_DontClosePopups, {80.f, row_h}))
             brick.fx_chain_selected = i;
         ImGui::PopStyleColor();
+
+        // Right-click → per-effect actions, headed by the effect's NAME so there's
+        // no doubt which one you're acting on (Chroma Key vs Chroma Melt, etc.).
+        if (ImGui::BeginPopupContextItem("##fxrowctx")) {
+            ImGui::TextDisabled("%s", entry_name);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Duplicate")) dup_idx = i;
+            if (ImGui::MenuItem("Copy")) fx_clip_copy(se, false);
+            if (ImGui::MenuItem("Paste after", nullptr, false, fx_clip_can_paste(brick)))
+                paste_idx = i;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete")) del_idx = i;
+            ImGui::EndPopup();
+        }
 
         // Duration mini-bar
         ImGui::SameLine(0.f, 6.f);
@@ -2400,11 +2615,10 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         else if (brick.fx_chain_selected == swap_b) brick.fx_chain_selected = swap_a;
         history_push(state, "Multi-FX: reorder");
     }
-    if (del_idx >= 0) {
-        brick.fx_chain.erase(brick.fx_chain.begin() + del_idx);
-        brick.fx_chain_selected = fmaxf(-1, (float)(brick.fx_chain_selected - (brick.fx_chain_selected >= del_idx ? 1 : 0)));
-        history_push(state, "Multi-FX: remove effect");
-    }
+    if (del_idx >= 0)      fx_chain_delete(state, brick, del_idx);
+    if (dup_idx >= 0)      fx_chain_duplicate(state, brick, dup_idx);
+    if (paste_idx >= 0)    fx_chain_paste(state, brick, paste_idx);
+    else if (paste_append) fx_chain_paste(state, brick, -1);
 
     if (brick.fx_chain.empty()) {
         ImGui::Dummy({0.f, 12.f});
@@ -2416,12 +2630,15 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
     }
 
     // ── Parameters for selected sub-effect ────────────────────────────────
+    // Default to the FIRST entry instead of "nothing selected": chains built
+    // by an agent (add_multifx_brick) or loaded from disk arrive with
+    // fx_chain_selected = -1, and the old early-return rendered the list with
+    // NO parameter section — on a solo brick that read as "params don't work"
+    // (the welded flow masked it because interactive adds select as they go).
+    if (brick.fx_chain_selected < 0 ||
+        brick.fx_chain_selected >= (int)brick.fx_chain.size())
+        brick.fx_chain_selected = 0;
     int si = brick.fx_chain_selected;
-    if (si < 0 || si >= (int)brick.fx_chain.size()) {
-        glass_host_layout(state, brick, w, b_ti);
-        ImGui::Dummy({0.f, 8.f});
-        return;
-    }
     Clip& clip = brick.fx_chain[si];   // named 'clip' so generated includes work
 
     ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
@@ -2455,6 +2672,7 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         ImGui::SetNextItemWidth(sw);
         ImGui::SliderFloat("##mfx_bfx_amt", &clip.body_fx_amount, 0.f, 1.f, "%.2f");
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Body FX: amount");
+        ui_slider_home(state, &clip.body_fx_amount, 1.f, "Body FX amount");
         if (bfi && bfi->n_params > 0) {
             ImGui::Dummy({0.f, 4.f});
             for (int pi = 0; pi < bfi->n_params && pi < 4; ++pi) {
@@ -2464,6 +2682,7 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 ImGui::SetNextItemWidth(sw);
                 ImGui::SliderFloat(pid, &clip.body_fx_params[pi], pd.min_val, pd.max_val, "%.3f");
                 if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Body FX: param");
+                ui_slider_home(state, &clip.body_fx_params[pi], pd.default_val, pd.label);
                 ImGui::Dummy({0.f, 2.f});
             }
         }
@@ -2551,23 +2770,63 @@ void panel_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
                 ImGui::SetNextItemWidth(sw);
                 ImGui::SliderFloat("##mdmspread", &clip.fx_datamosh_spread, 0.f, 1.f, "%.2f");
                 if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Multi-FX Datamosh: spread");
+                ui_slider_home(state, &clip.fx_datamosh_spread,
+                               struct_field_default(clip, &clip.fx_datamosh_spread), "Datamosh spread");
                 break;
 
             case FXType::ChromaKey: {
-                float sw2 = sw - 20.f;
-                ui_label("Key Color  R");
-                ImGui::SetNextItemWidth(sw2);
-                ImGui::SliderFloat("##mckr", &clip.fx_chroma_key_r, 0.f, 1.f, "%.2f");
-                ui_label("           G");
-                ImGui::SetNextItemWidth(sw2);
-                ImGui::SliderFloat("##mckg", &clip.fx_chroma_key_g, 0.f, 1.f, "%.2f");
-                ui_label("           B");
-                ImGui::SetNextItemWidth(sw2);
-                ImGui::SliderFloat("##mckb", &clip.fx_chroma_key_b, 0.f, 1.f, "%.2f");
+                kfs("fx_chroma_key_r", "Key Color R", &clip.fx_chroma_key_r, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_key_g", "Key Color G", &clip.fx_chroma_key_g, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_key_b", "Key Color B", &clip.fx_chroma_key_b, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
                 kfs("fx_chroma_key_threshold", "Threshold", &clip.fx_chroma_key_threshold, 0.f, 1.f, "%.2f");
                 ImGui::Dummy({0.f, 4.f});
                 kfs("fx_chroma_key_softness", "Softness", &clip.fx_chroma_key_softness, 0.f, 0.5f, "%.2f");
+                break;
+            }
+
+            case FXType::ChromaMelt: {
+                kfs("fx_chroma_melt_r", "Melt Color R", &clip.fx_chroma_melt_r, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_melt_g", "Melt Color G", &clip.fx_chroma_melt_g, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_melt_b", "Melt Color B", &clip.fx_chroma_melt_b, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_melt_threshold", "Threshold", &clip.fx_chroma_melt_threshold, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_melt_persist", "Trail", &clip.fx_chroma_melt_persist, 0.f, 0.98f, "%.2f");
+                break;
+            }
+
+            case FXType::ChromaEcho: {
+                kfs("fx_chroma_echo_r", "Echo Color R", &clip.fx_chroma_echo_r, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_echo_g", "Echo Color G", &clip.fx_chroma_echo_g, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_echo_b", "Echo Color B", &clip.fx_chroma_echo_b, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_echo_threshold", "Threshold", &clip.fx_chroma_echo_threshold, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_echo_persist", "Echo", &clip.fx_chroma_echo_persist, 0.f, 0.98f, "%.2f");
+                break;
+            }
+
+            case FXType::ChromaFrame: {
+                kfs("fx_chroma_frame_r", "Key Color R", &clip.fx_chroma_frame_r, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_g", "Key Color G", &clip.fx_chroma_frame_g, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_b", "Key Color B", &clip.fx_chroma_frame_b, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_threshold", "Threshold", &clip.fx_chroma_frame_threshold, 0.f, 1.f, "%.2f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_taps", "Taps", &clip.fx_chroma_frame_taps, 1.f, 8.f, "%.0f");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_spacing", "Spacing", &clip.fx_chroma_frame_spacing, 0.02f, 0.5f, "%.2fs");
+                ImGui::Dummy({0.f, 4.f});
+                kfs("fx_chroma_frame_falloff", "Falloff", &clip.fx_chroma_frame_falloff, 0.3f, 0.98f, "%.2f");
                 break;
             }
 
@@ -2662,13 +2921,26 @@ void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
     ImGui::Dummy({0.f, 4.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
     float sw = w - 16.f;
-    int remove_idx = -1, move_up = -1, move_dn = -1;
+    int remove_idx = -1, move_up = -1, move_dn = -1, dup_idx = -1, paste_idx = -1;
+    bool paste_append = false;
     for (int i = 0; i < (int)brick.fx_chain.size(); ++i) {
         Clip& se = brick.fx_chain[(size_t)i];
         ImGui::PushID(31000 + i);
         bool selrow = brick.fx_chain_selected == i;
         if (ImGui::Selectable(fx_type_name(se.fx_type), selrow, 0, {sw - 70.f, 0.f}))
             brick.fx_chain_selected = i;
+        // Right-click → per-effect actions, headed by the effect's NAME (no confusion).
+        if (ImGui::BeginPopupContextItem("##afxrowctx")) {
+            ImGui::TextDisabled("%s", fx_type_name(se.fx_type));
+            ImGui::Separator();
+            if (ImGui::MenuItem("Duplicate")) dup_idx = i;
+            if (ImGui::MenuItem("Copy")) fx_clip_copy(se, true);
+            if (ImGui::MenuItem("Paste after", nullptr, false, fx_clip_can_paste(brick)))
+                paste_idx = i;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete")) remove_idx = i;
+            ImGui::EndPopup();
+        }
         ImGui::SameLine(sw - 62.f);
         if (ui_btn("^", false, true) && i > 0) move_up = i;
         ImGui::SameLine(0.f, 2.f);
@@ -2676,6 +2948,9 @@ void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         ImGui::SameLine(0.f, 6.f);
         if (ui_btn("\xc3\x97", false, true)) remove_idx = i;
         ImGui::PopID();
+    }
+    if (fx_clip_can_paste(brick)) {
+        if (ui_btn("Paste FX", false, true)) paste_append = true;
     }
     if (move_up > 0) {
         std::swap(brick.fx_chain[move_up], brick.fx_chain[move_up - 1]);
@@ -2686,15 +2961,18 @@ void panel_audio_multifx_for(AppState& state, float w, int b_ti, int b_ci) {
         brick.fx_chain_selected = move_dn + 1;
         history_push(state, "Audio Multi-FX: reorder");
     }
-    if (remove_idx >= 0) {
-        brick.fx_chain.erase(brick.fx_chain.begin() + remove_idx);
-        if (brick.fx_chain_selected >= (int)brick.fx_chain.size())
-            brick.fx_chain_selected = (int)brick.fx_chain.size() - 1;
-        history_push(state, "Audio Multi-FX: remove effect");
-    }
+    if (remove_idx >= 0)   fx_chain_delete(state, brick, remove_idx);
+    if (dup_idx >= 0)      fx_chain_duplicate(state, brick, dup_idx);
+    if (paste_idx >= 0)    fx_chain_paste(state, brick, paste_idx);
+    else if (paste_append) fx_chain_paste(state, brick, -1);
 
+    // Default to the first entry — see the video Multi-FX panel note (agent-
+    // built / freshly loaded chains arrive with fx_chain_selected = -1).
+    if (brick.fx_chain_selected < 0 ||
+        brick.fx_chain_selected >= (int)brick.fx_chain.size())
+        brick.fx_chain_selected = 0;
     int si = brick.fx_chain_selected;
-    if (si < 0 || si >= (int)brick.fx_chain.size()) { ImGui::Dummy({0.f, 8.f}); return; }
+    if (brick.fx_chain.empty()) { ImGui::Dummy({0.f, 8.f}); return; }
     Clip& se = brick.fx_chain[(size_t)si];
 
     ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
@@ -2731,6 +3009,7 @@ void audio_chain_entry_params_ui(AppState& state, Clip& se, float sw) {
         ImGui::SetNextItemWidth(sw);
         ImGui::SliderFloat(id, v, lo, hi, fmt);
         if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, hist);
+        ui_slider_home(state, v, struct_field_default(se, v), hist);
         ImGui::Dummy({0.f, 4.f});
     };
     switch (se.fx_type) {
@@ -2817,7 +3096,8 @@ void panel_body_fx_library(AppState& state, float w) {
         }
 
         auto plain_slider = [&](const char* id, const char* label, float* v,
-                                float vmin, float vmax, const char* fmt) {
+                                float vmin, float vmax, const char* fmt,
+                                float defv = std::numeric_limits<float>::quiet_NaN()) {
             ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
             ImGui::TextUnformatted(label);
             ImGui::PopStyleColor();
@@ -2827,6 +3107,8 @@ void panel_body_fx_library(AppState& state, float w) {
             ImGui::SliderFloat(id, v, vmin, vmax, fmt);
             ImGui::PopStyleColor(2);
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, label);
+            ui_slider_home(state, v,
+                std::isnan(defv) ? struct_field_default(*bfx_clip, v) : defv, label);
         };
 
         ImGui::Dummy({0.f, 6.f});
@@ -2839,7 +3121,7 @@ void panel_body_fx_library(AppState& state, float w) {
                 const BodyFXParamDef& pd = info->params[pi];
                 char id[32]; snprintf(id, sizeof(id), "##lbfxp%d", pi);
                 plain_slider(id, pd.label, &bfx_clip->body_fx_params[pi],
-                             pd.min_val, pd.max_val, "%.3f");
+                             pd.min_val, pd.max_val, "%.3f", pd.default_val);
                 ImGui::Dummy({0.f, 2.f});
             }
         }
@@ -2857,9 +3139,9 @@ void panel_body_fx_library(AppState& state, float w) {
     if (bfx_clip)
         ImGui::TextWrapped("Click to change the selected brick's effect type.");
     else if (vid_clip)
-        ImGui::TextWrapped("Click to add a Body FX brick to the selected video clip's track.");
+        ImGui::TextWrapped("Click to weld a Body FX onto the selected clip — it covers the whole clip.");
     else
-        ImGui::TextWrapped("Select a video clip, or drag a card onto one, to add Body FX bricks.");
+        ImGui::TextWrapped("Select a video clip to add Body FX.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 8.f});
 
@@ -2879,8 +3161,9 @@ void panel_body_fx_library(AppState& state, float w) {
             cur_cat = info.category;
         }
 
-        float card_h = 44.f;
-        float card_w = w - 8.f;
+        float card_h  = 44.f;
+        float card_w  = w - 8.f;
+        float thumb_w = card_h * 9.f / 16.f;   // 9:16 preview strip on the left
         bool selected = bfx_clip && (bfx_clip->body_fx_type == info.type);
 
         ImGui::PushID(70000 + i);
@@ -2898,17 +3181,31 @@ void panel_body_fx_library(AppState& state, float w) {
                      : hov       ? IM_COL32(40, 140, 120, 150)
                                  : IM_COL32(30, 60, 55, 180);
         dl->AddRectFilled(cp, {cp.x + card_w, cp.y + card_h}, fill, 4.f);
+
+        // Live effect thumbnail on the embedded portrait; hover animates it and
+        // opens a big popover — same language as the gen-FX cards. (144x256 source.)
+        uintptr_t prev = body_fx_preview_texture(info.type, fx_card_preview_t(70000 + i, hov));
+        if (prev && fx_card_popover_ready(70000 + i))
+            ui_card_image_popover(cp, (ImTextureID)prev, 144.f, 256.f, false,
+                                  info.name, info.tagline);
+        if (prev)
+            dl->AddImageRounded((ImTextureID)prev, cp, {cp.x + thumb_w, cp.y + card_h},
+                                {0, 0}, {1, 1},
+                                hov ? IM_COL32(255,255,255,235) : IM_COL32(255,255,255,175),
+                                4.f, ImDrawFlags_RoundCornersLeft);
+
         dl->AddRect(cp, {cp.x + card_w, cp.y + card_h}, border, 4.f, 0, selected ? 1.5f : 1.f);
 
+        float tx = cp.x + thumb_w + 8.f;
         ImGui::PushFont(g_font_bold);
         ImU32 nc = selected   ? IM_COL32(80, 240, 210, 255)
                  : !can_act   ? IM_COL32(80, 100, 95, 160)
                               : IM_COL32(200, 230, 225, 220);
-        dl->AddText(ImGui::GetFont(), 13.f, {cp.x + 10.f, cp.y + 8.f}, nc, info.name);
+        dl->AddText(ImGui::GetFont(), 13.f, {tx, cp.y + 8.f}, nc, info.name);
         ImGui::PopFont();
         ImU32 tc = can_act ? to_u32(Col::dim) : IM_COL32(60, 75, 70, 140);
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {cp.x + 10.f, cp.y + 24.f},
-                    tc, info.tagline, nullptr, card_w - 20.f);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {tx, cp.y + 24.f},
+                    tc, info.tagline, nullptr, card_w - thumb_w - 18.f);
 
         ImGui::SetCursorScreenPos(cp);
         ImGui::InvisibleButton("##bfx_card", {card_w, card_h});
@@ -2921,21 +3218,28 @@ void panel_body_fx_library(AppState& state, float w) {
                                                    ? info.params[pi].default_val : 0.5f;
                 history_push(state, std::string("Body FX: ") + info.name);
             } else {
-                // Add BodyFX brick to the selected video clip's track
+                // Add a BodyFX brick and immediately weld it onto the video clip —
+                // no drag, no hold-timer (unlike other brick types). The brick spans
+                // the whole content clip: timeline_couple_fx_brick re-windows it to the
+                // host's start/end, so it covers the entire clip ("always on").
                 Clip cl;
                 cl.clip_type     = ClipType::BodyFX;
                 cl.body_fx_type  = info.type;
-                cl.start         = state.playhead;
-                cl.end           = fminf(state.duration, state.playhead + 5.f);
+                cl.start         = vid_clip->start;
+                cl.end           = vid_clip->end;
                 for (int pi = 0; pi < 4; ++pi)
                     cl.body_fx_params[pi] = pi < info.n_params
                                             ? info.params[pi].default_val : 0.5f;
-                state.tracks[vid_ti].clips.push_back(cl);
+                auto& vclips = state.tracks[vid_ti].clips;
+                vclips.push_back(cl);                       // invalidates vid_clip
+                int new_ci     = (int)vclips.size() - 1;
+                int coupled_ci = timeline_couple_fx_brick(state, vid_ti, new_ci, vid_ci);
                 state.selected_track = vid_ti;
-                state.selected_clip  = (int)state.tracks[vid_ti].clips.size() - 1;
+                state.selected_clip  = coupled_ci;
                 history_push(state, std::string("Add Body FX: ") + info.name);
                 // Auto-start bg removal on the video clip if not already ready
-                if (vid_clip->bg_remove_status != BgRemoveStatus::Ready)
+                // (re-fetch by index — vid_clip was invalidated above).
+                if (state.tracks[vid_ti].clips[vid_ci].bg_remove_status != BgRemoveStatus::Ready)
                     bg_remove_start(state, vid_ti, vid_ci);
             }
         }

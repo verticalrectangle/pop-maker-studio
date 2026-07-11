@@ -35,9 +35,9 @@ int bg_remove_read_start_frame(const std::string& mask_dir);
 // Returns 0 if no masks exist.
 int bg_remove_read_frame_count(const std::string& mask_dir);
 
-// ── u2net model management ────────────────────────────────────────────────────
+// ── RVM model management ──────────────────────────────────────────────────────
 
-// Returns true if the u2net ONNX model is present on disk.
+// Returns true if the RVM ONNX model is present on disk.
 // Cached after first check; call rembg_install_reset() to force re-check.
 bool rembg_is_installed(const std::string& python_path = "");
 void rembg_install_reset();

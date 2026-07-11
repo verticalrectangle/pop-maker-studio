@@ -1,6 +1,7 @@
 // hf_api.cpp — HuggingFace search + download, curl binary only, no libraries
 
 #include "hf_api.h"
+#include "platform.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -257,7 +258,7 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
         // Download to .dl temp file
         std::string dl_cmd = "curl -L --max-time 600 --fail -o \""
                            + dl.tmp_path + "\" \"" + url + "\" 2>/dev/null";
-        int rc = system(dl_cmd.c_str());
+        int rc = pms_system(dl_cmd.c_str());
 
         if (rc != 0) {
             fs::remove(dl.tmp_path);
@@ -294,7 +295,7 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
             std::string unzip_cmd = "unzip -j -o \""
                                   + zip_path + "\" \"*.pth\" \"*.index\" -d \""
                                   + extract_dir + "\" 2>/dev/null";
-            rc = system(unzip_cmd.c_str());
+            rc = pms_system(unzip_cmd.c_str());
 
             // Find extracted .pth
             std::string found_pth;
@@ -345,7 +346,7 @@ void hf_download_model(const std::string& repo, const std::string& model_file,
                                     + "/resolve/main/" + index_file;
                 std::string idx_cmd = "curl -L --max-time 600 --fail -o \""
                                     + idx_path + ".dl\" \"" + idx_url + "\" 2>/dev/null";
-                if (system(idx_cmd.c_str()) == 0)
+                if (pms_system(idx_cmd.c_str()) == 0)
                     fs::rename(idx_path + ".dl", idx_path, ec2);
                 else
                     fs::remove(idx_path + ".dl", ec2);

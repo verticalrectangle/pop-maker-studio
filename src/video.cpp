@@ -1,3 +1,4 @@
+#include "platform.h"
 #include "video.h"
 #include "fx_shader.h"
 
@@ -11,6 +12,7 @@
 // ── stb_image_write — JPEG encode for datamosh preview ───────────────────────
 #include "stb_image_write.h"
 
+#if PMS_HAS_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -27,9 +29,7 @@ extern "C" {
 #include <functional>
 #include <deque>
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#include "gl_compat.h"
 
 #include <cstdio>
 #include <cstring>
@@ -38,6 +38,11 @@ extern "C" {
 #include <unordered_map>
 #include <vector>
 #include <filesystem>
+
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <cerrno>
 
 namespace fs = std::filesystem;
 
@@ -598,7 +603,7 @@ struct PreviewState {
     int          ring_head = 0;   // next eviction target (round-robin)
 };
 
-static PreviewState g_pv[MAX_VIDEO_TRACKS];
+static PreviewState g_pv[MAX_VIDEO_SLOTS];
 
 // Separate texture for hover-preview thumbnails (track 0's proxy).
 static struct ThumbState {
@@ -987,7 +992,10 @@ static void prepare_proxy_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame
         got = fread(f.jpeg_buf.data(), 1, frame_sz, pv.mjpeg_file);
         if (got == 0) { release_empty(); return; }
 
-        // Load bg_remove mask under the same lock (bg_mask_* is shared state).
+        // DEAD CODE — mechanism A's preview alpha-bake (see the PixelFX bg_remove
+        // fields in video.h). Nothing sets pfx.bg_remove_on anymore, so this whole
+        // block is unreachable; the cutout is the RemoveBackground body-FX brick.
+        // Kept inert rather than unthreaded from this hot decode path.
         if (pfx.bg_remove_on && !pfx.bg_remove_mask_dir.empty()) {
             if (pfx.bg_remove_mask_dir != pv.bg_mjpeg_dir)
                 bg_mjpeg_open(pv, pfx.bg_remove_mask_dir);
@@ -1337,7 +1345,7 @@ static void close_slot(PreviewState& pv) {
 }
 
 void video_open_still(int track_id, const std::string& jpeg_path) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return;
     close_slot(g_pv[track_id]);
 
     FILE* f = fopen(jpeg_path.c_str(), "rb");
@@ -1387,7 +1395,7 @@ void video_open_still(int track_id, const std::string& jpeg_path) {
 // opened at all (corrupt container, missing codec). Software decode of typical
 // h264 1080p preview frames is ~15-30 ms per frame; HW is ~5-15 ms.
 bool video_open_native(int track_id, const std::string& path) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     if (path.empty()) return false;
     close_slot(g_pv[track_id]);
     PreviewState& pv = g_pv[track_id];
@@ -1449,12 +1457,12 @@ bool video_open_native(int track_id, const std::string& path) {
 }
 
 PreviewSource video_source(int track_id) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return PreviewSource::None;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return PreviewSource::None;
     return g_pv[track_id].source;
 }
 
 bool video_open_proxy(int track_id, const ProxyInfo& proxy) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     close_slot(g_pv[track_id]);
 
     FILE* f = fopen(proxy.mjpeg_path.c_str(), "rb");
@@ -1480,26 +1488,26 @@ bool video_open_proxy(int track_id, const ProxyInfo& proxy) {
 
 void video_close(int track_id) {
     if (track_id == -1) {
-        for (int i = 0; i < MAX_VIDEO_TRACKS; ++i) close_slot(g_pv[i]);
+        for (int i = 0; i < MAX_VIDEO_SLOTS; ++i) close_slot(g_pv[i]);
         if (g_th.tex) { glDeleteTextures(1, &g_th.tex); g_th.tex = 0; }
         g_th.tex_w = g_th.tex_h = 0;
         g_th.last_frame_idx = -1;
-    } else if (track_id >= 0 && track_id < MAX_VIDEO_TRACKS) {
+    } else if (track_id >= 0 && track_id < MAX_VIDEO_SLOTS) {
         close_slot(g_pv[track_id]);
     }
 }
 
 bool      video_is_open(int track_id) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     return g_pv[track_id].is_open;
 }
 VideoInfo video_info(int track_id) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return {};
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return {};
     return g_pv[track_id].info;
 }
 
 void video_set_pixel_fx(int track_id, const PixelFX& fx) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return;
     auto& pv = g_pv[track_id];
     if (pv.pixel_fx == fx) return;
 
@@ -1547,13 +1555,24 @@ static int playhead_to_frame_idx(const PreviewState& pv, double playhead) {
     return -1;
 }
 
+// Public: the proxy frame index a playhead maps to on an open slot — the SAME
+// mapping video_get_texture() uses, but with NO ffprobe fork (it reads the cached
+// proxy rate), so it is safe to call from the render path. The bg-removal brick
+// indexes its per-frame masks with this. Returns -1 if the slot isn't open.
+int video_proxy_frame_idx(int track_id, double playhead) {
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return -1;
+    PreviewState& pv = g_pv[track_id];
+    if (!pv.is_open) return -1;
+    return playhead_to_frame_idx(pv, playhead);
+}
+
 // Forward decls — implementations live further down in the Native section.
 static void      prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame_idx);
 static uintptr_t decode_native_frame      (PreviewState& pv, int frame_idx);
 static int       max_frame_idx_for        (const PreviewState& pv);
 
 bool video_is_gif(int track_id) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     return g_pv[track_id].is_open && g_pv[track_id].gif;
 }
 
@@ -1561,7 +1580,7 @@ bool video_is_gif(int track_id) {
 // stb_image and hold them in the slot. The preview uploads the frame at the
 // playhead — no lossy mp4 conform / MJPEG proxy. Export keeps using libav.
 bool video_open_gif(int track_id, const std::string& path) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return false;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return false;
     PreviewState& pv = g_pv[track_id];
     close_slot(pv);
 
@@ -1600,7 +1619,7 @@ bool video_open_gif(int track_id, const std::string& path) {
 }
 
 uintptr_t video_get_texture(int track_id, double playhead) {
-    if (track_id < 0 || track_id >= MAX_VIDEO_TRACKS) return 0;
+    if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return 0;
     PreviewState& pv = g_pv[track_id];
     if (!pv.is_open) return 0;
 
@@ -1655,7 +1674,7 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
 
     for (int i = 0; i < n; ++i) {
         int t = reqs[i].track_id;
-        if (t < 0 || t >= MAX_VIDEO_TRACKS) continue;
+        if (t < 0 || t >= MAX_VIDEO_SLOTS) continue;
         PreviewState& pv = g_pv[t];
         if (!pv.is_open) continue;
         if (pv.source != PreviewSource::Proxy && pv.source != PreviewSource::Native) continue;
@@ -1813,10 +1832,79 @@ MediaFileInfo video_probe_file(const std::string& path) {
     return info;
 }
 
+// Run ffmpeg to completion (blocking). Returns the exit code, or -1 on spawn
+// failure. argv must be NULL-terminated; argv[0] = "ffmpeg".
+static int run_ffmpeg_blocking(const char** argv) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        (void)nice(10);
+        execvp("ffmpeg", const_cast<char**>(argv));
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+}
+
 std::string video_extract_segment(const std::string& src,
                                   double start_sec, double end_sec,
                                   const std::string& dst,
                                   bool audio_only) {
+    // ── Video segments: re-encode, don't stream-copy ─────────────────────────
+    // A stream copy of a time slice that starts mid-GOP has no leading keyframe,
+    // so the segment is undecodable (the referenced IDR lives outside the slice).
+    // Re-encoding with an input seek decodes from the preceding keyframe and
+    // emits a fresh IDR exactly at start_sec, so the segment always plays. H.264
+    // can't live in a .webm/.ogg container, so we always mux to Matroska
+    // (holds H.264 + copied opus/aac/vorbis audio); callers name the file .mkv.
+    if (!audio_only && video_probe_file(src).has_video) {
+        std::string srcarg = "file:" + src;
+        char ss[32], tt[32];
+        snprintf(ss, sizeof(ss), "%.3f", start_sec < 0.0 ? 0.0 : start_sec);
+        double dur = end_sec - start_sec;
+        std::vector<const char*> args = {
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", ss,
+            "-i", srcarg.c_str(),
+        };
+        // end_sec is sometimes a sentinel (1e9) meaning "to EOF" — only bound
+        // the duration when it's a real, finite span.
+        if (dur > 0.0 && dur < 1e6) {
+            snprintf(tt, sizeof(tt), "%.3f", dur);
+            args.push_back("-t"); args.push_back(tt);
+        }
+        args.push_back("-c:v");     args.push_back("libx264");
+        args.push_back("-crf");     args.push_back("18");
+        args.push_back("-preset");  args.push_back("veryfast");
+        args.push_back("-pix_fmt"); args.push_back("yuv420p");
+        // Re-encode (not copy) the audio: with a fast input -ss seek, copying audio
+        // keeps the source timestamps and anchors the muxer so the video starts at
+        // pts=start_sec instead of 0. Re-encoding resets both streams to zero, so
+        // the segment begins at pts 0 (in_point=0 = first frame, as callers assume).
+        // AAC also muxes cleanly into the downstream conform .mp4 (opus does not).
+        args.push_back("-c:a");     args.push_back("aac");
+        args.push_back("-avoid_negative_ts"); args.push_back("make_zero");
+        args.push_back("-f");       args.push_back("matroska");
+        args.push_back(dst.c_str());
+        args.push_back(nullptr);
+
+        int rc = run_ffmpeg_blocking(args.data());
+        if (rc != 0) {
+            fs::remove(fs::path(dst));   // don't leave a half-written segment cached
+            return "ffmpeg segment re-encode failed (exit " + std::to_string(rc) + ")";
+        }
+        return "";
+    }
+
     AVFormatContext* in_ctx = nullptr;
     const std::string& url2 = src;
     if (avformat_open_input(&in_ctx, url2.c_str(), nullptr, nullptr) < 0)
@@ -2031,14 +2119,22 @@ bool video_open_export(int slot, const std::string& path) {
     const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
     ex.codec_ctx = avcodec_alloc_context3(codec);
     avcodec_parameters_to_context(ex.codec_ctx, st->codecpar);
-    // Multi-threaded decode. Default is 1 thread, which becomes the export
-    // bottleneck the moment a clip has speed > 1 (we then decode N source
-    // frames per output frame, single-threaded). thread_count=0 tells
-    // libavcodec to pick a sensible value based on CPU cores. FF_THREAD_FRAME
-    // scales best for sequential decode — it parallelises across consecutive
-    // frames, which is exactly the access pattern in our export loop.
+    // Multi-threaded decode via SLICE threading only.
+    //
+    // FF_THREAD_FRAME (frame threading) parallelises across consecutive frames,
+    // but its multi-frame output delay does NOT survive our manual
+    // read-packet / drain-frame export loop: at certain GOP / B-frame
+    // boundaries a frame is skipped and never recovered, so
+    // video_decode_frame_at returns null and the caller freezes on the
+    // EOF-hold — the symptom was every clip's tail stuck on one frame in the
+    // exported MP4 (preview, which decodes differently, was fine). Reproduced
+    // down to a standalone harness: frame-threading sticks mid-clip, slice-only
+    // decodes the whole used range correctly. (2026-06-25.)
+    //
+    // FF_THREAD_SLICE parallelises *within* a frame — no reorder delay — so it
+    // stays correct. thread_count=0 lets libavcodec pick based on CPU cores.
     ex.codec_ctx->thread_count = 0;
-    ex.codec_ctx->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
+    ex.codec_ctx->thread_type  = FF_THREAD_SLICE;
     avcodec_open2(ex.codec_ctx, codec, nullptr);
 
     ex.info.width    = ex.codec_ctx->width;
@@ -2197,18 +2293,36 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
     // AVSEEK_FLAG_BACKWARD lands on the keyframe before the target.
     // Decode forward, keeping the last frame whose pts <= seconds.
     // Stop as soon as we decode a frame past the target (we already have the right one).
+    //
+    // Drain-before-send ordering is load-bearing: decoders with an internal
+    // frame delay (dav1d/AV1 — the yt-dlp webm case) return EAGAIN from
+    // avcodec_send_packet while output frames are pending. The old
+    // send-then-drain loop ignored send_packet's return, so on a full decoder
+    // the packet was silently dropped and its frame never emitted — every ~8th
+    // frame on AV1 sources. The export then served the NEXT frame early
+    // (forward jerk), and the following call saw a backward request and did a
+    // full seek+flush re-decode (~40 packets) — a 4 Hz judder plus a big
+    // slowdown, export-only (preview plays all-intra MJPEG proxies, which
+    // have no decode delay). Draining the decoder dry before each read/send
+    // makes EAGAIN impossible and keeps AV1 emission in display order.
     bool done = false;
-    while (!done && av_read_frame(ex.fmt_ctx, pkt) >= 0) {
-        if (pkt->stream_index != ex.stream_idx) { av_packet_unref(pkt); continue; }
-        avcodec_send_packet(ex.codec_ctx, pkt);
-        av_packet_unref(pkt);
+    while (!done) {
         while (!done && avcodec_receive_frame(ex.codec_ctx, frm) == 0) {
             double pts = frm->pts * av_q2d(st->time_base);
             if (pts > seconds + frame_dur * 0.5) {
-                // Overshot — the previous result is already the right frame.
-                // We discard this frame; the decoder's internal queue still holds
-                // any remaining B-frames, so the next sequential call will drain
-                // them before reading more packets from the demuxer.
+                // Overshot the target. Normally the previously kept frame is the
+                // right one and we simply discard this one (the decoder's B-frame
+                // queue still holds any remaining frames for the next sequential
+                // call). But at a clip's FIRST output frame there is no previous
+                // frame: `seconds` is ~0 (in_point 0) and the first decodable
+                // frame of a chunked proxy / container with a non-zero start
+                // offset can carry a pts a hair past the half-frame threshold.
+                // Discarding it left `result` null while last_decoded_pts is still
+                // < 0, so the hold-last-frame fallback below could not fire and the
+                // frame rendered blank — black in export, white in preview: the
+                // black flash at the start of every proxied clip after a cut.
+                // Keep this earliest available frame instead of returning null.
+                if (!result) result = decode_and_rotate(ex, frm);
                 av_frame_unref(frm);
                 done = true;
             } else {
@@ -2220,6 +2334,11 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
                 if (pts >= seconds - frame_dur * 0.5) done = true;
             }
         }
+        if (done) break;
+        if (av_read_frame(ex.fmt_ctx, pkt) < 0) break;  // EOF
+        if (pkt->stream_index != ex.stream_idx) { av_packet_unref(pkt); continue; }
+        avcodec_send_packet(ex.codec_ctx, pkt);  // cannot EAGAIN: decoder just drained
+        av_packet_unref(pkt);
     }
 
     if (result) {
@@ -2268,7 +2387,7 @@ int video_export_width(int slot) {
 void video_preview_dims(int slot, int* w, int* h) {
     if (w) *w = 0;
     if (h) *h = 0;
-    if (slot < 0 || slot >= MAX_VIDEO_TRACKS) return;
+    if (slot < 0 || slot >= MAX_VIDEO_SLOTS) return;
     PreviewState& pv = g_pv[slot];
     int tw = pv.tex_w, th = pv.tex_h;
     if (tw <= 0 || th <= 0) { tw = pv.info.width; th = pv.info.height; }
@@ -2278,130 +2397,6 @@ void video_preview_dims(int slot, int* w, int* h) {
 int video_export_height(int slot) {
     if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return 0;
     return g_ex[slot].info.height;
-}
-
-// ── Export bg-remove mask application ────────────────────────────────────────
-//
-// Reads per-frame grayscale JPEG from bg_masks.mjpeg in the clip's mask dir,
-// blends it into vf's alpha channel.  Cache is static, keyed by mask_dir.
-
-struct ExportMaskCache {
-    std::string           dir;
-    FILE*                 file        = nullptr;
-    std::vector<uint64_t> offsets;     // SOI byte offsets inside bg_masks.mjpeg
-    long                  scanned_sz  = 0;
-};
-static std::vector<ExportMaskCache> s_ex_masks;
-
-static ExportMaskCache* ex_mask_open(const std::string& mdir) {
-    for (auto& m : s_ex_masks)
-        if (m.dir == mdir) return &m;
-
-    ExportMaskCache nm;
-    nm.dir  = mdir;
-    nm.file = fopen((mdir + "/bg_masks.mjpeg").c_str(), "rb");
-    if (!nm.file) return nullptr;
-
-    // Initial scan for SOI markers.
-    fseeko(nm.file, 0, SEEK_END);
-    long fsz = ftell(nm.file);
-    if (fsz > 0) {
-        std::vector<uint8_t> buf((size_t)fsz);
-        fseeko(nm.file, 0, SEEK_SET);
-        size_t got = fread(buf.data(), 1, (size_t)fsz, nm.file);
-        for (size_t i = 0; i + 2 < got; ++i) {
-            if (buf[i] == 0xFF && buf[i+1] == 0xD8 && buf[i+2] == 0xFF)
-                nm.offsets.push_back((uint64_t)i);
-        }
-        nm.scanned_sz = fsz;
-    }
-    s_ex_masks.push_back(std::move(nm));
-    return &s_ex_masks.back();
-}
-
-void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame_idx) {
-    if (!vf || !vf->data || !cl.bg_remove_on || cl.bg_remove_mask_dir.empty()) return;
-    if (mask_frame_idx < 0) return;
-
-    ExportMaskCache* ms = ex_mask_open(cl.bg_remove_mask_dir);
-    if (!ms || !ms->file) return;
-
-    // Incrementally scan for newly appended frames.
-    fseeko(ms->file, 0, SEEK_END);
-    long cur_sz = ftell(ms->file);
-    if (cur_sz > ms->scanned_sz) {
-        long scan_from = ms->scanned_sz > 2 ? ms->scanned_sz - 2 : 0;
-        long to_scan   = cur_sz - scan_from;
-        std::vector<uint8_t> buf((size_t)to_scan);
-        fseeko(ms->file, scan_from, SEEK_SET);
-        size_t got = fread(buf.data(), 1, (size_t)to_scan, ms->file);
-        for (size_t i = 0; i + 2 < got; ++i) {
-            if (buf[i] == 0xFF && buf[i+1] == 0xD8 && buf[i+2] == 0xFF) {
-                long abs = scan_from + (long)i;
-                if (ms->offsets.empty() || abs > (long)ms->offsets.back())
-                    ms->offsets.push_back((uint64_t)abs);
-            }
-        }
-        ms->scanned_sz = cur_sz;
-    }
-
-    if (mask_frame_idx >= (int)ms->offsets.size()) return;
-
-    // Read the JPEG for this frame.
-    uint64_t off     = ms->offsets[(size_t)mask_frame_idx];
-    bool     is_last = ((size_t)mask_frame_idx + 1 >= ms->offsets.size());
-    size_t   fsz     = 0;
-    if (!is_last) {
-        fsz = (size_t)(ms->offsets[(size_t)mask_frame_idx + 1] - off);
-    } else {
-        fseeko(ms->file, 0, SEEK_END);
-        long end = ftell(ms->file);
-        fsz = (end > (long)off) ? (size_t)(end - off) : 0;
-    }
-    if (fsz == 0) return;
-
-    static std::vector<uint8_t> s_mbuf;
-    s_mbuf.resize(fsz);
-    fseeko(ms->file, (off_t)off, SEEK_SET);
-    size_t got = fread(s_mbuf.data(), 1, fsz, ms->file);
-    if (got == 0) return;
-
-    int mw = 0, mh = 0, mc = 0;
-    uint8_t* dec = stbi_load_from_memory(s_mbuf.data(), (int)got, &mw, &mh, &mc, 1);
-    if (!dec) return;
-
-    // Apply bounding-box zeroing if enabled.
-    if (cl.bg_remove_box_on && mw > 0 && mh > 0) {
-        int xl = (int)(cl.bg_remove_box_l * mw);
-        int xr = (int)(cl.bg_remove_box_r * mw);
-        int yt = (int)(cl.bg_remove_box_t * mh);
-        int yb = (int)(cl.bg_remove_box_b * mh);
-        for (int y = 0; y < mh; ++y)
-            for (int x = 0; x < mw; ++x)
-                if (x < xl || x >= xr || y < yt || y >= yb)
-                    dec[(size_t)y * mw + x] = 0;
-    }
-
-    // Apply mask alpha into vf->data.
-    // If mask and frame dimensions differ, scale mask index with nearest-neighbour.
-    int vw = vf->width, vh = vf->height;
-    int n  = vw * vh;
-    for (int i = 0; i < n; ++i) {
-        int fy = i / vw, fx = i % vw;
-        int mx = (mw > 0) ? (int)((float)fx / vw * mw + 0.5f) : 0;
-        int my = (mh > 0) ? (int)((float)fy / vh * mh + 0.5f) : 0;
-        if (mx >= mw) mx = mw - 1;
-        if (my >= mh) my = mh - 1;
-        uint8_t alpha = dec[(size_t)my * mw + mx];
-        // Matte (bg_remove_softness, -1..1): same gamma transform as the preview
-        // (process_jpeg_cpu) — >0 trims tighter, <0 keeps more of the subject.
-        float soft = fmaxf(-1.f, fminf(1.f, cl.bg_remove_softness));
-        float fa = alpha / 255.f;
-        if (soft > 0.001f)       fa = powf(fa, 1.f + soft * 3.f);
-        else if (soft < -0.001f) fa = powf(fa, 1.f / (1.f - soft * 3.f));
-        vf->data[i * 4 + 3] = (uint8_t)(fmaxf(0.f, fminf(1.f, fa)) * 255.f);
-    }
-    stbi_image_free(dec);
 }
 
 void video_apply_datamosh(VideoFrame* vf, float intensity, float time_sec) {
@@ -2439,7 +2434,7 @@ static const int FXP_W = portrait_preview_w;   // 108
 static const int FXP_H = portrait_preview_h;   // 192
 static const int FXP_N = 8;  // number of legacy FXType enum values
 
-struct FXPrev { GLuint tex = 0; bool animated = false; };
+struct FXPrev { GLuint tex = 0; bool animated = false; int src_ver = -1; };
 static std::array<FXPrev, FXP_N> s_fxp;
 static std::vector<uint8_t> s_fxp_src;      // base source image (RGB)
 
@@ -2748,7 +2743,7 @@ static void kenburns_cpu(const unsigned char* src, std::vector<uint8_t>& out,
         }
 }
 
-uintptr_t video_fx_preview_texture(FXType ft, float t) {
+uintptr_t video_fx_preview_texture(FXType ft, float t, bool live) {
     int idx = (int)ft;
 
     // Ken Burns: faked CPU zoom+pan on the still (the real transform happens at
@@ -2829,12 +2824,17 @@ uintptr_t video_fx_preview_texture(FXType ft, float t) {
     if (s_fxp_src.empty()) fxp_make_sources();
 
     FXPrev& pv = s_fxp[idx];
-    bool need = !pv.tex || pv.animated;
+    // Re-render when the texture's gone, the effect animates with t, or — while
+    // this card is hovered (live) — the shared motion source advanced, so a static
+    // filter still loops the moving footage instead of freezing on the frame it was
+    // first drawn on. Non-hovered cards keep one cached representative frame.
+    bool need = !pv.tex || pv.animated || (live && pv.src_ver != s_fxp_motion_cur);
     if (!need) return (uintptr_t)pv.tex;
 
     std::vector<uint8_t> px;
     pv.animated = fxp_cpu_effect(ft, s_fxp_src, px, FXP_W, FXP_H, t, true);
     fxp_upload(pv, px);
+    pv.src_ver = s_fxp_motion_cur;
     return (uintptr_t)pv.tex;
 }
 
@@ -2883,11 +2883,19 @@ static void big_ensure(int w, int h) {
 // holding the resized source for the generated-effect GPU path.
 static uintptr_t s_bigsrc_key_tex = 0;
 static int       s_bigsrc_key_w = 0, s_bigsrc_key_h = 0;
+static int       s_bigsrc_key_ver = -2;
 static std::vector<uint8_t> s_bigsrc_cache;
 
 static bool big_source_prep(uintptr_t src_tex, int w, int h) {
+    // The built-in motion portrait is updated IN PLACE by fxp_motion_advance
+    // (same texture object, new pixels), so its pointer can't signal the change —
+    // fold the motion frame counter into the key for it, so the big popover
+    // re-reads and animates. Any other source (the live clip frame) is static
+    // while hovering, so keep caching it by pointer alone to avoid the per-frame
+    // GPU readback the note below warns about.
+    int ver = (src_tex == (uintptr_t)s_fxp_portrait_gl) ? s_fxp_motion_cur : -1;
     if (src_tex == s_bigsrc_key_tex && w == s_bigsrc_key_w && h == s_bigsrc_key_h &&
-        s_bigsrc_cache.size() == (size_t)w * h * 3)
+        ver == s_bigsrc_key_ver && s_bigsrc_cache.size() == (size_t)w * h * 3)
         return false;  // s_bigsrc_tex + cache already hold this source
     fx_blit(src_tex, s_bigsrc_fbo, w, h);
     s_bigsrc_cache.resize((size_t)w * h * 3);
@@ -2896,6 +2904,7 @@ static bool big_source_prep(uintptr_t src_tex, int w, int h) {
     glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, s_bigsrc_cache.data());
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     s_bigsrc_key_tex = src_tex; s_bigsrc_key_w = w; s_bigsrc_key_h = h;
+    s_bigsrc_key_ver = ver;
     return true;
 }
 
@@ -2984,25 +2993,31 @@ uintptr_t video_adj_preview_big(uintptr_t src_tex, int w, int h,
 // the preset list is static at runtime; we just keep one texture per preset.
 
 static const int ADJ_PREV_MAX = 64;
-struct AdjPrev { int id = -1; GLuint tex = 0; };
+struct AdjPrev { int id = -1; GLuint tex = 0; int src_ver = -1; };
 static std::array<AdjPrev, ADJ_PREV_MAX> s_adj_prev;
 static int s_adj_prev_next = 0;
 
 uintptr_t video_adj_preview_texture(int unique_id,
                                      float brightness, float contrast,
                                      float saturation, float hue,
-                                     float blur, float vignette) {
+                                     float blur, float vignette, bool live) {
     if (s_fxp_src.empty()) fxp_make_sources();
 
-    // Find existing slot
-    for (auto& ap : s_adj_prev) {
-        if (ap.id == unique_id) return (uintptr_t)ap.tex;
+    // Find existing slot. Return its cached texture unless this card is hovered
+    // (live) and the shared motion source advanced — then re-render into the slot
+    // so the grade preview loops the moving footage instead of freezing forever.
+    AdjPrev* slot = nullptr;
+    for (auto& a : s_adj_prev)
+        if (a.id == unique_id) { slot = &a; break; }
+    if (slot && !(live && slot->src_ver != s_fxp_motion_cur))
+        return (uintptr_t)slot->tex;
+    if (!slot) {
+        slot = &s_adj_prev[s_adj_prev_next % ADJ_PREV_MAX];
+        s_adj_prev_next++;
+        slot->id = unique_id;
     }
-
-    // Claim next slot (ring)
-    AdjPrev& ap = s_adj_prev[s_adj_prev_next % ADJ_PREV_MAX];
-    s_adj_prev_next++;
-    ap.id = unique_id;
+    slot->src_ver = s_fxp_motion_cur;
+    AdjPrev& ap = *slot;
 
     std::vector<uint8_t> px = s_fxp_src;
 
@@ -3026,8 +3041,21 @@ uintptr_t video_adj_preview_texture(int unique_id,
         }
     }
 
-    FXPrev tmp;
+    FXPrev tmp; tmp.tex = ap.tex;   // reuse the slot's texture on re-render (no leak)
     fxp_upload(tmp, px);
     ap.tex = tmp.tex;
     return (uintptr_t)ap.tex;
 }
+
+#else
+void video_close(int) {}
+bool video_is_gif(int) { return false; }
+bool video_open_gif(int, const std::string&) { return false; }
+bool video_open_native(int, const std::string&) { return false; }
+bool video_open_proxy(int, const ProxyInfo&) { return false; }
+void video_open_still(int, const std::string&) {}
+float video_probe_duration(const std::string&) { return 0; }
+MediaFileInfo video_probe_file(const std::string&) { return {}; }
+PreviewSource video_source(int) { return PreviewSource::None; }
+std::string video_extract_segment(const std::string&, double, double, const std::string&, bool) { return {}; }
+#endif  // PMS_HAS_FFMPEG

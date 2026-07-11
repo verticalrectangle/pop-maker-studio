@@ -19,6 +19,72 @@ void fx_shader_shutdown();
 // t:     animation time (seconds, e.g. clip-local or absolute playhead).
 // Face-filter warp: bumps = n × {cx, cy, radius, scale, dx, dy} in frame UV.
 // Renders into the slot's FBO and returns its texture (src on no-op).
+// Beauty pass (industry-style): landmark-masked skin smoothing (bilateral-
+// lite), brighten/warmth, and eye pop. Runs BEFORE the warp pass into its own
+// per-slot buffer (never the warp's g_out — same-slot read/write feedback).
+// All geometry is in PIXELS of the w×h texture.
+struct FaceBeautyParams {
+    float smooth   = 0.f;   // 0..1 skin smoothing mix
+    float brighten = 0.f;   // 0..1 soft-light skin lift
+    float warmth   = 0.f;   // 0..1 warm tint on skin
+    float eye_pop  = 0.f;   // 0..1 eye brightening
+    float blush    = 0.f;   // 0..1 cheek makeup
+    float lip_tint = 0.f;   // 0..1 lip color
+    float lip_grad = 1.f;   // bitten-lip gradient amount (0 = full matte)
+    float nose_x = 0, nose_y = 0;   // nose bridge (px)
+    float jaw_shade = 0.f;  // 0..1 under-jaw contour shadow (double-chin recede)
+    float chin_x = 0, chin_y = 0;   // chin tip (px)
+    float chin_smooth = 0.f;        // 0..1 double-chin crease erase
+    float blink_l = 0.f, blink_r = 0.f;  // blendshape blinks — eye makeup fades during a blink
+    float lash = 0.f;       // 0..1 soft lash band on the upper lid
+    float liner = 0.f;      // 0..1 crisp eyeliner line at the lash line
+    float lash_wing = 0.f;  // 0..1 winged tip from the outer corner
+    float eyeoutL_x = 0, eyeoutL_y = 0, eyeoutR_x = 0, eyeoutR_y = 0; // outer corners (px)
+    float lidL[7][2] = {}, lidR[7][2] = {};  // upper-lid chains, outer→inner (px)
+    float nose_blush = 0.f; // 0..1 e-girl across-the-nose blush
+    float freckles  = 0.f;  // 0..1 faux freckles over nose + upper cheeks
+    float blush_col[3] = {1.f, 0.45f, 0.55f};   // makeup colors
+    float lip_col[3]   = {0.95f, 0.25f, 0.35f};
+    float cheekL_x = 0, cheekL_y = 0, cheekR_x = 0, cheekR_y = 0;
+    // Cyber layer: skin recolor / chrome / holo — all masked to skin.
+    float eye_glow = 0.f;   // 0..1 additive colored glow at the eyes
+    float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
+    float skin_tint = 0.f;  // 0..1 colorize skin toward tint_col (luma kept)
+    float tint_col[3] = {0.7f, 0.8f, 1.f};
+    float desat     = 0.f;  // 0..1 desaturate skin
+    float chrome    = 0.f;  // 0..1 metallic contrast curve on skin
+    float scanlines = 0.f;  // 0..1 holo scanlines on skin
+    // mask geometry (pixels)
+    float face_cx = 0, face_cy = 0;     // face ellipse center
+    float face_rx = 1, face_ry = 1;     // semi-axes along right/up basis
+    float upx = 0,  upy = -1;           // face up unit vector
+    float eyeL_x = 0, eyeL_y = 0, eyeR_x = 0, eyeR_y = 0, eye_r = 0;
+    float mouth_x = 0, mouth_y = 0, mouth_r = 0;
+    float mouth_sw = 1, mouth_sh = 1;   // lip ellipse semi-axes (px), face basis
+    float lip_poly[12][2] = {};         // outer-lip ring (px) — follows the smile
+    float brow_r  = 0;                  // exclusion above the eyes
+};
+uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const FaceBeautyParams& p);
+
+// UV-mapped makeup: draws the tracked face mesh (MediaPipe canonical UVs)
+// textured with a makeup PNG, with per-pixel lighting adaptation. pts =
+// landmark pixels in TEXTURE space (>= 468 entries).
+uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const float (*pts)[2], unsigned makeup_tex,
+                            float opacity, float adapt,
+                            float eyeL_x, float eyeL_y, float eyeR_x, float eyeR_y,
+                            float eye_r, float blink_l, float blink_r);
+
+// UV-mapped makeup: draws the tracked face mesh (MediaPipe canonical UVs,
+// 898 tris) textured with a makeup PNG over the frame. pts = 468+ landmark
+// pixels in TEXTURE space. Per-pixel lighting adaptation ties the pigment to
+// the skin under it (luminance + color cast), so authored-neutral textures
+// sit naturally in warm/dim light.
+uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
+                            const float (*pts)[2], unsigned makeup_tex,
+                            float opacity, float adapt);
+
 uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
                           const float* bumps, int n_bumps);
 

@@ -1,7 +1,6 @@
 #include "project.h"
-#include "ui/timeline.h"
+#include "engine_seams.h"
 #include "body_fx.h"
-#include "ui/panel_media.h"  // bin_backfill_from_timeline
 #include <algorithm>
 #include <fstream>
 #include <cstdint>
@@ -12,7 +11,14 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 55u;  // v55: horizontal / vertical content flip (UV mirror)
+static const uint32_t VERSION = 64u;
+extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v64: retro_beauty + insta_2016 + glass_skin generated FX
+
+// Version used to gate the registry-effect read block (generated/fx_project_read.h).
+// Normally the file's format version; project_load decrements it by 1 on a retry
+// to skip an effect introduced at exactly the file's version without a format
+// bump, recovering projects saved just before that effect. Load is single-threaded.
+static uint32_t g_fx_read_version = 0u;
 
 struct Writer {
     std::ofstream f;
@@ -257,6 +263,20 @@ static void write_clip(Writer& w, const Clip& c) {
     // v55: content flip (UV mirror — independent of scale)
     w.pod((uint8_t)c.flip_h);
     w.pod((uint8_t)c.flip_v);
+    // v58: Chroma Melt brick params (colour / threshold / persist)
+    w.pod(c.fx_chroma_melt_r); w.pod(c.fx_chroma_melt_g); w.pod(c.fx_chroma_melt_b);
+    w.pod(c.fx_chroma_melt_threshold); w.pod(c.fx_chroma_melt_persist);
+    // v59: Chroma Echo brick params (colour / threshold / persist)
+    w.pod(c.fx_chroma_echo_r); w.pod(c.fx_chroma_echo_g); w.pod(c.fx_chroma_echo_b);
+    w.pod(c.fx_chroma_echo_threshold); w.pod(c.fx_chroma_echo_persist);
+    // v60: Chroma Frame brick params (colour / threshold / taps / spacing / falloff)
+    w.pod(c.fx_chroma_frame_r); w.pod(c.fx_chroma_frame_g); w.pod(c.fx_chroma_frame_b);
+    w.pod(c.fx_chroma_frame_threshold); w.pod(c.fx_chroma_frame_taps);
+    w.pod(c.fx_chroma_frame_spacing); w.pod(c.fx_chroma_frame_falloff);
+    // v61: record A/V pair id (0 = unpaired)
+    w.pod(c.rec_pair_id);
+    // v62: clip grouping (0 = ungrouped)
+    w.pod(c.group_id);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -518,6 +538,21 @@ static Clip read_clip(Reader& r, uint32_t version) {
         c.flip_h = (bool)r.pod<uint8_t>();
         c.flip_v = (bool)r.pod<uint8_t>();
     }
+    if (version >= 58u) {
+        c.fx_chroma_melt_r = r.pod<float>(); c.fx_chroma_melt_g = r.pod<float>(); c.fx_chroma_melt_b = r.pod<float>();
+        c.fx_chroma_melt_threshold = r.pod<float>(); c.fx_chroma_melt_persist = r.pod<float>();
+    }
+    if (version >= 59u) {
+        c.fx_chroma_echo_r = r.pod<float>(); c.fx_chroma_echo_g = r.pod<float>(); c.fx_chroma_echo_b = r.pod<float>();
+        c.fx_chroma_echo_threshold = r.pod<float>(); c.fx_chroma_echo_persist = r.pod<float>();
+    }
+    if (version >= 60u) {
+        c.fx_chroma_frame_r = r.pod<float>(); c.fx_chroma_frame_g = r.pod<float>(); c.fx_chroma_frame_b = r.pod<float>();
+        c.fx_chroma_frame_threshold = r.pod<float>(); c.fx_chroma_frame_taps = r.pod<float>();
+        c.fx_chroma_frame_spacing = r.pod<float>(); c.fx_chroma_frame_falloff = r.pod<float>();
+    }
+    if (version >= 61u) c.rec_pair_id = r.pod<int>();
+    if (version >= 62u) c.group_id    = r.pod<int>();
     return c;
 }
 
@@ -526,6 +561,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
 static void write_track(Writer& w, const Track& t) {
     w.str(t.name);
     w.pod((uint8_t)t.visible); w.pod((uint8_t)t.muted); w.pod((uint8_t)t.locked); w.pod(t.sub_row);
+    w.pod((uint8_t)t.kind);
+    // v63: track groups (folder rows)
+    w.pod(t.group_children);
+    w.pod((uint8_t)t.group_collapsed);
     uint32_t nc = (uint32_t)t.clips.size();
     w.pod(nc);
     for (auto& c : t.clips) write_clip(w, c);
@@ -538,6 +577,13 @@ static Track read_track(Reader& r, uint32_t version) {
     if (version >= 9u) t.locked = (bool)r.pod<uint8_t>();
     t.sub_row = r.pod<int>();
     if (version >= 42u && version < 47u) (void)r.pod<int>();  // old track.bus — discard
+    if (version >= 57u) t.kind = (TrackKind)r.pod<uint8_t>();
+    else if (t.name == "Lyrics")    t.kind = TrackKind::Lyrics;    // migrate identity by name
+    else if (t.name == "Lyrics FX") t.kind = TrackKind::LyricsFX;
+    if (version >= 63u) {
+        t.group_children  = r.pod<int>();
+        t.group_collapsed = (bool)r.pod<uint8_t>();
+    }
     uint32_t nc = r.pod<uint32_t>();
     for (uint32_t i = 0; i < nc && r.ok; ++i)
         t.clips.push_back(read_clip(r, version));
@@ -653,16 +699,20 @@ bool project_save(const AppState& state, const std::string& path) {
         w.pod(t.bg_pad_x); w.pod(t.bg_pad_y); w.pod(t.bg_corner);
     }
 
+    // v56: karaoke highlight-colour tweak (TF_KaraokeHi override).
+    for (int i = 0; i < 4; ++i) w.pod(state.typo.karaoke_hi[i]);
+
     return w.ok;
 }
 
-bool project_load(AppState& state, const std::string& path) {
+static bool project_load_pass(AppState& state, const std::string& path, int fx_off) {
     Reader r(path);
     if (!r.ok) return false;
 
     uint32_t magic   = r.pod<uint32_t>();
     uint32_t version = r.pod<uint32_t>();
     if (magic != MAGIC || version < 1u || version > VERSION) return false;
+    g_fx_read_version = (uint32_t)((int)version + fx_off);
 
     state = AppState{};
     state.splash_timer = 0.f;
@@ -844,7 +894,35 @@ bool project_load(AppState& state, const std::string& path) {
         t.bg_pad_x = r.pod<float>(); t.bg_pad_y = r.pod<float>(); t.bg_corner = r.pod<float>();
     }
 
+    // v56: karaoke highlight-colour tweak. Older files don't carry it — keep the
+    // default (and TF_KaraokeHi is unset in their bitmask, so it stays inert).
+    if (version >= 56u) {
+        for (int i = 0; i < 4; ++i) state.typo.karaoke_hi[i] = r.pod<float>();
+    }
+
     return r.ok;
+}
+
+std::string project_thumb_path(const std::string& pms_path) {
+    const char* home = std::getenv("HOME");
+    std::string dir = (home ? std::string(home) : std::string("/tmp")) +
+                      "/.config/pop-maker-studio/thumbs";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%016zx", std::hash<std::string>{}(pms_path));
+    return dir + "/" + buf + ".png";
+}
+
+bool project_load(AppState& state, const std::string& path) {
+    // First pass uses the real format version. If it fails, the project was saved
+    // at exactly an effect's add-version that landed without a format bump, so it
+    // is missing that effect's fields — the read over-runs the effect block and
+    // derails. Retry once with the effect-read version decremented by one, which
+    // skips effects whose since_version equals the file version. project_load_pass
+    // resets `state` on entry, so the second pass starts from a clean slate.
+    if (project_load_pass(state, path, 0)) return true;
+    return project_load_pass(state, path, -1);
 }
 
 // ── Collect: produce a self-contained project folder ──────────────────────────

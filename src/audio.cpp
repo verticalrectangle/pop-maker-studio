@@ -1,12 +1,16 @@
 #include "audio.h"
+#include "loudness.h"
 #include "audio_fx.h"
 #ifdef HAVE_PIPEWIRE
 #include "audio_pw.h"
 #endif
 
 extern "C" {
+#include "platform.h"
+#if PMS_HAS_FFMPEG
 #include <libavformat/avformat.h>
 #include <libavutil/mathematics.h>
+#endif
 }
 
 #define MINIAUDIO_IMPLEMENTATION
@@ -65,6 +69,7 @@ static bool              g_duplex_init = false;
 static bool              g_cap_init    = false;  // perf mode active (either backend)
 static bool              g_perf_pw     = false;  // native PipeWire backend in use
 static std::atomic<bool> g_monitor_on{false};
+static std::atomic<bool> g_vmic_on{false};
 
 // Monitor ring — SPSC: input block pushes the gated mic, output block drains
 // it into the mix. On the miniaudio duplex backend both happen in the SAME
@@ -84,6 +89,28 @@ static constexpr uint32_t CAP_N    = 1u << 21;
 static constexpr uint32_t CAP_MASK = CAP_N - 1;
 static float                 g_cap_ring[CAP_N];
 static std::atomic<uint32_t> g_cap_w{0}, g_cap_r{0};
+
+// Injected-capture ring — SPSC: an EXTERNAL capture thread writes
+// (audio_capture_push — the iOS mic path), audio_capture_drain reads. It is a
+// separate ring from g_cap_ring because that ring's producer is the duplex
+// audio callback; two producers on one SPSC ring would race. 2^18 floats =
+// 131072 stereo frames ≈ 2.97 s @ 44.1k — plenty for a per-frame drain.
+// Overflow: REJECT NEWEST — post-resample frames that don't fit are dropped
+// and counted (same don't-overwrite-unread policy as the native ring).
+// Pure memory: works in PMS_HEADLESS builds with no device and no PipeWire.
+static constexpr uint32_t INJ_N    = 1u << 18;
+static constexpr uint32_t INJ_MASK = INJ_N - 1;
+static float                 g_inj_ring[INJ_N];
+static std::atomic<uint32_t> g_inj_w{0}, g_inj_r{0};
+static std::atomic<uint64_t> g_inj_frames{0};   // post-resample frames accepted
+static std::atomic<uint64_t> g_inj_dropped{0};  // post-resample frames rejected
+// Linear-resampler carry (producer thread only): fractional source position
+// past the last frame of the previous push, plus that frame for interpolation
+// continuity across block boundaries.
+static double g_inj_phase    = 0.0;
+static float  g_inj_prev_l   = 0.f, g_inj_prev_r = 0.f;
+static bool   g_inj_has_prev = false;
+static double g_inj_rate     = 0.0;  // rate change ⇒ reset the carry
 // Live input peak (0–1) of the most recent capture buffer — for a mic meter
 // while monitoring, independent of whether anything is recording.
 static std::atomic<float>    g_in_peak{0.f};
@@ -401,10 +428,17 @@ static void apply_fade_in(float* out, ma_uint32 frameCount) {
 }
 
 // Normal mode: playback-only device, mix only.
+// Master meter: fed the FINAL post-clamp/post-fade buffer of every output
+// callback — exactly what reaches the device. Integrated resets on play.
+static LoudnessMeter g_master_meter;
+LoudnessSnapshot audio_master_meter() { return g_master_meter.snapshot(); }
+
 static void data_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
     float* out = (float*)pOutput;
     mix_master(out, frameCount);
     apply_fade_in(out, frameCount);
+    if (g_transport.load(std::memory_order_relaxed))
+        g_master_meter.process(out, frameCount);
 }
 
 // Performance-mode input: gate the live mic, push the gated signal to the
@@ -416,6 +450,14 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
     const bool gate = g_gate_on.load(std::memory_order_relaxed);
     const bool bake = g_gate_bake.load(std::memory_order_relaxed);
     const bool mon  = g_monitor_on.load(std::memory_order_relaxed);
+#ifdef HAVE_PIPEWIRE
+    const bool vmic = g_vmic_on.load(std::memory_order_relaxed);
+#else
+    const bool vmic = false;
+#endif
+    // Virtual-mic block staging (stack, no allocation on the audio thread).
+    float vm_buf[512 * 2];
+    uint32_t vm_fill = 0;
     // Windowed monitoring: run the FX through the same windowed processor
     // playback/export use, gated on the LIVE playhead — so the monitor follows
     // each brick's span whether you're recording, playing, or just scrubbing.
@@ -442,7 +484,7 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
         float coeff = open > g_gate_gain ? (1.f - GATE_ATTACK) : (1.f - GATE_RELEASE);
         g_gate_gain += coeff * (open - g_gate_gain);
         float gg = gate ? g_gate_gain : 1.f;
-        if (mon && (mw - mr) < MONR_N - 2) {
+        if ((mon || vmic) && (mw - mr) < MONR_N - 2) {
             float ml = l * gg, mr2 = r2 * gg;
             if (fxc) {
                 if (win_mon) {
@@ -454,8 +496,22 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
                 }
                 ++g_mon_frame_ctr;
             }
-            g_monr[mw++ & MONR_MASK] = ml;
-            g_monr[mw++ & MONR_MASK] = mr2;
+            // Local monitor ring only when the user wants to hear themself —
+            // the virtual mic works with local monitoring off (calls).
+            if (mon) {
+                g_monr[mw++ & MONR_MASK] = ml;
+                g_monr[mw++ & MONR_MASK] = mr2;
+            }
+#ifdef HAVE_PIPEWIRE
+            if (vmic) {
+                vm_buf[vm_fill*2]   = ml;
+                vm_buf[vm_fill*2+1] = mr2;
+                if (++vm_fill == 512) {
+                    audio_pw_vmic_push(vm_buf, vm_fill);
+                    vm_fill = 0;
+                }
+            }
+#endif
         }
         // Recorded stream: raw by default; gated only when bake is on.
         float cl = bake ? l * gg : l, cr2 = bake ? r2 * gg : r2;
@@ -467,6 +523,9 @@ static void perf_input_block(const float* in, uint32_t frameCount) {
     g_cap_w.store(cw, std::memory_order_release);
     g_in_peak.store(in_pk, std::memory_order_relaxed);
     g_monr_w.store(mw, std::memory_order_release);
+#ifdef HAVE_PIPEWIRE
+    if (vm_fill) audio_pw_vmic_push(vm_buf, vm_fill);
+#endif
 }
 
 // Performance-mode output: timeline mix + drain the monitor ring on top.
@@ -497,6 +556,8 @@ static void perf_output_block(float* out, uint32_t frameCount) {
             out[i] = fmaxf(-1.f, fminf(1.f, out[i]));
     }
     apply_fade_in(out, frameCount);
+    if (g_transport.load(std::memory_order_relaxed))
+        g_master_meter.process(out, frameCount);
 }
 
 // miniaudio duplex backend (fallback when PipeWire isn't available): input
@@ -548,6 +609,7 @@ bool audio_load(const std::string& path) {
     g_loading.store(true);
 
     // Probe container duration synchronously (fast — header only).
+#if PMS_HAS_FFMPEG
     {
         AVFormatContext* fc = nullptr;
         if (avformat_open_input(&fc, path.c_str(), nullptr, nullptr) == 0) {
@@ -556,6 +618,7 @@ bool audio_load(const std::string& path) {
             avformat_close_input(&fc);
         }
     }
+#endif
 
     std::thread([path]() {
         static const char* TMP = "/tmp/pms_audio_decode.raw";
@@ -599,6 +662,8 @@ bool audio_load(const std::string& path) {
 }
 
 void audio_play() {
+    // Fresh integrated-LUFS measurement per listen-through.
+    g_master_meter.reset(44100.f);
     g_transport.store(true, std::memory_order_relaxed);
     if (g_cap_init) {
         // Perf mode: the duplex device owns the output and is already running.
@@ -719,6 +784,26 @@ std::string audio_capture_pulse_source(int index) {
     return std::string(g_cap_dev_ids[(size_t)index].pulse);  // pulse name == pw node name
 }
 
+bool audio_vmic_set(bool on) {
+#ifdef HAVE_PIPEWIRE
+    if (on) {
+        if (!audio_pw_vmic_start()) return false;
+        g_vmic_on.store(true, std::memory_order_relaxed);
+        audio_capture_start();          // mic must flow for the source to speak
+        return true;
+    }
+    g_vmic_on.store(false, std::memory_order_relaxed);
+    audio_pw_vmic_stop();
+    // Capture keep-alive is the recorder's decision (it also considers
+    // monitoring/recording); it stops the device on its next tick if idle.
+    return true;
+#else
+    (void)on;
+    return false;                        // no PipeWire on this system
+#endif
+}
+bool audio_vmic_get() { return g_vmic_on.load(std::memory_order_relaxed); }
+
 void audio_monitor_set(bool on) {
     // Monitoring needs the duplex device — enter performance mode if the
     // caller hasn't already (panel does, IPC paths may not).
@@ -820,14 +905,97 @@ float audio_input_peak() {
     return g_cap_init ? g_in_peak.load(std::memory_order_relaxed) : 0.f;
 }
 
+// External-capture injection: copy + (if needed) linear-resample the block
+// into the injected SPSC ring. Runs on the pushing capture thread — never the
+// render callback — so resampling here is fine. No allocation, no locks.
+// Overflow = reject newest: frames that don't fit are dropped and counted.
+void audio_capture_push(const float* in, size_t frames, double sample_rate) {
+    if (!in || frames == 0 || !(sample_rate > 0.0)) return;
+
+    uint32_t       w = g_inj_w.load(std::memory_order_relaxed);
+    const uint32_t r = g_inj_r.load(std::memory_order_acquire);
+    uint64_t accepted = 0, dropped = 0;
+    auto emit = [&](float l, float rr) {
+        if ((uint32_t)(w - r) < INJ_N - 2) {
+            g_inj_ring[w++ & INJ_MASK] = l;
+            g_inj_ring[w++ & INJ_MASK] = rr;
+            ++accepted;
+        } else {
+            ++dropped;  // reject newest — never overwrite undrained audio
+        }
+    };
+
+    if (sample_rate == 44100.0) {
+        for (size_t f = 0; f < frames; ++f) emit(in[f*2], in[f*2+1]);
+        g_inj_has_prev = false;  // rate matches: no resampler carry
+        g_inj_phase    = 0.0;
+        g_inj_rate     = sample_rate;
+    } else {
+        if (sample_rate != g_inj_rate) {  // stream (re)start or rate change
+            g_inj_has_prev = false;
+            g_inj_phase    = 0.0;
+            g_inj_rate     = sample_rate;
+        }
+        // Virtual source stream = [prev frame?] + this block; fractional
+        // position p advances by src/dst rate per output sample and carries
+        // across pushes so block boundaries stay continuous.
+        const double step = sample_rate / 44100.0;
+        const size_t off  = g_inj_has_prev ? 1 : 0;
+        const size_t M    = frames + off;                 // source frames avail
+        auto s_l = [&](size_t i) { return (off && i == 0) ? g_inj_prev_l : in[(i - off) * 2]; };
+        auto s_r = [&](size_t i) { return (off && i == 0) ? g_inj_prev_r : in[(i - off) * 2 + 1]; };
+        const double last = (double)(M - 1);
+        double p = g_inj_phase;
+        while (p <= last) {
+            const size_t i    = (size_t)p;
+            const double frac = p - (double)i;
+            float l, rr;
+            if (i + 1 < M) {
+                l  = (float)(s_l(i) + frac * (s_l(i + 1) - s_l(i)));
+                rr = (float)(s_r(i) + frac * (s_r(i + 1) - s_r(i)));
+            } else {  // p == last exactly: frac 0, no right neighbor needed
+                l = s_l(i); rr = s_r(i);
+            }
+            emit(l, rr);
+            p += step;
+        }
+        g_inj_phase    = p - last;  // ∈ (0, step] past the last source frame
+        g_inj_prev_l   = in[(frames - 1) * 2];
+        g_inj_prev_r   = in[(frames - 1) * 2 + 1];
+        g_inj_has_prev = true;
+    }
+
+    g_inj_w.store(w, std::memory_order_release);
+    if (accepted) g_inj_frames.fetch_add(accepted, std::memory_order_relaxed);
+    if (dropped)  g_inj_dropped.fetch_add(dropped, std::memory_order_relaxed);
+}
+
+uint64_t audio_capture_injected_frames() { return g_inj_frames.load(std::memory_order_relaxed); }
+uint64_t audio_capture_dropped_frames()  { return g_inj_dropped.load(std::memory_order_relaxed); }
+
 void audio_capture_drain(std::vector<float>& out) {
-    const uint32_t w = g_cap_w.load(std::memory_order_acquire);
-    uint32_t       r = g_cap_r.load(std::memory_order_relaxed);
-    size_t n = (size_t)(w - r);
-    if (n == 0) return;
-    out.reserve(out.size() + n);
-    while (r != w) out.push_back(g_cap_ring[r++ & CAP_MASK]);
-    g_cap_r.store(r, std::memory_order_release);
+    // Native device capture (duplex callback producer).
+    {
+        const uint32_t w = g_cap_w.load(std::memory_order_acquire);
+        uint32_t       r = g_cap_r.load(std::memory_order_relaxed);
+        if (r != w) {
+            out.reserve(out.size() + (size_t)(w - r));
+            while (r != w) out.push_back(g_cap_ring[r++ & CAP_MASK]);
+            g_cap_r.store(r, std::memory_order_release);
+        }
+    }
+    // Injected capture (audio_capture_push producer) drains through the same
+    // contract. In practice only one source is live at a time (iOS injects,
+    // desktop uses the device), so appending both is unambiguous.
+    {
+        const uint32_t w = g_inj_w.load(std::memory_order_acquire);
+        uint32_t       r = g_inj_r.load(std::memory_order_relaxed);
+        if (r != w) {
+            out.reserve(out.size() + (size_t)(w - r));
+            while (r != w) out.push_back(g_inj_ring[r++ & INJ_MASK]);
+            g_inj_r.store(r, std::memory_order_release);
+        }
+    }
 }
 
 float audio_capture_latency() {
@@ -886,6 +1054,9 @@ bool audio_monitor_chain_active() {
 }
 
 bool audio_probe(const std::string& path, AudioMeta& meta) {
+#if !PMS_HAS_FFMPEG
+    (void)path; (void)meta; return false;   // AVFoundation probe = Phase 4
+#else
     AVFormatContext* fmt_ctx = nullptr;
     if (avformat_open_input(&fmt_ctx, path.c_str(), nullptr, nullptr) < 0) return false;
     if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
@@ -906,6 +1077,7 @@ bool audio_probe(const std::string& path, AudioMeta& meta) {
     }
     avformat_close_input(&fmt_ctx);
     return true;
+#endif
 }
 
 // ── Clip-based audio ──────────────────────────────────────────────────────────

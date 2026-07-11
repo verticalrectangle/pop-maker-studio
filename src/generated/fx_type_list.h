@@ -106,5 +106,21 @@ static const FXType k_gen_fx_types[] = {
     FXType::GlowUp,
     FXType::CamShake,
     FXType::GreenScreen,
+    FXType::RetroBeauty,
+    FXType::Insta2016,
+    FXType::GlassSkin,
+    FXType::PorcelainSkin,
+    FXType::BlushDoll,
+    FXType::HoneyGlow,
+    FXType::SoftGlam,
+    FXType::AcidTrip,
+    FXType::LiquidMarble,
+    FXType::FractalMirror,
+    FXType::BreatheWarp,
+    FXType::MeltDrip,
+    FXType::NeonCity,
+    FXType::ChromePulse,
+    FXType::HudGlitch,
+    FXType::NightDrive,
 };
-static const int k_gen_fx_count = 106;
+static const int k_gen_fx_count = 122;

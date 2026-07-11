@@ -1,6 +1,8 @@
+#include "platform.h"
 #include "scene_detect.h"
 #include "stb_image_write.h"
 
+#if PMS_HAS_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -265,3 +267,8 @@ std::vector<KeyFrame> extract_frames_at(const std::string& video_path,
     avformat_close_input(&fmt_ctx);
     return out;
 }
+
+#else
+std::vector<KeyFrame> extract_keyframes(const std::string&, int, bool*) { return {}; }
+std::vector<KeyFrame> extract_frames_at(const std::string&, const std::vector<float>&) { return {}; }
+#endif  // PMS_HAS_FFMPEG

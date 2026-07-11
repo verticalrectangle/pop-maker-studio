@@ -18,6 +18,12 @@ void ipc_server_stop();
 // ImGui::NewFrame() so injected events land after the backend's own.
 void ipc_debug_input_tick();
 
+// The lever chokepoint, socket-free: parse one JSON request
+// ({"id","method","params"}), dispatch, return the JSON reply. This is what
+// the pms_engine C ABI and the headless test target call; the socket server
+// is a thin wrapper over the same dispatch.
+std::string engine_command(AppState& state, const std::string& json_request);
+
 // Live scene-analysis (describe_video) progress for the canvas banner. Returns
 // true while a run is active; fills the counts (any pointer may be null).
 bool scene_analysis_progress(int* vid_idx, int* vid_total, int* frame_idx, int* frame_total);

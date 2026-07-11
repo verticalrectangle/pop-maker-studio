@@ -1,4 +1,5 @@
 #include "vc_job.h"
+#include "platform.h"
 #include "vc_onnx.h"
 #include "rmvpe_onnx.h"
 #include "rvc_onnx.h"
@@ -96,7 +97,7 @@ static void run_job(std::shared_ptr<VcJobData> data,
     std::string dec_cmd = "ffmpeg -hide_banner -loglevel error -y"
                           " -i \"" + source_path + "\""
                           " -vn -ar 44100 -ac 1 \"" + wav_in + "\" 2>/dev/null";
-    if (system(dec_cmd.c_str()) != 0 || !fs::exists(wav_in)) {  // NOLINT
+    if (pms_system(dec_cmd.c_str()) != 0 || !fs::exists(wav_in)) {  // NOLINT
         set_err("Failed to decode source audio");
         return;
     }

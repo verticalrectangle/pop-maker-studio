@@ -211,6 +211,128 @@ static float first_energy_onset(const std::vector<float>& a, float t0, float t1)
     return t0;
 }
 
+// Return the sample sub-ranges of [s0,s1) to KEEP after excising sustained
+// silence. Whisper collapses instrumental gaps in its word timestamps — it jams
+// a sung line against the previous phrase, on the wrong side of a real gap — so
+// CTC windows built from those times mis-place words (a word balloons across the
+// gap, or a whole line scrunches / lands seconds early). The cure is to remove
+// the gaps from the audio the aligner sees: detect each sustained low-energy run
+// (>= MIN_SIL) and drop its interior, keeping a PAD of audio at each edge so word
+// onsets/releases aren't clipped. The caller concatenates the kept ranges, aligns
+// that, and maps frames back through the ranges — so each word lands in real time
+// on the correct side of every gap and the silence reappears as a real gap
+// between words. With no sustained silence the result is a single [s0,s1) range,
+// identical to the old contiguous slice (so clean segments are unaffected).
+// Threshold is RELATIVE to the segment's own peak (8%) and only fires on runs
+// >=0.40 s — quiet-but-continuous singing stays (it is not 0.40 s of near-silence),
+// so this is NOT the stem-gating that zeroed soft vocals in the reverted fc56525.
+static std::vector<std::pair<int,int>> active_ranges(
+    const std::vector<float>& a, int s0, int s1) {
+    std::vector<std::pair<int,int>> ranges;
+    const int FRAME   = (int)(0.02 * SAMPLE_RATE);   // 20 ms
+    const int MIN_SIL = (int)(0.40 * SAMPLE_RATE);   // drop silence runs >= 0.40 s
+    const int PAD     = (int)(0.10 * SAMPLE_RATE);   // keep 0.10 s at each gap edge
+    if (s1 - s0 < FRAME * 4) { ranges.push_back({s0, s1}); return ranges; }
+
+    int nf = (s1 - s0) / FRAME;
+    std::vector<float> rms(nf);
+    float peak = 0.f;
+    for (int i = 0; i < nf; ++i) {
+        float e = 0.f; const float* p = a.data() + s0 + (size_t)i * FRAME;
+        for (int j = 0; j < FRAME; ++j) e += p[j] * p[j];
+        rms[i] = std::sqrt(e / (float)FRAME);
+        peak = std::max(peak, rms[i]);
+    }
+    if (peak <= 1e-6f) { ranges.push_back({s0, s1}); return ranges; }
+    const float thr = peak * 0.08f;
+
+    std::vector<std::pair<int,int>> drop;            // [lo,hi) sample ranges to remove
+    for (int i = 0; i < nf; ) {
+        if (rms[i] >= thr) { ++i; continue; }
+        int g0 = i;
+        while (i < nf && rms[i] < thr) ++i;
+        int sil_lo = s0 + g0 * FRAME, sil_hi = s0 + i * FRAME;
+        if (sil_hi - sil_lo >= MIN_SIL) {
+            int lo = sil_lo + PAD, hi = sil_hi - PAD;
+            if (hi - lo >= FRAME) drop.push_back({lo, hi});
+        }
+    }
+
+    int cur = s0;
+    for (auto& d : drop) {
+        if (d.first > cur) ranges.push_back({cur, d.first});
+        cur = d.second;
+    }
+    if (cur < s1) ranges.push_back({cur, s1});
+    if (ranges.empty()) ranges.push_back({s0, s1});
+    return ranges;
+}
+
+// Find the first sustained silence run (>=0.40 s) that STARTS within
+// [from, from+max_look]. Returns {gap_start, gap_end} seconds, or {-1,-1}. The
+// threshold is relative to the vocal level just before `from`, so it measures
+// "silence relative to what was being sung here." Used to relocate a whisper
+// segment boundary that landed inside a held note (see the boundary-snap below).
+static std::pair<float,float> find_gap_after(const std::vector<float>& a,
+                                             float from_t, float max_look) {
+    const int FRAME = (int)(0.02 * SAMPLE_RATE);
+    auto rms_at = [&](float t) -> float {
+        int s = (int)(t * SAMPLE_RATE);
+        if (s < 0 || s + FRAME > (int)a.size()) return 0.f;
+        float e = 0.f; for (int j = 0; j < FRAME; ++j) e += a[s+j]*a[s+j];
+        return std::sqrt(e / (float)FRAME);
+    };
+    float ref = 0.f;
+    for (float t = std::max(0.f, from_t - 0.30f); t < from_t; t += 0.02f) ref = std::max(ref, rms_at(t));
+    if (ref < 1e-4f) return {-1.f, -1.f};
+    const float thr   = ref * 0.15f;
+    const float limit = from_t + max_look;
+    for (float t = from_t; t < limit; t += 0.02f) {
+        if (rms_at(t) >= thr) continue;
+        float g0 = t, tt = t;
+        while (tt < from_t + max_look + 8.0f && rms_at(tt) < thr) tt += 0.02f;
+        if (tt - g0 >= 0.40f) return {g0, tt};
+        t = tt;
+    }
+    return {-1.f, -1.f};
+}
+
+// Whisper often ends a segment at the consonant of the last sung word and drops
+// the long held vowel / melisma after it — that becomes an orphaned blob of vocal
+// energy with no word on it, and the line scrunches against the short window end
+// (e.g. "...I could see them" packed into ~1 s while "them" is actually held to
+// ~146 s). If strong vocal energy continues right past the window end, push the
+// end forward through it — stopping when the note releases (energy drops for
+// >=0.20 s) or at `cap` (the next segment's start). The CTC's trailing-blank
+// attribution then lets the final word stretch across the held note. Only fires
+// when the energy JUST PAST t1 is still near the in-segment level (a genuine held
+// note, not a normal word release), so ordinary segment ends are untouched.
+static float held_tail_extend(const std::vector<float>& a,
+                              float t0, float t1, float cap) {
+    if (cap <= t1 + 0.10f) return t1;
+    const int FRAME = (int)(0.02 * SAMPLE_RATE);
+    auto rms_at = [&](float t) -> float {
+        int s = (int)(t * SAMPLE_RATE);
+        if (s < 0 || s + FRAME > (int)a.size()) return 0.f;
+        float e = 0.f; for (int j = 0; j < FRAME; ++j) e += a[s+j]*a[s+j];
+        return std::sqrt(e / (float)FRAME);
+    };
+    float ref = 0.f;                                   // in-segment level: peak of last ~1 s
+    for (float t = std::max(t0, t1 - 1.0f); t < t1; t += 0.02f) ref = std::max(ref, rms_at(t));
+    if (ref < 1e-4f) return t1;
+    float just = 0.f;                                  // energy immediately past the boundary
+    for (float t = t1; t < t1 + 0.20f; t += 0.02f) just = std::max(just, rms_at(t));
+    if (just < 0.65f * ref) return t1;                 // not a held note — leave it
+
+    const float thr = 0.60f * ref;
+    float end = t1, low = 0.f;
+    for (float t = t1; t < cap; t += 0.02f) {
+        if (rms_at(t) >= thr) { end = t; low = 0.f; }
+        else { low += 0.02f; if (low >= 0.20f) break; }
+    }
+    return std::min(end + 0.05f, cap);
+}
+
 std::vector<WordEntry> forced_align(
     const std::vector<float>&               audio16k,
     const std::vector<WordEntry>&           whisper_words,
@@ -243,7 +365,7 @@ std::vector<WordEntry> forced_align(
     // ── Build segment list ────────────────────────────────────────────────────
     // Each segment: word range [w0, w1] (inclusive) and audio window [t0, t1].
 
-    struct Seg { int w0, w1; float t0, t1; };
+    struct Seg { int w0, w1; float t0, t1; bool held = false; };
     std::vector<Seg> segs;
 
     if (!seg_bounds.empty()) {
@@ -302,18 +424,66 @@ std::vector<WordEntry> forced_align(
             whisper_words[N-1].end});
     }
 
+    // Boundary-snap: whisper sometimes ends a segment INSIDE a held note (the
+    // last word's sustained vowel keeps going past the boundary) and starts the
+    // next segment right there — so the held tail becomes the next window's
+    // leading audio and its first word aligns onto it (e.g. first bridge: "Lay
+    // on" landed at 85.8, on the held tail of "market", instead of after the
+    // gap at 90). When two segments are back-to-back, vocal is continuous across
+    // the boundary, and a real silence starts shortly after, move the boundary
+    // INTO that silence: the previous segment keeps its held tail up to the gap,
+    // the next one starts after it. (remove-silence can't fix this — the tail is
+    // vocal; held_tail_extend can't — the next segment leaves it no room.)
+    for (size_t i = 0; i + 1 < segs.size(); ++i) {
+        if (segs[i+1].t0 - segs[i].t1 > 0.30f) continue;          // real gap already at boundary
+        auto [g0, g1] = find_gap_after(audio16k, segs[i+1].t0, 1.0f);
+        if (g0 < 0.f || g0 < segs[i+1].t0 + 0.15f) continue;      // need an active held tail first
+        if (g1 >= segs[i+1].t1 - 0.20f) continue;                 // must leave audio for the next seg
+        if (getenv("PMS_FA_DEBUG"))
+            fprintf(stderr, "[FA] BOUNDSNAP w[%d..%d]|w[%d..%d] boundary %.2f -> tail %.2f / next %.2f\n",
+                    segs[i].w0, segs[i].w1, segs[i+1].w0, segs[i+1].w1,
+                    segs[i+1].t0, g0, g1);
+        segs[i].t1   = g0;
+        segs[i+1].t0 = g1;
+    }
+
+    // Extend each window's end through a held final note (see held_tail_extend),
+    // capped at the next segment's start so we never reach into the next phrase.
+    for (size_t i = 0; i < segs.size(); ++i) {
+        float cap = (i + 1 < segs.size()) ? segs[i+1].t0 - 0.10f
+                                          : (float)audio16k.size() / SAMPLE_RATE;
+        float ne = held_tail_extend(audio16k, segs[i].t0, segs[i].t1, cap);
+        if (ne > segs[i].t1 + 0.10f) {
+            if (getenv("PMS_FA_DEBUG"))
+                fprintf(stderr, "[FA] HELDTAIL seg w[%d..%d] '..%s' t1 %.2f -> %.2f\n",
+                        segs[i].w0, segs[i].w1, whisper_words[segs[i].w1].text.c_str(),
+                        segs[i].t1, ne);
+            segs[i].t1   = ne;
+            segs[i].held = true;
+        }
+    }
+
     // ── Per-segment alignment ─────────────────────────────────────────────────
 
     std::vector<WordEntry> result(whisper_words);
     std::vector<bool>      aligned(N, false);
 
     for (auto& seg : segs) {
-        // Exact audio window — no extra padding
         int s0 = (int)(seg.t0 * SAMPLE_RATE);
         int s1 = std::min((int)(seg.t1 * SAMPLE_RATE), (int)audio16k.size());
         if (s1 <= s0) continue;
 
-        std::vector<float> chunk(audio16k.begin() + s0, audio16k.begin() + s1);
+        // Excise sustained instrumental gaps so the CTC only ever aligns real
+        // vocals (no gap for a word to balloon across or scrunch before); frames
+        // map back through the kept ranges into real time, so gaps reappear
+        // between the words that straddle them. With no gaps this is the plain
+        // contiguous window. Concatenate the kept audio into the chunk we align.
+        auto ranges = active_ranges(audio16k, s0, s1);
+        std::vector<float> chunk;
+        size_t kept = 0; for (auto& r : ranges) kept += (size_t)(r.second - r.first);
+        chunk.reserve(std::max((size_t)WAV2VEC2_MIN, kept));
+        for (auto& r : ranges)
+            chunk.insert(chunk.end(), audio16k.begin() + r.first, audio16k.begin() + r.second);
 
         // Pad to wav2vec2 minimum (400 samples = 25 ms at 16 kHz)
         if ((int)chunk.size() < WAV2VEC2_MIN)
@@ -354,8 +524,21 @@ std::vector<WordEntry> forced_align(
         std::vector<float> lp(raw, raw + (size_t)T * V);
         for (int t = 0; t < T; ++t) log_softmax_row(lp.data() + (size_t)t * V, V);
 
-        // seconds per output frame — maps frame index → time offset from seg.t0
-        double ratio = (seg.t1 - seg.t0) / T;
+        // Map a CTC frame (chunk space) back to REAL time by walking the kept
+        // ranges: frame f → chunk sample f·CN/T → the real-audio sample it came
+        // from. A word whose chars sit in two different ranges spans the excised
+        // gap, so its real start/end land on opposite sides of the true silence.
+        auto frame_to_time = [&](double f) -> float {
+            double c = f * (double)CN / (double)T;
+            double acc = 0.0;
+            for (auto& r : ranges) {
+                double len = (double)(r.second - r.first);
+                if (c < acc + len)
+                    return (float)((r.first + (c - acc)) / (double)SAMPLE_RATE);
+                acc += len;
+            }
+            return (float)(ranges.back().second / (double)SAMPLE_RATE);
+        };
 
         // Build character target; record each word's char index range
         std::vector<int> target;
@@ -381,32 +564,35 @@ std::vector<WordEntry> forced_align(
         if (path.empty()) continue;
         auto csegs = merge_repeats(path, (int)target.size());
 
+        if (getenv("PMS_FA_DEBUG") && ranges.size() > 1)
+            fprintf(stderr, "[FA] seg w[%d..%d] '%s..' excised %d gap(s) over [%.2f,%.2f]\n",
+                    seg.w0, seg.w1, whisper_words[seg.w0].text.c_str(),
+                    (int)ranges.size() - 1, seg.t0, seg.t1);
+
         // Extract word timestamps from character spans:
         //   word.start = min char start,  word.end = max char end
-        //   word.score = mean char score
         for (int k = 0; k < (int)wranges.size(); ++k) {
             auto& r = wranges[k];
             if (r.ci0 > r.ci1) continue;   // no vocab-mapped chars → NaN, interpolate later
 
-            int   fmin  = csegs[r.ci0].start;
-            int   fmax  = csegs[r.ci0].end;
-            float score = 0.f;
+            int fmin = csegs[r.ci0].start;
+            int fmax = csegs[r.ci0].end;
             for (int ci = r.ci0; ci <= r.ci1; ++ci) {
-                fmin  = std::min(fmin,  csegs[ci].start);
-                fmax  = std::max(fmax,  csegs[ci].end);
-                score += csegs[ci].score;
+                fmin = std::min(fmin, csegs[ci].start);
+                fmax = std::max(fmax, csegs[ci].end);
             }
-            score /= (float)(r.ci1 - r.ci0 + 1);
 
-            float t0_abs = snap((float)(seg.t0 + fmin * ratio));
-            float t1_abs = snap((float)(seg.t0 + fmax * ratio));
-
-            result[seg.w0 + k].start = t0_abs;
-            result[seg.w0 + k].end   = t1_abs;
+            result[seg.w0 + k].start = snap(frame_to_time(fmin));
+            result[seg.w0 + k].end   = snap(frame_to_time(fmax));
             aligned[seg.w0 + k]      = true;
-
-            (void)score;  // available for future score-gating if needed
         }
+
+        // Held final note: the CTC ends the last word on its consonant, but the
+        // sustained vowel we extended the window through (held_tail_extend) IS
+        // that word still being sung — stretch its end across the held note so it
+        // doesn't flash for a fraction of a second over seconds of held vocal.
+        if (seg.held && aligned[seg.w1])
+            result[seg.w1].end = std::max(result[seg.w1].end, snap(seg.t1));
     }
 
     // ── NaN interpolation (method=nearest) ────────────────────────────────────

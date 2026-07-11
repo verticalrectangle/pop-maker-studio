@@ -3,6 +3,9 @@
 #include <string>
 
 bool project_save(const AppState& state, const std::string& path);
+// Where the home screen's card thumbnail for this .pms lives
+// (~/.config/pop-maker-studio/thumbs/<hash>.png). Stable per path.
+std::string project_thumb_path(const std::string& pms_path);
 bool project_load(AppState& state, const std::string& path);
 
 // Collect: copy every referenced media original (clip sources, LUTs, master

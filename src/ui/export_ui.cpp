@@ -8,6 +8,7 @@
 #include "filepicker.h"
 #include "theme.h"
 #include <imgui.h>
+#include <thread>
 #include <imgui_internal.h>
 #include <filesystem>
 #include <cstdio>
@@ -328,6 +329,73 @@ void draw_export_modal(AppState& state) {
         // Downloads (shown after render completes)
         if (state.render_done || !state.out_mp4.empty()) {
             ImGui::Dummy({0.f, 8.f}); ui_separator(); ImGui::Dummy({0.f, 6.f});
+
+            // ── Loudness report ────────────────────────────────────────────
+            // Measured on the FINISHED file with ffmpeg's ebur128 (post-mix,
+            // post-AAC — the numbers a platform's normalizer will see, true
+            // peak included). Runs once per output file on a worker thread.
+            if (!state.render_settings.gif_export && !state.out_mp4.empty() &&
+                fs::exists(state.out_mp4)) {
+                if (state.loudness_report_for != state.out_mp4 &&
+                    !state.loudness_measuring) {
+                    state.loudness_measuring  = true;
+                    state.loudness_report_for = state.out_mp4;
+                    state.loudness_report.clear();
+                    std::string path = state.out_mp4;
+                    std::thread([&state, path]() {
+                        std::string cmd = "ffmpeg -nostats -hide_banner -i \"" + path +
+                            "\" -map a:0 -filter:a ebur128=peak=true -f null - 2>&1";
+                        FILE* p = popen(cmd.c_str(), "r");
+                        double lufs = -144.0, tp = -144.0;
+                        if (p) {
+                            // The summary block is the LAST "I: ... LUFS" /
+                            // "Peak: ... dBFS" pair in the output.
+                            char line[512];
+                            while (fgets(line, sizeof(line), p)) {
+                                double v;
+                                if (sscanf(line, " I: %lf LUFS", &v) == 1) lufs = v;
+                                if (sscanf(line, " Peak: %lf dBFS", &v) == 1) tp = v;
+                            }
+                            pclose(p);
+                        }
+                        char rep[192];
+                        if (lufs > -100.0) {
+                            double delta = lufs - (-14.0);   // common platform target
+                            if (delta > 0.5)
+                                snprintf(rep, sizeof(rep),
+                                    "%.1f LUFS \u00b7 true peak %.1f dBTP \u2014 platforms "
+                                    "(~-14) will turn this down \u2248%.1f dB",
+                                    lufs, tp, delta);
+                            else if (delta < -0.5)
+                                snprintf(rep, sizeof(rep),
+                                    "%.1f LUFS \u00b7 true peak %.1f dBTP \u2014 \u2248%.1f dB "
+                                    "below the ~-14 platform target",
+                                    lufs, tp, -delta);
+                            else
+                                snprintf(rep, sizeof(rep),
+                                    "%.1f LUFS \u00b7 true peak %.1f dBTP \u2014 right at the "
+                                    "~-14 platform target",
+                                    lufs, tp);
+                        } else {
+                            snprintf(rep, sizeof(rep), "loudness measurement failed");
+                        }
+                        state.loudness_report   = rep;
+                        state.loudness_measuring = false;
+                    }).detach();
+                }
+                if (state.loudness_measuring) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+                    ImGui::TextUnformatted("Measuring loudness\u2026");
+                    ImGui::PopStyleColor();
+                } else if (!state.loudness_report.empty()) {
+                    bool hot = state.loudness_report.find("turn this down") != std::string::npos;
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                        hot ? IM_COL32(235, 200, 90, 255) : IM_COL32(120, 210, 140, 255));
+                    ImGui::TextWrapped("%s", state.loudness_report.c_str());
+                    ImGui::PopStyleColor();
+                }
+                ImGui::Dummy({0.f, 4.f});
+            }
 
             // Primary output: show its full path, and offer Open (the file) +
             // Reveal (its folder).

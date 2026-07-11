@@ -1,7 +1,9 @@
+#include "platform.h"
 #include "beat_detect.h"
 #include <cmath>
 #include <cstring>
 
+#if PMS_HAS_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -151,3 +153,7 @@ BeatResult beat_detect(const std::string& path) {
 
     return result;
 }
+
+#else
+BeatResult beat_detect(const std::string&) { return {}; }
+#endif  // PMS_HAS_FFMPEG

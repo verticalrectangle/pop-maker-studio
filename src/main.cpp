@@ -8,9 +8,12 @@
 #include <unistd.h>
 #include <deque>
 #include <string>
+#include <chrono>
 #include <filesystem>
 
 #include "app.h"
+#include "history.h"
+#include "ui/studio_shared.h"
 #include "ipc_server.h"
 #include "paths.h"
 #include "video.h"
@@ -26,7 +29,6 @@ namespace fs = std::filesystem;
 
 // Definitions of globals declared in globals.h
 std::string g_dropped_file;
-std::string g_managed_dir;
 std::vector<std::string> g_drop_batch;
 
 // Drop queues. Single-file drops follow the legacy g_dropped_file path so the
@@ -133,6 +135,9 @@ static void dump_fx_previews(const char* out_dir) {
         { FXType::VHS,       "vhs"        },
         { FXType::Datamosh,  "datamosh"   },
         { FXType::ChromaKey, "chroma_key" },
+        { FXType::ChromaMelt, "chroma_melt" },
+        { FXType::ChromaEcho, "chroma_echo" },
+        { FXType::ChromaFrame, "chroma_frame" },
     };
     for (auto& b : kBuiltin) {
         ImGui_ImplOpenGL3_NewFrame();
@@ -257,6 +262,14 @@ int main(int argc, char** argv) {
             break;
         }
     }
+    // --open <path>: load a project immediately (same path as a Home click) —
+    // measurement/test rig companion to PMS_NO_IPC.
+    for (int i = 1; i < argc - 1; ++i) {
+        if (std::string(argv[i]) == "--open") {
+            open_project_path(state, argv[i + 1]);
+            break;
+        }
+    }
 
     // Vsync is on during normal interactive use (smooth UI, low CPU). While an
     // export is running we let the main loop free-run so render_tick_gl isn't
@@ -264,8 +277,35 @@ int main(int argc, char** argv) {
     // is gated by the monitor (e.g. 60 Hz), and changing the libx264 preset
     // has no observable effect because ffmpeg is starved on stdin.
     bool vsync_on = true;
-    while (!glfwWindowShouldClose(window)) {
+    std::string cur_title;
+    while (!glfwWindowShouldClose(window) || state.quit_prompt) {
+        // Close intercepted: with unsaved edits in the editor, arm the
+        // save-confirm modal instead of dying — the modal either saves and
+        // confirms, discards and confirms, or cancels (quit_prompt drops and
+        // we keep running).
+        if (glfwWindowShouldClose(window)) {
+            if (state.in_studio && project_dirty(state) && !state.quit_confirmed) {
+                glfwSetWindowShouldClose(window, GLFW_FALSE);
+                state.quit_prompt = true;
+            } else break;
+        }
+        if (state.quit_confirmed) break;
+
         glfwPollEvents();
+        // PMS_FRAME_DEBUG=1: log frames that stall the UI (>100 ms) — used to
+        // hunt the "project open freezes for a bit" reports.
+        static const bool s_fdbg = getenv("PMS_FRAME_DEBUG") != nullptr;
+        static std::chrono::steady_clock::time_point s_f_prev = std::chrono::steady_clock::now();
+        if (s_fdbg) {
+            auto now = std::chrono::steady_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(now - s_f_prev).count();
+            s_f_prev = now;
+            static int s_fno = 0;
+            ++s_fno;
+            if (ms > 100.0)
+                fprintf(stderr, "[frame] #%d took %.0f ms (in_studio=%d, slot_q=%d)\n",
+                        s_fno, ms, (int)state.in_studio, (int)state.slot_open_queue.size());
+        }
         drain_dropped_queue();   // single-file drops: feed one path per frame
         drain_bin_pending(state); // multi-file drops: dump all into the bin
 
@@ -273,6 +313,22 @@ int main(int argc, char** argv) {
         if (want_vsync != vsync_on) {
             glfwSwapInterval(want_vsync ? 1 : 0);
             vsync_on = want_vsync;
+        }
+
+        // Title bar: project name + dirty dot. "name — Pop Maker Studio",
+        // updated only when it actually changes (X11 title sets aren't free).
+        {
+            std::string want = "Pop Maker Studio";
+            if (state.in_studio) {
+                std::string name = state.project_path.empty()
+                    ? "Untitled"
+                    : std::filesystem::path(state.project_path).stem().string();
+                want = name + (project_dirty(state) ? " •" : "") + " — Pop Maker Studio";
+            }
+            if (want != cur_title) {
+                cur_title = want;
+                glfwSetWindowTitle(window, cur_title.c_str());
+            }
         }
 
         ImGui_ImplOpenGL3_NewFrame();

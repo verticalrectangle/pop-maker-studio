@@ -36,6 +36,30 @@
 #include <vector>
 #include "json.hpp"
 
+// Deferred selection collapse: a plain press on an already-selected clip keeps
+// the multi-selection (so dragging moves the whole group); if the press ends
+// WITHOUT a drag, the release collapses the selection to this clip. The old
+// collapse-on-press made "box select then drag" move only the grabbed clip.
+static int s_sel_collapse_ti = -1, s_sel_collapse_ci = -1;
+
+// Pull whole groups into the multi-selection: any selected clip with a
+// non-zero group_id drags in every clip sharing that id. Runs after any
+// selection change (click, box select, right-click collapse).
+static void expand_selection_groups(AppState& state) {
+    std::set<int> gids;
+    for (auto& [t2, c2] : state.clip_selection) {
+        if (t2 < 0 || t2 >= (int)state.tracks.size()) continue;
+        if (c2 < 0 || c2 >= (int)state.tracks[t2].clips.size()) continue;
+        int g = state.tracks[t2].clips[c2].group_id;
+        if (g != 0) gids.insert(g);
+    }
+    if (gids.empty()) return;
+    for (int t2 = 0; t2 < (int)state.tracks.size(); ++t2)
+        for (int c2 = 0; c2 < (int)state.tracks[t2].clips.size(); ++c2)
+            if (gids.count(state.tracks[t2].clips[c2].group_id))
+                state.clip_selection.insert({t2, c2});
+}
+
 namespace fs = std::filesystem;
 extern ImFont* g_font_bold;
 extern ImFont* g_font_black;
@@ -71,8 +95,21 @@ static struct {
     float  time   = 0.f;         // clip-relative time of the new super diamond
 } s_kf_flash;
 
-// Super-diamond right-click context (unpair menu).
-static struct { int ti = -1, ci = -1; float time = 0.f; } s_kf_ctx;
+// Super-diamond right-click context (unpair menu). source: -1 = clip's own
+// ktracks, else the fx_chain entry index (Pass-3 FX lanes).
+static struct { int ti = -1, ci = -1, source = -1; float time = 0.f; } s_kf_ctx;
+
+// Pass-3 single-key retime drag (FX-chain + content keyframe lanes). Kept
+// SEPARATE from s_kf_drag so it can never collide with L1's group move-loop.
+// ci = owner clip index; source = -1 (owner.ktracks) or the fx_chain entry.
+static struct {
+    bool   active = false;
+    int    ti = -1, ci = -1, source = -1;
+    std::string prop;
+    int    idx = -1;
+    bool   moved = false;
+    float  ref_x = 0.f, ref_t = 0.f;
+} s_kf_subdrag;
 
 // Hold-to-weld for FX brick merging — the keyframe-diamond gesture applied to
 // bricks: overlapping a merge target arms the dwell timer; the merge only
@@ -201,6 +238,24 @@ static bool is_chain_brick(const Clip& c) {
     return c.clip_type == ClipType::MultiFX ||
            c.clip_type == ClipType::AudioMultiFX;
 }
+// A chain brick on its OWN track (not welded to content) hosts its own fx_chain:
+// it earns the same disclosure chevron + editable per-FX timing lanes a content
+// clip gets for its welded chain. A welded (glass) chain expands from its host
+// content clip instead, so exclude those here.
+static bool fx_brick_self_hosts(const AppState& state, int ti, const Clip& c) {
+    return is_chain_brick(c) && !fx_clip_is_glass(state, ti, c);
+}
+// A standalone, unwelded single VIDEO FX brick (a gen-FX Effect, not a chain, not
+// coupled to content) ALSO discloses its own keyframe lanes — same chevron, but with
+// just the brick's param sub-rows (no chain layer, no host "Clip" lane). This is a
+// superset of fx_brick_self_hosts, so substituting it at the disclosure gates leaves
+// chains + content hosts byte-for-byte identical and only newly admits standalone
+// singles. (Audio FX bricks are a deliberate follow-up — their params aren't keyed.)
+static bool fx_brick_self_discloses(const AppState& state, int ti, const Clip& c) {
+    if (fx_brick_self_hosts(state, ti, c)) return true;
+    return c.clip_type == ClipType::Effect && !c.fx_coupled &&
+           fx_brick_is_video(c) && !fx_clip_is_glass(state, ti, c);
+}
 static void merge_fx_clips(Clip& target, Clip dragged) {
     if (is_chain_brick(target)) {
         if (is_chain_brick(dragged)) {
@@ -230,72 +285,41 @@ static void merge_fx_clips(Clip& target, Clip dragged) {
     }
 }
 
-// Couple the brick at (ti, ci) to the content clip at host_ci: chain entries
-// are re-windowed against the host span so effective timing survives the
-// snap, singles convert to a Video Multi-FX, and a host that already owns a
-// coupled chain absorbs the new entries instead of growing a second brick.
-// Returns the index of the resulting coupled brick.
-int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
-    auto& clips = state.tracks[ti].clips;
-    const Clip host = clips[(size_t)host_ci];   // copy: erase below shifts refs
-    const float h0 = host.start, hlen = host.end - host.start;
-    Clip brick = clips[(size_t)ci];
 
-    auto window_entry = [&](Clip& se, float b0, float b1) {
-        float abs0 = (se.rel_end <= 0.f) ? b0 : b0 + se.rel_start;
-        float abs1 = (se.rel_end <= 0.f) ? b1 : b0 + se.rel_end;
-        se.rel_start = fmaxf(0.f, abs0 - h0);
-        se.rel_end   = fmaxf(se.rel_start, fminf(abs1 - h0, hlen));
-        if (se.rel_start <= 0.001f && se.rel_end >= hlen - 0.001f) {
-            se.rel_start = 0.f;   // full-host window = "always on"
-            se.rel_end   = 0.f;
-        }
-        se.fx_coupled = false;
-        se.fx_host_sid.clear();
+// Pick the clip an FX brick should couple to. A deliberate drop should land on
+// the clip you point at, so prefer the hostable clip whose span contains `ref_t`
+// (the cursor / drop position). Only when the reference isn't over content
+// (ref_t < 0, or it falls in a gap) do we fall back to the largest-overlap clip
+// — the old rule, which on a densely sequenced track picked whatever the wide
+// brick body covered most (the "middle of the track" surprise) instead of the
+// clip under the mouse. exclude_ci skips the brick itself.
+static int fx_host_pick(const AppState& state, int ti, int exclude_ci,
+                        bool audio_kind, float b0, float b1, float ref_t) {
+    if (ti < 0 || ti >= (int)state.tracks.size()) return -1;
+    const auto& cls = state.tracks[ti].clips;
+    auto hostable = [&](const Clip& hc) {
+        return audio_kind
+            ? (hc.clip_type == ClipType::Audio || hc.clip_type == ClipType::Record ||
+               hc.clip_type == ClipType::Video || hc.clip_type == ClipType::VideoRecord)
+            : (clip_is_videolike_type(hc.clip_type) ||
+               hc.clip_type == ClipType::Background);
     };
-
-    std::vector<Clip> entries;
-    if (is_chain_brick(brick)) entries = brick.fx_chain;
-    else {
-        Clip se = brick;
-        se.fx_chain.clear();
-        se.rel_start = se.rel_end = 0.f;
-        entries.push_back(se);
-    }
-    for (auto& se : entries) window_entry(se, brick.start, brick.end);
-
-    const ClipType chain_type = fx_brick_is_audio_kind(clips[(size_t)ci])
-                              ? ClipType::AudioMultiFX : ClipType::MultiFX;
-
-    // Coupling an audio FX brick onto a record brick turns "Hear effects" on, so
-    // you immediately monitor through it (and can dial in its dry/wet).
-    if (chain_type == ClipType::AudioMultiFX &&
-        (host.clip_type == ClipType::Record ||
-         host.clip_type == ClipType::VideoRecord))
-        audio_monitor_fx_set(true);
-
-    // Host already has a coupled chain of this kind? Merge into it.
-    for (int k = 0; k < (int)clips.size(); ++k) {
-        if (k == ci) continue;
-        Clip& oc = clips[(size_t)k];
-        if (oc.clip_type == chain_type && oc.fx_coupled &&
-            fx_coupled_host(state, ti, oc) == host_ci) {
-            for (auto& se : entries) oc.fx_chain.push_back(se);
-            if (oc.fx_chain_selected < 0) oc.fx_chain_selected = 0;
-            clips.erase(clips.begin() + ci);
-            return k > ci ? k - 1 : k;
+    if (ref_t >= 0.f) {
+        for (int k = 0; k < (int)cls.size(); ++k) {
+            if (k == exclude_ci) continue;
+            const Clip& hc = cls[(size_t)k];
+            if (hostable(hc) && ref_t >= hc.start && ref_t < hc.end) return k;
         }
     }
-
-    Clip& b = clips[(size_t)ci];
-    b.clip_type         = chain_type;
-    b.fx_chain          = std::move(entries);
-    b.fx_chain_selected = b.fx_chain.empty() ? -1 : 0;
-    b.fx_coupled        = true;
-    b.fx_host_sid       = fx_host_fingerprint(host);
-    b.start = host.start;
-    b.end   = host.end;
-    return ci;
+    int best = -1; float bov = 0.05f;   // ≥50 ms overlap to arm
+    for (int k = 0; k < (int)cls.size(); ++k) {
+        if (k == exclude_ci) continue;
+        const Clip& hc = cls[(size_t)k];
+        if (!hostable(hc)) continue;
+        float ov = fminf(b1, hc.end) - fmaxf(b0, hc.start);
+        if (ov > bov) { bov = ov; best = k; }
+    }
+    return best;
 }
 
 // Passive coupling scan: any uncoupled video FX brick resting on content
@@ -308,7 +332,7 @@ int timeline_couple_fx_brick(AppState& state, int ti, int ci, int host_ci) {
 // repositioning EXISTING bricks). Returns the resulting brick index; pushes
 // no history, so the caller's drop entry captures the welded result as one
 // undo step.
-static int couple_fx_now(AppState& state, int ti, int ci) {
+static int couple_fx_now(AppState& state, int ti, int ci, float ref_t = -1.f) {
     if (ti < 0 || ti >= (int)state.tracks.size()) return ci;
     auto& cls = state.tracks[ti].clips;
     if (ci < 0 || ci >= (int)cls.size()) return ci;
@@ -316,18 +340,7 @@ static int couple_fx_now(AppState& state, int ti, int ci) {
     if (c.fx_coupled || !is_fx_clip(c)) return ci;
     bool audio_kind = fx_brick_is_audio_kind(c);
     if (!audio_kind && !fx_brick_is_video(c)) return ci;
-    int best = -1; float bov = 0.05f;
-    for (int k = 0; k < (int)cls.size(); ++k) {
-        if (k == ci) continue;
-        const Clip& hc = cls[(size_t)k];
-        bool hostable = audio_kind
-            ? (hc.clip_type == ClipType::Audio || hc.clip_type == ClipType::Record ||
-               hc.clip_type == ClipType::Video || hc.clip_type == ClipType::VideoRecord)
-            : (clip_is_videolike_type(hc.clip_type) || hc.clip_type == ClipType::Background);
-        if (!hostable) continue;
-        float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
-        if (ov > bov) { bov = ov; best = k; }
-    }
+    int best = fx_host_pick(state, ti, ci, audio_kind, c.start, c.end, ref_t);
     if (best < 0) return ci;
     int nci = timeline_couple_fx_brick(state, ti, ci, best);
     s_fx_flash.active = true; s_fx_flash.t0 = ImGui::GetTime();
@@ -357,6 +370,11 @@ static void fx_stack_layout(const Clip& clip, float vis_x0, float vis_x1,
 
 // Morphed (deck↔lane) screen rect for sub-effect slot i, plus the rel-space
 // span it represents. fx_lane_drag editing and the draw path both consume this.
+// Right-clicked FX-chain lane → context-menu target (set on rclick in Pass 2, read
+// by the ##fxlane_ctx popup near the end of draw_timeline).
+static int  s_fxlane_ti = -1, s_fxlane_ci = -1, s_fxlane_idx = -1;
+static bool s_fxlane_open = false;   // set on rclick, consumed where the popup renders
+
 struct FxLaneRect { float x0, y0, x1, y1; float rel_s, rel_e; };
 static FxLaneRect fx_lane_rect(const Clip& clip, int i, int shown, float spread,
                                float cx0, float vis_x0, float vis_x1,
@@ -378,6 +396,80 @@ static FxLaneRect fx_lane_rect(const Clip& clip, int i, int shown, float spread,
     r.y0 = d_y0 + (l_y0-d_y0)*spread; r.y1 = d_y1 + (l_y1-d_y1)*spread;
     r.rel_s = rel_s; r.rel_e = rel_e;
     return r;
+}
+
+// ── Draw-only keyframe diamonds (shared by content L1 and the FX-chain levels) ──
+// Read-only siblings of the interactive content-clip renderer (~1843-1854); no
+// hover/select/drag — they just visualize "what animates here". Editing stays in
+// the panel. x_at_origin = screen-x of the owning clip's .start; kx = +time*zoom.
+static void draw_one_diamond(ImDrawList* dl, float cx, float cy, float r, ImU32 fill) {
+    dl->AddQuadFilled({cx, cy-r}, {cx+r, cy}, {cx, cy+r}, {cx-r, cy}, fill);
+    dl->AddQuad({cx, cy-r}, {cx+r, cy}, {cx, cy+r}, {cx-r, cy}, IM_COL32(0,0,0,200), 1.f);
+}
+// Time-bucket keys into {time, count} (0.02s = PropTrack::set tolerance) so
+// simultaneous keys merge into one super-diamond. Accumulates — call once per
+// ktracks map to union a whole chain into one band.
+static void kf_accumulate_groups(const std::unordered_map<std::string, PropTrack>& ktracks,
+                                 std::vector<std::pair<float,int>>& groups, float tol = 0.02f) {
+    for (auto& kv : ktracks)
+        for (auto& k : kv.second.keys) {
+            bool merged = false;
+            for (auto& g : groups)
+                if (fabsf(g.first - k.time) < tol) { g.second++; merged = true; break; }
+            if (!merged) groups.push_back({k.time, 1});
+        }
+}
+// Diamonds with hover + selection states. The interactive Pass-3 lanes pass
+// hover_time / sel_time (the time of the group under the cursor / the selected key);
+// L1/L2 leave them -1 for the plain read-only look. super = blue + echo, single =
+// white; hover brightens + adds a halo that fades in, selection is steady gold.
+static struct { float kx = -1e9f, ky = -1e9f; double t0 = 0.0; } s_kf_glow;
+static void draw_kf_groups(ImDrawList* dl, const std::vector<std::pair<float,int>>& groups,
+                           float x_at_origin, float zoom,
+                           float vis_x0, float vis_x1, float mid_y,
+                           float hover_time = -1.f, float sel_time = -1.f) {
+    for (auto& g : groups) {
+        bool super = g.second > 1;
+        float kx = x_at_origin + g.first * zoom;
+        if (kx < vis_x0 - 10.f || kx > vis_x1 + 10.f) continue;
+        bool selected = sel_time   >= 0.f && fabsf(g.first - sel_time)   < 0.02f;
+        bool hovered  = hover_time >= 0.f && fabsf(g.first - hover_time) < 0.02f;
+        float d = (super ? 6.f : 5.f) + (hovered ? 1.f : 0.f);
+        if (hovered) {
+            // halo fades in over 100ms when the cursor lands on a NEW diamond — a
+            // calm arrival, not a constant pulse.
+            if (fabsf(kx - s_kf_glow.kx) > 1.5f || fabsf(mid_y - s_kf_glow.ky) > 1.5f) {
+                s_kf_glow.kx = kx; s_kf_glow.ky = mid_y; s_kf_glow.t0 = ImGui::GetTime();
+            }
+            float ga = fminf(1.f, (float)((ImGui::GetTime() - s_kf_glow.t0) / 0.10));
+            dl->AddCircleFilled({kx, mid_y}, d + 4.5f, IM_COL32(255, 232, 150, (int)(64.f * ga)));
+            dl->AddCircleFilled({kx, mid_y}, d + 2.f,  IM_COL32(255, 244, 190, (int)(48.f * ga)));
+        }
+        if (super) draw_one_diamond(dl, kx + 3.f, mid_y, d - 1.f, IM_COL32(55,110,185,255));
+        ImU32 c = selected ? IM_COL32(255, 200, 60, 255)
+                : hovered  ? (super ? IM_COL32(205, 232, 255, 255) : IM_COL32(255, 255, 255, 255))
+                           : (super ? IM_COL32(110, 190, 255, 255) : IM_COL32(235, 235, 235, 255));
+        draw_one_diamond(dl, kx, mid_y, d, c);
+    }
+}
+// Hit-test one PropTrack's keys against mouse-x (caller owns the y-rect test + the
+// prop name). Mirrors draw_kf_groups' x math. Returns key index or -1.
+static int kf_hit_index(const PropTrack& pt, float x_at_origin, float zoom,
+                        float mouse_x, float r = 8.f) {
+    for (int i = 0; i < (int)pt.keys.size(); ++i)
+        if (fabsf(mouse_x - (x_at_origin + pt.keys[(size_t)i].time * zoom)) <= r) return i;
+    return -1;
+}
+// Time of the currently-selected key IF it belongs to (ti, owner_ci, source) — drives
+// the steady-gold "selected" diamond on the Pass-3 lanes. -1 if the selection is elsewhere.
+static float kf_selected_time(const AppState& state, int ti, int owner_ci, int src,
+                              const std::unordered_map<std::string, PropTrack>& m) {
+    if (state.kf_sel_track != ti || state.kf_sel_clip != owner_ci || state.kf_sel_source != src)
+        return -1.f;
+    auto it = m.find(state.kf_sel_prop);
+    if (it != m.end() && state.kf_sel_idx >= 0 && state.kf_sel_idx < (int)it->second.keys.size())
+        return it->second.keys[(size_t)state.kf_sel_idx].time;
+    return -1.f;
 }
 
 static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
@@ -423,6 +515,19 @@ static void draw_fx_stack(ImDrawList* dl, const Clip& clip, float cx0,
     } else if (N > shown) {
         char b[12]; snprintf(b, sizeof(b), "+%d", N - shown);
         dl->AddText({vis_x1 - 22.f, cy1 - 14.f}, IM_COL32(220,240,255,220), b);
+    }
+
+    // L2: aggregate keyframe band — the WHOLE chain's keys (not just the shown
+    // deck) merged by time into super-diamonds. The collapsed-brick summary;
+    // the disclosed lanes carry per-effect detail.
+    {
+        std::vector<std::pair<float,int>> kg;
+        for (auto& se : clip.fx_chain) kf_accumulate_groups(se.ktracks, kg);
+        if (!kg.empty()) {
+            float lane_b = cy1 - 2.f, lane_t = fmaxf(cy0 + 2.f, cy1 - 13.f);
+            dl->AddRectFilled({vis_x0, lane_t}, {vis_x1, lane_b}, IM_COL32(8,8,12,170), 3.f);
+            draw_kf_groups(dl, kg, cx0, zoom, vis_x0, vis_x1, (lane_t + lane_b) * 0.5f);
+        }
     }
 }
 
@@ -483,20 +588,10 @@ static void couple_pending_tick(AppState& state) {
             bool audio_kind = fx_brick_is_audio_kind(c);
             if (!audio_kind && !fx_brick_is_video(c)) continue;
             if (g_tl.drag_track == ti && g_tl.drag_clip == ci) continue;
-            int best = -1; float bov = 0.05f;   // ≥50 ms overlap to arm
-            for (int k = 0; k < (int)cls.size(); ++k) {
-                const Clip& hc = cls[(size_t)k];
-                bool hostable = audio_kind
-                    ? (hc.clip_type == ClipType::Audio ||
-                       hc.clip_type == ClipType::Record ||
-                       hc.clip_type == ClipType::Video ||
-                       hc.clip_type == ClipType::VideoRecord)
-                    : (clip_is_videolike_type(hc.clip_type) ||
-                       hc.clip_type == ClipType::Background);
-                if (!hostable) continue;
-                float ov = fminf(c.end, hc.end) - fmaxf(c.start, hc.start);
-                if (ov > bov) { bov = ov; best = k; }
-            }
+            // Couple to the clip under the brick's leading edge — where the user
+            // dropped it — falling back to largest overlap when the edge sits in
+            // a gap. (No live cursor here; the brick rests, so its start anchors.)
+            int best = fx_host_pick(state, ti, ci, audio_kind, c.start, c.end, c.start);
             if (best >= 0) { pti = ti; pci = ci; phost = best; break; }
         }
     }
@@ -533,8 +628,8 @@ static void couple_pending_tick(AppState& state) {
 
 // ── Timeline ──────────────────────────────────────────────────────────────────
 
-static TLGeom s_tl_geom;
-const TLGeom& tl_geom() { return s_tl_geom; }
+// Timeline-geometry storage hoisted to the engine (src/ui_geom.cpp).
+#define s_tl_geom g_tl_geom
 
 void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h) {
     s_tl_geom.clips.clear();
@@ -663,8 +758,13 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     dl->AddRect(origin, {origin.x+total_w, origin.y+total_h}, to_u32(Col::line));
 
     // ── Fps + frame snap helper ───────────────────────────────────────────────
-    float fps = (state.proxy_ready && video_info(0).fps > 0.0)
-                ? (float)video_info(0).fps : 30.f;
+    // Frame-grid invariant: snap every clip edge / in_point / keyframe / marker /
+    // loop point onto the project frame grid every frame, so nothing can sit between
+    // the ruler ticks no matter how it was added (drag, MCP, generation, old project).
+    normalize_timeline_to_grid(state);
+    normalize_track_groups(state);
+
+    float fps = tl_fps(state);   // the ONE grid — project/export fps, never the source video's
     // snap(t): round t to nearest frame unless Ctrl is held
     auto snap = [&](float t) -> float {
         if (ImGui::GetIO().KeyCtrl || fps <= 0.f) return t;
@@ -731,6 +831,33 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         s_snap_indicator = (result != t) ? result : -1.f;
         return result;
     };
+
+    // Edge auto-scroll (horizontal): MUST run before the ruler draws below, so the
+    // ruler ticks and the clips render at the SAME scroll. Done mid-draw (after the
+    // ruler, before the clips) it shifted clips off the ruler by one auto-scroll
+    // step while dragging / trimming / marquee-ing to the timeline edge.
+    if ((g_tl.drag_track >= 0 || g_tl.box_selecting || g_tl.glass_drag != 0) &&
+        ImGui::IsMouseDown(0)) {
+        ImVec2 mp = ImGui::GetIO().MousePos;
+        float  dt = ImGui::GetIO().DeltaTime;
+        float  x_lo = origin.x + TL_LABEL_W, x_hi = x_lo + clip_area_w;
+        // Trims scroll at the margin with NO content ceiling (the dragged edge is the
+        // sole driver, else a content-tied ceiling deadlocks the gesture); plain
+        // scroll keeps the ceiling. Zoom never changes mid-gesture.
+        bool   trim  = (g_tl.drag_left || g_tl.drag_right) && g_tl.drag_track >= 0;
+        float  inset = trim ? fit_margin : 0.f;
+        float  max_scroll = fmaxf(0.f, tl_content_w - clip_area_w + fit_margin);
+        float  ds = 0.f;
+        if      (mp.x < x_lo + inset) ds = -fminf(x_lo + inset - mp.x, 160.f) * 8.f * dt;
+        else if (mp.x > x_hi - inset) ds =  fminf(mp.x - (x_hi - inset), 160.f) * 8.f * dt;
+        if (ds != 0.f) {
+            float ns = scroll + ds;
+            if (!trim) ns = fminf(ns, max_scroll);
+            ns = fmaxf(0.f, ns);
+            if (g_tl.box_selecting) g_tl.box_start.x -= ns - scroll;
+            scroll = ns;
+        }
+    }
 
     // ── Ruler ─────────────────────────────────────────────────────────────────
     float ruler_y = origin.y;
@@ -1121,8 +1248,18 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     // effect, so the FX timing lanes draw beneath the clip body (the body itself
     // stays TL_TRACK_H). Anything mapping a track index ↔ a Y must go through
     // these helpers, never ti*TL_TRACK_H.
-    const float FX_LANE_H = 15.f;
+    const float FX_LANE_H = 18.f;
     auto host_fx_count = [&](int ti, int ci) -> int {
+        // A standalone chain brick hosts its own chain (same expand/lanes as a
+        // content clip hosting its welded chain).
+        const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
+        if (fx_brick_self_hosts(state, ti, self)) return (int)self.fx_chain.size();
+        if (fx_brick_self_discloses(state, ti, self)) {
+            // Standalone single brick = one lane (itself), but only once it has keyed
+            // params — a keyless brick shouldn't sprout a pointless chevron.
+            for (auto& kv : self.ktracks) if (!kv.second.keys.empty()) return 1;
+            return 0;
+        }
         int n = 0;
         for (int k : coupled_fx_of(state, ti, ci)) {
             const Clip& b = state.tracks[(size_t)ti].clips[(size_t)k];
@@ -1131,18 +1268,65 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         return n;
     };
+    const float SUBROW_H = 16.f;
+    auto nonempty_kt = [](const Clip& se) -> int {
+        int n = 0; for (auto& kv : se.ktracks) if (!kv.second.keys.empty()) ++n; return n;
+    };
+    // L4: param sub-rows reserved by params-expanded VIDEO MultiFX sub-effects (one
+    // per keyframed prop). MUST iterate identically to the Pass-3 draw_lane loop.
+    auto host_fx_subrows = [&](int ti, int ci) -> int {
+        const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
+        // Standalone single brick shows its OWN keyed params as sub-rows directly when
+        // disclosed (no intermediate per-effect chevron — see draw_lane's ei==-1 path).
+        if (fx_brick_self_discloses(state, ti, self) && !fx_brick_self_hosts(state, ti, self))
+            return nonempty_kt(self);
+        std::vector<int> fxk = fx_brick_self_hosts(state, ti, self)
+                             ? std::vector<int>{ci} : coupled_fx_of(state, ti, ci);
+        int n = 0;
+        for (int k : fxk) {
+            const Clip& b = state.tracks[(size_t)ti].clips[(size_t)k];
+            if (b.clip_type != ClipType::MultiFX) continue;   // video MultiFX only
+            for (auto& se : b.fx_chain)
+                if (se.params_expanded) n += nonempty_kt(se);
+        }
+        return n;
+    };
+    // Content host's OWN keyframe lane (+ its params sub-rows) drawn at the top of
+    // the disclosed area — visible, unlike the body band that hides under the glass.
+    // 0 for standalone FX bricks / un-keyed clips.
+    auto host_content_h = [&](int ti, int ci) -> float {
+        const Clip& self = state.tracks[(size_t)ti].clips[(size_t)ci];
+        if (fx_brick_self_discloses(state, ti, self)) return 0.f;
+        int nk = nonempty_kt(self);
+        if (nk == 0) return 0.f;
+        return FX_LANE_H + (self.params_expanded ? (float)nk * SUBROW_H : 0.f);
+    };
     auto track_extra_h = [&](int ti) -> float {
         if (ti < 0 || ti >= (int)state.tracks.size()) return 0.f;
         float e = 0.f;
         auto& cls = state.tracks[(size_t)ti].clips;
         for (int ci = 0; ci < (int)cls.size(); ++ci) {
-            if (!cls[(size_t)ci].fx_expanded || is_fx_clip(cls[(size_t)ci])) continue;
+            if (!cls[(size_t)ci].fx_expanded ||
+                (is_fx_clip(cls[(size_t)ci]) && !fx_brick_self_discloses(state, ti, cls[(size_t)ci])))
+                continue;
             int n = host_fx_count(ti, ci);
-            if (n > 0) e = fmaxf(e, (float)n * FX_LANE_H + 6.f);
+            if (n > 0) e = fmaxf(e, (float)n * FX_LANE_H +
+                                     (float)host_fx_subrows(ti, ci) * SUBROW_H +
+                                     host_content_h(ti, ci) + 6.f);
         }
         return e;
     };
-    auto track_h     = [&](int ti) -> float { return TL_TRACK_H + track_extra_h(ti); };
+    // Collapsed group members fold away entirely — the head row shows their
+    // merged occupancy. Height 0 keeps track_top_at / y_to_track consistent
+    // without special cases (a 0-height row can never be hit).
+    auto collapsed_child = [&](int ti) -> bool {
+        int h = group_head_of(state, ti);
+        return h >= 0 && state.tracks[(size_t)h].group_collapsed;
+    };
+    auto track_h     = [&](int ti) -> float {
+        if (collapsed_child(ti)) return 0.f;
+        return TL_TRACK_H + track_extra_h(ti);
+    };
     auto track_top_at = [&](int ti) -> float {
         float y = track_area_top - state.tl_v_scroll;
         for (int k = 0; k < ti && k < (int)state.tracks.size(); ++k) y += track_h(k);
@@ -1182,35 +1366,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         auto edge_step = [&](float overshoot) {
             return fminf(overshoot, 160.f) * 8.f * dt;  // px this frame, capped
         };
-        // Horizontal
-        {
-            float x_lo = origin.x + TL_LABEL_W;
-            float x_hi = x_lo + clip_area_w;
-            // Edge trims scroll early (at the margin line, not the border)
-            // and — crucially — with NO content-derived ceiling: during a
-            // trim the user's push is the only scroll driver. The dragged
-            // edge rides margin-short of the border, so any ceiling tied to
-            // the (edge-defined) content end cancels against the setback and
-            // deadlocks the gesture. Post-release housekeeping glides the
-            // view back into legal bounds.
-            bool  trim  = (g_tl.drag_left || g_tl.drag_right) && g_tl.drag_track >= 0;
-            float inset = trim ? fit_margin : 0.f;
-            float max_scroll = fmaxf(0.f, tl_content_w - clip_area_w + fit_margin);
-            float ds = 0.f;
-            if      (mp.x < x_lo + inset) ds = -edge_step(x_lo + inset - mp.x);
-            else if (mp.x > x_hi - inset) ds =  edge_step(mp.x - (x_hi - inset));
-            if (ds != 0.f) {
-                float ns = scroll + ds;
-                if (!trim) ns = fminf(ns, max_scroll);
-                ns = fmaxf(0.f, ns);
-                if (g_tl.box_selecting) g_tl.box_start.x -= ns - scroll;
-                scroll = ns;
-            }
-            // NOTE: edge trims deliberately never change zoom. A mid-gesture
-            // scale change — even cursor-anchored and floor-latched — swaps
-            // the user's frame of reference while they're measuring by eye.
-            // Auto-scroll at constant zoom is the entire follow behavior.
-        }
+        // (Horizontal auto-scroll moved earlier — to the input phase, before the
+        // ruler — so the ruler and clips stay in sync. Zoom never changes mid-gesture.)
         // Vertical (clip drags move across tracks; marquee spans them)
         if (g_tl.drag_track >= 0 || g_tl.box_selecting) {
             float dv = 0.f;
@@ -1257,6 +1414,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     auto& open_clip_ctx    = g_tl.open_clip_ctx;
     auto& open_track_ctx   = g_tl.open_track_ctx;
     auto& open_tl_ctx      = g_tl.open_tl_ctx;
+    static float s_tl_ctx_t = 0.f;   // click time captured for the empty-area context menu
     auto& s_trans_track    = g_tl.trans_track;
     auto& s_trans_left_ci  = g_tl.trans_left_ci;
     auto& s_trans_popup_pos= g_tl.trans_popup_pos;
@@ -1294,6 +1452,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
         Track& track = state.tracks[ti];
+        if (collapsed_child(ti)) continue;   // folded into its group head (0-height)
+        bool is_head = is_group_head(track);
         ImVec2 row_tl = {origin.x, track_y};
         ImVec2 row_br = {origin.x+total_w, track_y+TL_TRACK_H};
         // Confine the hover/drop hit to the visible band — same reason as the
@@ -1310,15 +1470,31 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // FX preset drag-drop target on the clip area of this row.
         // Clamp to track_area_bot so the button doesn't overlap (and swallow
         // clicks on) the horizontal scrollbar below.
-        {
+        if (!is_head) {
             ImVec2 drop_tl = {origin.x + TL_LABEL_W, track_y};
             ImVec2 drop_br = {origin.x + total_w,
                               fminf(track_y + TL_TRACK_H, track_area_bot)};
             if (drop_br.y > drop_tl.y) {
-            ImGui::SetCursorScreenPos(drop_tl);
-            ImGui::InvisibleButton(("##fxdrop" + std::to_string(ti)).c_str(),
-                                   {drop_br.x - drop_tl.x, drop_br.y - drop_tl.y});
-            if (ImGui::BeginDragDropTarget()) {
+            // Rect-based target (no item): the old full-row InvisibleButton
+            // claimed every click on the row (IsAnyItemActive), which blocked
+            // box-select from ever starting over a track — it only worked in
+            // the void below all tracks. A custom target accepts drops over
+            // the same rect without owning mouse presses.
+            if (ImGui::BeginDragDropTargetCustom(ImRect(drop_tl, drop_br),
+                    ImGui::GetID(("##fxdrop" + std::to_string(ti)).c_str()))) {
+                // A lyrics track is exclusive: only lyric bricks may land on it, and a
+                // lyric brick lands nowhere else (other tracks omit the accept below).
+                if (is_lyrics_track(track)) {
+                    if (ImGui::AcceptDragDropPayload("LYRIC_BRICK")) {
+                        float drop_t = snap_to_frame(state, fmaxf(0.f, (ImGui::GetMousePos().x - (origin.x + TL_LABEL_W) + scroll) / zoom));
+                        track.clips.push_back(make_lyric_brick(state, drop_t));
+                        state.selected_track = ti;
+                        state.selected_clip  = (int)track.clips.size() - 1;
+                        s_drop_flash_track = ti;
+                        s_drop_flash_t     = 0.6f;
+                        history_push(state, "Drop lyric brick");
+                    }
+                } else {
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_PRESET")) {
                     int idx = *(const int*)pay->Data;
                     const EffectPreset* preset = nullptr;
@@ -1410,7 +1586,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     cl.audio_fx.reverb_on        = (ft == FXType::AudioReverb);
                     cl.audio_fx.voice_convert_on = (ft == FXType::AudioVoiceConvert);
                     state.tracks[ti].clips.push_back(cl);
-                    state.selected_clip  = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1);
+                    state.selected_clip  = couple_fx_now(state, ti, (int)state.tracks[ti].clips.size() - 1, drop_t);
                     state.selected_track = ti;
                     s_drop_flash_track = ti; s_drop_flash_t = 0.6f;
                     history_push(state, std::string("Drop audio FX: ") + fx_type_name(ft));
@@ -1516,6 +1692,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     recent_media_push(path, MediaKind::Audio);
                     history_push(state, "Drop audio: " + fs::path(path).filename().string());
                 }
+                }   // end exclusive-lyrics-track else
                 // Highlight the row while dragging over it
                 dl->AddRectFilled(drop_tl, drop_br, IM_COL32(180,130,255,40));
                 dl->AddRect(drop_tl, drop_br, IM_COL32(180,130,255,180), 2.f);
@@ -1575,14 +1752,57 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) s_rename_track = -1;
             ImGui::PopStyleColor(2);
         } else {
-            // Managed track: amber left accent stripe
-            if (track.managed)
+            // Group hue: stable per head name — the folder row and its members
+            // share the tint so the family reads at a glance.
+            auto group_hue = [&](const std::string& nm) -> ImU32 {
+                uint32_t h = 2166136261u;
+                for (char c : nm) { h ^= (uint8_t)c; h *= 16777619u; }
+                return IM_COL32(110 + (h & 0x7F), 110 + ((h >> 7) & 0x7F),
+                                110 + ((h >> 14) & 0x7F), 255);
+            };
+            int   head_of = is_head ? -1 : group_head_of(state, ti);
+            float name_x  = origin.x + 8.f;
+            if (is_head) {
+                ImU32 gc = group_hue(track.name);
+                // Folder row wash + accent stripe.
+                dl->AddRectFilled({origin.x, track_y+1.f},
+                                  {origin.x+TL_LABEL_W, track_y+TL_TRACK_H-1.f},
+                                  (gc & 0x00FFFFFFu) | ((ImU32)34 << IM_COL32_A_SHIFT));
+                dl->AddRectFilled({origin.x, track_y+2.f},
+                                  {origin.x+3.f, track_y+TL_TRACK_H-2.f}, gc);
+                // Chevron: ▼ expanded / ▶ collapsed — click toggles.
+                float cxx = origin.x + 12.f, cyy = track_y + TL_TRACK_H * 0.5f;
+                ImU32 cc = to_u32(Col::fg);
+                if (track.group_collapsed) {
+                    dl->AddTriangleFilled({cxx-3.f,cyy-5.f},{cxx-3.f,cyy+5.f},{cxx+4.f,cyy}, cc);
+                } else {
+                    dl->AddTriangleFilled({cxx-5.f,cyy-3.f},{cxx+5.f,cyy-3.f},{cxx,cyy+4.f}, cc);
+                }
+                bool chev_hov = mouse_in_track_band &&
+                                fabsf(mouse.x - cxx) < 9.f && fabsf(mouse.y - cyy) < 9.f;
+                if (chev_hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (chev_hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
+                    track.group_collapsed = !track.group_collapsed;
+                    history_push(state, track.group_collapsed ? "Collapse group"
+                                                              : "Expand group");
+                }
+                name_x = origin.x + 24.f;
+            } else if (head_of >= 0) {
+                // Group member: shared tint stripe + indented name.
+                dl->AddRectFilled({origin.x, track_y+2.f},
+                                  {origin.x+3.f, track_y+TL_TRACK_H-2.f},
+                                  group_hue(state.tracks[(size_t)head_of].name));
+                name_x = origin.x + 16.f;
+            } else if (track.kind != TrackKind::Normal) {
+                // Lyrics / FX track: amber left accent stripe (durable via kind, so it
+                // survives reload — managed isn't serialized).
                 dl->AddRectFilled({origin.x, track_y+2.f},
                                   {origin.x+3.f, track_y+TL_TRACK_H-2.f},
                                   to_u32(Col::clip_lyrics));
+            }
             // Truncate with ellipsis if the name would overflow into the
             // icon buttons (lock at TL_LABEL_W-45, then mute, eye).
-            float max_w = TL_LABEL_W - 8.f - 54.f;
+            float max_w = TL_LABEL_W - (name_x - origin.x) - 54.f;
             std::string label = track.name;
             if (ImGui::CalcTextSize(label.c_str()).x > max_w) {
                 const char* ell = "\xE2\x80\xA6";  // U+2026
@@ -1597,15 +1817,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 }
                 label += ell;
             }
-            dl->AddText({origin.x+8.f, track_y+(TL_TRACK_H-13.f)*0.5f},
+            dl->AddText({name_x, track_y+(TL_TRACK_H-13.f)*0.5f},
                 to_u32(track_sel ? Col::fg : Col::muted), label.c_str());
-            if ((!tl_any_popup && ImGui::IsMouseClicked(0)) && in_label) {
+            // Folder rows: the chevron zone owns its clicks, and the row is not
+            // label-draggable (dragging the head alone would strand its members
+            // — reorder groups by moving the member tracks for now).
+            bool over_chevron = is_head && mouse.x < origin.x + 22.f;
+            if ((!tl_any_popup && ImGui::IsMouseClicked(0)) && in_label && !over_chevron) {
                 state.selected_track  = ti;
                 state.selected_clip   = -1;
                 state.clip_selection.clear();
-                s_track_drag_src      = ti;
-                s_track_drag_start_y  = mouse.y;
-                s_track_dragging      = false;
+                if (!is_head) {
+                    s_track_drag_src      = ti;
+                    s_track_drag_start_y  = mouse.y;
+                    s_track_dragging      = false;
+                }
             }
             if ((!tl_any_popup && ImGui::IsMouseDoubleClicked(0)) && in_label && !s_track_dragging) {
                 s_track_drag_src = -1;
@@ -1631,6 +1857,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.visible = !track.visible;
+                if (is_head)   // folder: fan out to every member
+                    for (int j = ti + 1; j <= ti + track.group_children &&
+                                         j < (int)state.tracks.size(); ++j)
+                        state.tracks[(size_t)j].visible = track.visible;
                 history_push(state, "Toggle track visibility");
             }
         }
@@ -1649,6 +1879,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     {lock_c.x-3.f, lock_c.y-5.f}, {lock_c.x+3.f, lock_c.y-5.f}, lc, 1.2f);
             if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.locked = !track.locked;
+                if (is_head)
+                    for (int j = ti + 1; j <= ti + track.group_children &&
+                                         j < (int)state.tracks.size(); ++j)
+                        state.tracks[(size_t)j].locked = track.locked;
                 history_push(state, track.locked ? "Lock track" : "Unlock track");
             }
         }
@@ -1670,6 +1904,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             if (hov && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
                 track.muted = !track.muted;
+                if (is_head)
+                    for (int j = ti + 1; j <= ti + track.group_children &&
+                                         j < (int)state.tracks.size(); ++j)
+                        state.tracks[(size_t)j].muted = track.muted;
                 history_push(state, "Toggle track mute");
             }
         }
@@ -1684,6 +1922,33 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             ctx_track = ti; ctx_clip = -1;
             open_track_ctx = true;
             ImGui::OpenPopup("##track_ctx");
+        }
+
+        // Folder row clip area: collapsed = merged occupancy of every member
+        // (thin band per member so you still see WHERE things are in time);
+        // expanded = a quiet dimmed lane. Folder rows never hold clips.
+        if (is_head) {
+            if (track.group_collapsed && track.group_children > 0) {
+                float bh = (TL_TRACK_H - 8.f) / (float)track.group_children;
+                for (int k = 0; k < track.group_children; ++k) {
+                    int cti = ti + 1 + k;
+                    if (cti >= (int)state.tracks.size()) break;
+                    float by0 = track_y + 4.f + bh * (float)k;
+                    float by1 = by0 + fmaxf(1.5f, bh - 1.f);
+                    for (const Clip& mc : state.tracks[(size_t)cti].clips) {
+                        float mx0 = origin.x + TL_LABEL_W + mc.start * zoom - scroll;
+                        float mx1 = origin.x + TL_LABEL_W + mc.end   * zoom - scroll;
+                        mx0 = fmaxf(mx0, origin.x + TL_LABEL_W);
+                        mx1 = fminf(mx1, origin.x + total_w);
+                        if (mx1 <= mx0) continue;
+                        ImVec4 bc = clip_type_badge_color(mc.clip_type);
+                        dl->AddRectFilled({mx0, by0}, {mx1, by1},
+                            IM_COL32((int)(bc.x*255), (int)(bc.y*255), (int)(bc.z*255), 210), 1.f);
+                    }
+                }
+            }
+            track_y += track_h(ti);
+            continue;   // no clip passes / interactions on a folder row
         }
 
         // Clips — two passes so FX bricks render on top of video clips.
@@ -1815,7 +2080,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                  (int)g.mems.size());
                         ImGui::SetTooltip("%s", tip);
                         if (super && ImGui::IsMouseClicked(1)) {
-                            s_kf_ctx.ti = ti; s_kf_ctx.ci = ci;
+                            s_kf_ctx.ti = ti; s_kf_ctx.ci = ci; s_kf_ctx.source = -1;
                             s_kf_ctx.time = g.time;
                             state.selected_track = ti;
                             state.selected_clip  = ci;
@@ -2004,6 +2269,15 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     }
                 }
             }
+            // Group badge: a small hue-coded tab at the clip's top edge marks
+            // grouped clips; same id = same hue, so siblings read at a glance.
+            if (clip.group_id != 0) {
+                uint32_t h = (uint32_t)clip.group_id * 2654435761u;
+                ImU32 gcol = IM_COL32(120 + (h & 0x7F), 120 + ((h >> 7) & 0x7F),
+                                      120 + ((h >> 14) & 0x7F), 235);
+                dl->AddRectFilled({vis_x0 + 2.f, cy0}, {vis_x0 + 16.f, cy0 + 3.f}, gcol, 1.f);
+            }
+
             // Left click — select / drag
             bool any_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
             if (!kf_claimed && !s_trans_hit_this_frame && !any_popup && (!tl_any_popup && ImGui::IsMouseClicked(0))) {
@@ -2012,10 +2286,22 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     auto key = std::make_pair(ti, ci);
                     bool ctrl  = ImGui::GetIO().KeyCtrl;
                     bool shift = ImGui::GetIO().KeyShift;
+                    bool alt   = ImGui::GetIO().KeyAlt;   // Alt = ignore grouping, pick the single clip
+                    s_sel_collapse_ti = -1; s_sel_collapse_ci = -1;
                     if (ctrl) {
-                        if (state.clip_selection.count(key))
+                        if (state.clip_selection.count(key)) {
                             state.clip_selection.erase(key);
-                        else
+                            // Ctrl-toggling a grouped clip off removes its whole group.
+                            if (!alt && clip.group_id != 0) {
+                                for (auto it = state.clip_selection.begin(); it != state.clip_selection.end(); ) {
+                                    if (it->first  < (int)state.tracks.size() &&
+                                        it->second < (int)state.tracks[it->first].clips.size() &&
+                                        state.tracks[it->first].clips[it->second].group_id == clip.group_id)
+                                        it = state.clip_selection.erase(it);
+                                    else ++it;
+                                }
+                            }
+                        } else
                             state.clip_selection.insert(key);
                     } else if (shift && state.selected_track >= 0 && state.selected_clip >= 0) {
                         struct TL { float start; int ti, ci; };
@@ -2030,10 +2316,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         for (auto& e : all)
                             if (e.start >= t_lo && e.start <= t_hi)
                                 state.clip_selection.insert({e.ti, e.ci});
-                    } else {
+                    } else if (!state.clip_selection.count(key)) {
+                        // Plain press OUTSIDE the selection: collapse to this clip.
                         state.clip_selection.clear();
                         state.clip_selection.insert(key);
+                    } else {
+                        // Plain press on a clip ALREADY in the multi-selection:
+                        // keep the selection so a drag moves the whole group.
+                        // If the press ends without a drag, collapse to this
+                        // clip on release (s_sel_collapse_pending) — the old
+                        // collapse-on-press made "box select then drag" move
+                        // only the grabbed clip.
+                        s_sel_collapse_ti = ti;
+                        s_sel_collapse_ci = ci;
                     }
+                    if (!alt) expand_selection_groups(state);
                     state.selected_track = ti;
                     state.selected_clip  = ci;
                     // A coupled brick is an attachment of its content: left-
@@ -2068,7 +2365,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         } else if (right_edge) {
                             drag_track=ti; drag_clip=ci; drag_right=true; drag_left=false; drag_offset=0.f;
                             g_tl.drag_multi.clear();
-                        } else if (!track.managed) {  // body move blocked on managed tracks
+                        } else if (track.kind == TrackKind::Normal) {  // body move blocked on lyrics/FX tracks (they slide)
                             drag_track=ti; drag_clip=ci; drag_left=false; drag_right=false;
                             drag_offset = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom - clip.start;
                             s_body_snap_held_start = -1.f; s_body_snap_held_cand = -1.f;
@@ -2108,6 +2405,14 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 mouse.y>=cy0 && mouse.y<=cy1 && mouse.x>=vis_x0 && mouse.x<=vis_x1) {
                 ctx_track = ti; ctx_clip = ci;
                 state.selected_track = ti; state.selected_clip = ci;
+                // Keep the multi-selection coherent: right-clicking outside it collapses
+                // to this clip; right-clicking a member keeps the whole selection, so the
+                // context-menu ops (delete/duplicate/merge) act on what you'd expect.
+                if (!state.clip_selection.count({ti, ci})) {
+                    state.clip_selection.clear();
+                    state.clip_selection.insert({ti, ci});
+                    expand_selection_groups(state);
+                }
                 open_clip_ctx = true;
                 clip_ctx_opened_this_frame = true;
                 ImGui::OpenPopup("##clip_ctx");
@@ -2119,7 +2424,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             Clip& clip = track.clips[ci];
             if (clip.clip_type == ClipType::Effect  ||
                 clip.clip_type == ClipType::MultiFX ||
-                clip.clip_type == ClipType::BodyFX) continue;
+                clip.clip_type == ClipType::BodyFX  ||
+                clip.clip_type == ClipType::AudioMultiFX) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -2420,7 +2726,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             {
                 TLGeomClip g; g.track = ti; g.clip = ci;
                 g.x0 = vis_x0; g.y0 = cy0; g.x1 = vis_x1; g.y1 = cy1;
-                g.has_fx = !is_fx_clip(clip) && host_fx_count(ti, ci) > 0;
+                g.has_fx = (!is_fx_clip(clip) || fx_brick_self_discloses(state, ti, clip)) &&
+                           host_fx_count(ti, ci) > 0;
                 g.expanded = clip.fx_expanded;
                 g.disc_cx = vis_x0 + 5.f + 4.5f; g.disc_cy = cy1 - 9.f - 1.f + 4.5f;
                 s_tl_geom.clips.push_back(g);
@@ -2579,6 +2886,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             s_clip_hit = true;   // keep the empty-track deselect from firing
                             lane_grabbed = true;
                         }
+                        // Right-click a lane → per-effect menu (shared clipboard + ops
+                        // with the FX panel). Pass 2 runs AFTER the clip menu's
+                        // OpenPopup, so this same-level OpenPopup replaces it — a
+                        // right-click on a gap or a collapsed brick still gets the
+                        // brick's clip menu (Decouple).
+                        if (!tl_any_popup && ImGui::IsMouseClicked(1)) {
+                            s_fxlane_ti = ti; s_fxlane_ci = ci; s_fxlane_idx = i;
+                            s_clip_hit = true;
+                            s_fxlane_open = true;   // opened where it renders (scope-safe)
+                        }
                         break;
                     }
                     // Clicked the unfolded brick but missed every lane (e.g. the
@@ -2653,7 +2970,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         // here too, so it sits above the glass brick's own hit-testing.
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& clip = track.clips[(size_t)ci];
-            if (is_fx_clip(clip) || host_fx_count(ti, ci) <= 0) continue;
+            if ((is_fx_clip(clip) && !fx_brick_self_discloses(state, ti, clip)) ||
+                host_fx_count(ti, ci) <= 0) continue;
             float cx0 = origin.x+TL_LABEL_W+clip.start*zoom-scroll;
             float cx1 = origin.x+TL_LABEL_W+clip.end*zoom-scroll;
             if (cx1 < origin.x+TL_LABEL_W || cx0 > origin.x+total_w) continue;
@@ -2698,6 +3016,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             mouse.y >= track_y && mouse.y < track_y+TL_TRACK_H &&
             mouse.x >= origin.x+TL_LABEL_W && mouse.x <= origin.x+total_w) {
             open_tl_ctx = true;
+            ctx_track   = ti;
+            s_tl_ctx_t  = snap_to_frame(state, fmaxf(0.f, (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom));
             ImGui::OpenPopup("##tl_ctx");
         }
 
@@ -2938,17 +3258,78 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
         }
 
+        // Pass-3 single-key retime: a diamond drag on a content/FX keyframe lane.
+        // Resolves the owner's map (own ktracks or fx_chain[source]); moves one key,
+        // bubble-re-sorts, welds onto a same-prop neighbour on release. Separate
+        // from L1's group drag, so the body lanes are untouched.
+        if (s_kf_subdrag.active && s_kf_subdrag.ti == ti) {
+            Clip* owner = (s_kf_subdrag.ci >= 0 && s_kf_subdrag.ci < (int)track.clips.size())
+                        ? &track.clips[(size_t)s_kf_subdrag.ci] : nullptr;
+            std::unordered_map<std::string, PropTrack>* ktp = nullptr;
+            if (owner) {
+                if (s_kf_subdrag.source < 0) ktp = &owner->ktracks;
+                else if (s_kf_subdrag.source < (int)owner->fx_chain.size())
+                    ktp = &owner->fx_chain[(size_t)s_kf_subdrag.source].ktracks;
+            }
+            PropTrack* pt = nullptr;
+            if (ktp) { auto it = ktp->find(s_kf_subdrag.prop); if (it != ktp->end()) pt = &it->second; }
+            if (!owner || !pt || s_kf_subdrag.idx < 0 || s_kf_subdrag.idx >= (int)pt->keys.size()) {
+                s_kf_subdrag.active = false;   // stale (lane stopped rendering) — finalize
+            } else {
+                float dur = owner->end - owner->start;
+                if (ImGui::IsMouseDragging(0)) {
+                    s_kf_subdrag.moved = true;
+                    float dt = (mouse.x - s_kf_subdrag.ref_x) / zoom;
+                    float t_new = snap_to_frame(state, fmaxf(0.f, fminf(dur, s_kf_subdrag.ref_t + dt)));
+                    pt->keys[(size_t)s_kf_subdrag.idx].time = t_new;
+                    int i = s_kf_subdrag.idx;
+                    while (i > 0 && pt->keys[(size_t)i].time < pt->keys[(size_t)i-1].time) {
+                        std::swap(pt->keys[(size_t)i], pt->keys[(size_t)i-1]); --i;
+                    }
+                    while (i < (int)pt->keys.size()-1 &&
+                           pt->keys[(size_t)i].time > pt->keys[(size_t)i+1].time) {
+                        std::swap(pt->keys[(size_t)i], pt->keys[(size_t)i+1]); ++i;
+                    }
+                    s_kf_subdrag.idx = i;
+                    if (state.kf_sel_track == ti && state.kf_sel_clip == s_kf_subdrag.ci &&
+                        state.kf_sel_source == s_kf_subdrag.source &&
+                        state.kf_sel_prop == s_kf_subdrag.prop)
+                        state.kf_sel_idx = i;
+                }
+                if (ImGui::IsMouseReleased(0)) {
+                    if (s_kf_subdrag.moved) {
+                        // Weld: if it landed on a same-prop sibling, drop the dup.
+                        float tt = pt->keys[(size_t)s_kf_subdrag.idx].time;
+                        for (int j = 0; j < (int)pt->keys.size(); ++j)
+                            if (j != s_kf_subdrag.idx &&
+                                fabsf(pt->keys[(size_t)j].time - tt) < 0.02f) {
+                                pt->keys.erase(pt->keys.begin() + s_kf_subdrag.idx);
+                                break;
+                            }
+                        history_push(state, "Move keyframe");
+                    }
+                    s_kf_subdrag.active = false;
+                }
+            }
+        }
+
         // ── Pass 3: expanded FX timing lanes beneath the clip ─────────────────
         // One bar per coupled effect (video chains first, then audio) showing how
         // long that effect runs on the clip. Drawn in the extra height the track
         // grew by; the clip body above is unchanged.
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             Clip& host = track.clips[(size_t)ci];
-            if (is_fx_clip(host) || !host.fx_expanded) continue;
-            std::vector<int> fxk = coupled_fx_of(state, ti, ci);
+            if ((is_fx_clip(host) && !fx_brick_self_discloses(state, ti, host)) ||
+                !host.fx_expanded) continue;
+            // A standalone chain brick supplies its own lanes; a content host
+            // supplies its welded children.
+            std::vector<int> fxk = fx_brick_self_discloses(state, ti, host)
+                                 ? std::vector<int>{ci}
+                                 : coupled_fx_of(state, ti, ci);
             if (fxk.empty()) continue;
             float lane_top = track_y + TL_TRACK_H + 3.f;
             int row = 0;
+            float lane_y = lane_top;   // running Y cursor (lanes + L4 sub-rows vary in height)
 
             // Collapse handle — a plain white chevron in the label gutter, lined
             // up with the lane stack, so there's an obvious spot to fold the lanes
@@ -2958,7 +3339,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             // = "click to fold"; no filled block, just the glyph.
             {
                 int   n_lanes = host_fx_count(ti, ci);
-                float stack_h = (float)n_lanes * FX_LANE_H;
+                float stack_h = (float)n_lanes * FX_LANE_H +
+                                (float)host_fx_subrows(ti, ci) * SUBROW_H +
+                                host_content_h(ti, ci);
                 float cxm = origin.x + TL_LABEL_W - 11.f;
                 float gy0 = lane_top, gy1 = lane_top + stack_h - 3.f;
                 float cym = (gy0 + gy1) * 0.5f;
@@ -2980,6 +3363,135 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     }
                 }
             }
+            // Content host's OWN keyframes — a visible lane at the TOP of the disclosed
+            // area (the body band hides under the coupled glass brick). Gold-tinted so
+            // it reads as "the clip", distinct from the FX lanes. Expandable per-param.
+            if (!fx_brick_self_discloses(state, ti, host) && nonempty_kt(host) > 0) {
+                float ly0 = lane_y, ly1 = ly0 + FX_LANE_H - 2.f;
+                float ax0 = origin.x + TL_LABEL_W + host.start * zoom - scroll;
+                float ax1 = origin.x + TL_LABEL_W + host.end * zoom - scroll;
+                float vx0 = fmaxf(ax0, origin.x + TL_LABEL_W);
+                float vx1 = fminf(ax1, origin.x + total_w);
+                if (vx1 < vx0 + 3.f) vx1 = vx0 + 3.f;
+                bool pex = host.params_expanded;
+                bool over_chev = !tl_any_popup && mouse.x >= vx0 && mouse.x <= vx0 + 11.f &&
+                                 mouse.y >= ly0 && mouse.y <= ly1;
+                if (ly1 <= track_area_bot && ly0 >= track_area_top) {
+                    dl->AddRectFilled({vx0, ly0}, {vx1, ly1}, IM_COL32(34, 30, 16, 205), 2.f);
+                    dl->AddRect({vx0, ly0}, {vx1, ly1}, IM_COL32(225, 200, 110, 150), 2.f, 0, 1.f);
+                    float chx = vx0 + 5.f, chy = (ly0 + ly1) * 0.5f, cw = 3.f, ch = 3.f;
+                    ImU32 cc = over_chev ? IM_COL32(255,255,255,255) : IM_COL32(225,210,150,220);
+                    if (pex) { dl->AddLine({chx-cw,chy-ch},{chx,chy+ch},cc,1.6f);
+                               dl->AddLine({chx,chy+ch},{chx+cw,chy-ch},cc,1.6f); }
+                    else     { dl->AddLine({chx-ch,chy-cw},{chx+ch,chy},cc,1.6f);
+                               dl->AddLine({chx+ch,chy},{chx-ch,chy+cw},cc,1.6f); }
+                    ImGui::PushClipRect({vx0, ly0}, {vx1, ly1}, true);
+                    dl->AddText({vx0 + 13.f, ly0 + 1.f}, IM_COL32(238, 224, 175, 255), "Clip");
+                    ImGui::PopClipRect();
+                    std::vector<std::pair<float,int>> kg;
+                    kf_accumulate_groups(host.ktracks, kg);
+                    {
+                        bool rh = !tl_any_popup && mouse.x >= vx0 && mouse.x <= vx1 &&
+                                  mouse.y >= ly0 && mouse.y <= ly1;
+                        float hov_t = -1.f; int hov_n = 0;
+                        if (rh) for (auto& g : kg)
+                            if (fabsf(mouse.x - (ax0 + g.first * zoom)) <= 8.f) { hov_t = g.first; hov_n = g.second; break; }
+                        float sel_t = kf_selected_time(state, ti, ci, -1, host.ktracks);
+                        draw_kf_groups(dl, kg, ax0, zoom, vx0, vx1, chy, hov_t, sel_t);
+                        if (hov_t >= 0.f && !over_chev) {
+                            if (!track.locked) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                            ImGui::SetTooltip("clip keyframe \xc2\xb7 t=%.2fs \xc2\xb7 %d key%s\nclick to seek \xc2\xb7 disclose for per-param",
+                                              hov_t, hov_n, hov_n == 1 ? "" : "s");
+                        }
+                    }
+                    if (over_chev) {
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                        if (!track.locked && ImGui::IsMouseClicked(0)) {
+                            host.params_expanded = !pex; s_clip_hit = true;
+                        }
+                    }
+                    // Click the lane → select the clip; on a diamond, seek there too.
+                    // (Param is ambiguous on the merged lane; disclose for per-param.)
+                    else if (!track.locked && !tl_any_popup && ImGui::IsMouseClicked(0) &&
+                             mouse.x >= vx0 && mouse.x <= vx1 &&
+                             mouse.y >= ly0 && mouse.y <= ly1) {
+                        state.selected_track = ti; state.selected_clip = ci;
+                        state.clip_selection.clear(); state.clip_selection.insert({ti, ci});
+                        request_panel_view(PanelView::Clip);
+                        for (auto& g : kg)
+                            if (fabsf(mouse.x - (ax0 + g.first * zoom)) <= 8.f) {
+                                seek_to(state, host.start + g.first); break;
+                            }
+                        s_clip_hit = true;
+                    }
+                    // Right-click a content super diamond → unpair its merged keys.
+                    if (!over_chev && !track.locked && !tl_any_popup && ImGui::IsMouseClicked(1) &&
+                        mouse.y >= ly0 && mouse.y <= ly1) {
+                        for (auto& g : kg)
+                            if (g.second > 1 && fabsf(mouse.x - (ax0 + g.first * zoom)) <= 8.f) {
+                                s_kf_ctx.ti = ti; s_kf_ctx.ci = ci; s_kf_ctx.source = -1;
+                                s_kf_ctx.time = g.first;
+                                state.selected_track = ti; state.selected_clip = ci;
+                                clip_ctx_opened_this_frame = true;
+                                ImGui::OpenPopup("##kf_ctx");
+                                s_clip_hit = true;
+                                break;
+                            }
+                    }
+                }
+                lane_y += FX_LANE_H;
+                if (host.params_expanded) {
+                    for (auto& kv : host.ktracks) {
+                        if (kv.second.keys.empty()) continue;
+                        float sly0 = lane_y, sly1 = lane_y + SUBROW_H - 2.f;
+                        if (sly1 <= track_area_bot && sly0 >= track_area_top) {
+                            dl->AddRectFilled({vx0, sly0}, {vx1, sly1}, IM_COL32(26, 22, 12, 175), 2.f);
+                            ImGui::PushClipRect({vx0, sly0}, {vx1, sly1}, true);
+                            dl->AddText({vx0 + 6.f, sly0 - 1.f}, IM_COL32(205, 190, 150, 220),
+                                        kv.first.c_str());
+                            ImGui::PopClipRect();
+                            std::vector<std::pair<float,int>> pg;
+                            for (auto& kk : kv.second.keys) pg.push_back({kk.time, 1});
+                            bool rh = !tl_any_popup && mouse.y >= sly0 && mouse.y <= sly1;
+                            int hki = rh ? kf_hit_index(kv.second, ax0, zoom, mouse.x) : -1;
+                            float hov_t = hki >= 0 ? kv.second.keys[(size_t)hki].time : -1.f;
+                            float sel_t = (state.kf_sel_track == ti && state.kf_sel_clip == ci &&
+                                           state.kf_sel_source == -1 && state.kf_sel_prop == kv.first &&
+                                           state.kf_sel_idx >= 0 && state.kf_sel_idx < (int)kv.second.keys.size())
+                                        ? kv.second.keys[(size_t)state.kf_sel_idx].time : -1.f;
+                            draw_kf_groups(dl, pg, ax0, zoom, vx0, vx1, (sly0 + sly1) * 0.5f, hov_t, sel_t);
+                            if (hki >= 0 && !track.locked) {
+                                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                                ImGui::SetTooltip("%s = %.3f  @ %.2fs\nclick to edit \xc2\xb7 drag to move \xc2\xb7 right-click to unpair",
+                                    kv.first.c_str(), kv.second.keys[(size_t)hki].value, kv.second.keys[(size_t)hki].time);
+                            }
+                            // Click a diamond → navigate to this param + seek.
+                            if (!track.locked && !tl_any_popup && ImGui::IsMouseClicked(0) &&
+                                mouse.y >= sly0 && mouse.y <= sly1) {
+                                int ki = kf_hit_index(kv.second, ax0, zoom, mouse.x);
+                                if (ki >= 0) {
+                                    state.selected_track = ti; state.selected_clip = ci;
+                                    state.clip_selection.clear(); state.clip_selection.insert({ti, ci});
+                                    request_panel_view(PanelView::Clip);
+                                    state.kf_sel_track = ti; state.kf_sel_clip = ci;
+                                    state.kf_sel_source = -1; state.kf_sel_prop = kv.first;
+                                    state.kf_sel_idx = ki;
+                                    state.focus_prop = (kv.first == "scale_y" ? std::string("scale_x") : kv.first);
+                                    state.focus_prop_t = ImGui::GetTime();
+                                    seek_to(state, host.start + kv.second.keys[(size_t)ki].time);
+                                    s_kf_subdrag.active = true; s_kf_subdrag.ti = ti;
+                                    s_kf_subdrag.ci = ci; s_kf_subdrag.source = -1;
+                                    s_kf_subdrag.prop = kv.first; s_kf_subdrag.idx = ki;
+                                    s_kf_subdrag.moved = false; s_kf_subdrag.ref_x = mouse.x;
+                                    s_kf_subdrag.ref_t = kv.second.keys[(size_t)ki].time;
+                                    s_clip_hit = true;
+                                }
+                            }
+                        }
+                        lane_y += SUBROW_H;
+                    }
+                }
+            }
             // k = brick clip index, ei = entry index in the brick's chain (-1 for
             // a single brick). The edges resize the effect's rel window; clicking
             // selects the effect so its keyframable sliders open in the panel.
@@ -2990,7 +3502,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 float vx0 = fmaxf(ax0, origin.x + TL_LABEL_W);
                 float vx1 = fminf(ax1, origin.x + total_w);
                 if (vx1 < vx0 + 3.f) vx1 = vx0 + 3.f;
-                float ly0 = lane_top + row * FX_LANE_H, ly1 = ly0 + FX_LANE_H - 2.f;
+                float ly0 = lane_y, ly1 = ly0 + FX_LANE_H - 2.f;
+                bool has_kf_params = ei >= 0 && !fx_brick_is_audio_kind(brick) &&
+                                     nonempty_kt(brick.fx_chain[(size_t)ei]) > 0;
+                bool over_chevron = has_kf_params && !tl_any_popup &&
+                                    mouse.x >= vx0 && mouse.x <= vx0 + 11.f &&
+                                    mouse.y >= ly0 && mouse.y <= ly1;
                 // The lane reads as "selected" whenever its entry is the brick's
                 // active chain entry and the panel is inspecting this lane group —
                 // which means either the host content clip (FX-tab path) or the
@@ -3004,16 +3521,53 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                                       (c.fill & 0x00FFFFFFu) | (selr ? 0xF0000000u : 0xC8000000u), 2.f);
                     dl->AddRect({vx0, ly0}, {vx1, ly1}, c.border, 2.f, 0, selr ? 1.8f : 1.f);
                     ImGui::PushClipRect({vx0, ly0}, {vx1, ly1}, true);
-                    dl->AddText({vx0 + 4.f, ly0 + 1.f}, IM_COL32(235, 240, 250, 255),
-                                fx_type_name(ft));
+                    dl->AddText({vx0 + (has_kf_params ? 13.f : 4.f), ly0 + 1.f},
+                                IM_COL32(235, 240, 250, 255), fx_type_name(ft));
                     ImGui::PopClipRect();
+                    // L3: this effect's keyframes, inline on the lane (read-only).
+                    if (ei >= 0) {
+                        std::vector<std::pair<float,int>> kg;
+                        kf_accumulate_groups(brick.fx_chain[(size_t)ei].ktracks, kg);
+                        if (!kg.empty()) {
+                            float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
+                            bool rh = !tl_any_popup && mouse.x >= vx0 && mouse.x <= vx1 &&
+                                      mouse.y >= ly0 && mouse.y <= ly1;
+                            float hov_t = -1.f; int hov_n = 0;
+                            if (rh) for (auto& g : kg)
+                                if (fabsf(mouse.x - (xo + g.first * zoom)) <= 8.f) { hov_t = g.first; hov_n = g.second; break; }
+                            float sel_t = kf_selected_time(state, ti, k, ei, brick.fx_chain[(size_t)ei].ktracks);
+                            draw_kf_groups(dl, kg, xo, zoom, vx0, vx1, (ly0 + ly1) * 0.5f, hov_t, sel_t);
+                            if (hov_t >= 0.f && !over_chevron)
+                                ImGui::SetTooltip("%s \xc2\xb7 t=%.2fs \xc2\xb7 %d key%s\ndisclose for per-param",
+                                                  fx_type_name(ft), hov_t, hov_n, hov_n == 1 ? "" : "s");
+                        }
+                    }
+                    // L4 disclosure chevron (left edge) for effects with keyed params.
+                    if (has_kf_params) {
+                        bool pex = brick.fx_chain[(size_t)ei].params_expanded;
+                        float chx = vx0 + 5.f, chy = (ly0 + ly1) * 0.5f, cw = 3.f, ch = 3.f;
+                        ImU32 cc = over_chevron ? IM_COL32(255,255,255,255)
+                                                : IM_COL32(205,212,225,210);
+                        if (pex) { dl->AddLine({chx-cw,chy-ch},{chx,chy+ch},cc,1.6f);
+                                   dl->AddLine({chx,chy+ch},{chx+cw,chy-ch},cc,1.6f); }
+                        else     { dl->AddLine({chx-ch,chy-cw},{chx+ch,chy},cc,1.6f);
+                                   dl->AddLine({chx+ch,chy},{chx-ch,chy+cw},cc,1.6f); }
+                        if (over_chevron) {
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                            if (!track.locked && ImGui::IsMouseClicked(0)) {
+                                brick.fx_chain[(size_t)ei].params_expanded = !pex;
+                                s_clip_hit = true;
+                            }
+                        }
+                    }
                     TLGeomLane gl; gl.track = ti; gl.clip = ci; gl.idx = row;
                     gl.x0 = vx0; gl.y0 = ly0; gl.x1 = vx1; gl.y1 = ly1;
                     gl.audio = fx_brick_is_audio_kind(brick);
                     s_tl_geom.lanes.push_back(gl);
 
-                    // Resize / select interaction (chain entries only).
-                    if (ei >= 0 && !track.locked && g_tl.fx_lane_drag == 0 &&
+                    // Resize / select interaction (chain entries only). Skipped over
+                    // the L4 chevron so its click doesn't also start a lane drag.
+                    if (!over_chevron && ei >= 0 && !track.locked && g_tl.fx_lane_drag == 0 &&
                         !tl_any_popup &&
                         mouse.x >= vx0 - 4.f && mouse.x <= vx1 + 4.f &&
                         mouse.y >= ly0 && mouse.y <= ly1) {
@@ -3041,8 +3595,104 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                             brick.fx_chain_selected = ei;
                             request_panel_view(fx_brick_is_audio_kind(brick)
                                 ? PanelView::HostAudioFX : PanelView::HostFX);
+                            // If the click landed on a keyframe diamond, seek there too.
+                            if (ei >= 0) {
+                                float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
+                                for (auto& kv : brick.fx_chain[(size_t)ei].ktracks) {
+                                    int ki = kf_hit_index(kv.second, xo, zoom, mouse.x);
+                                    if (ki >= 0) { seek_to(state, brick.start + kv.second.keys[(size_t)ki].time); break; }
+                                }
+                            }
                             s_clip_hit = true;
                         }
+                        // Right-click a host-disclosed lane → unpair a super diamond,
+                        // else the per-effect menu (shared clipboard). Target = the
+                        // glass brick (k), entry ei.
+                        if (ImGui::IsMouseClicked(1)) {
+                            int super_n = 0; float super_t = 0.f;
+                            if (ei >= 0) {
+                                float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
+                                std::vector<std::pair<float,int>> kg2;
+                                kf_accumulate_groups(brick.fx_chain[(size_t)ei].ktracks, kg2);
+                                for (auto& g : kg2)
+                                    if (g.second > 1 && fabsf(mouse.x - (xo + g.first*zoom)) <= 8.f) {
+                                        super_n = g.second; super_t = g.first; break;
+                                    }
+                            }
+                            if (super_n > 1) {
+                                s_kf_ctx.ti = ti; s_kf_ctx.ci = k; s_kf_ctx.source = ei;
+                                s_kf_ctx.time = super_t;
+                                clip_ctx_opened_this_frame = true;
+                                ImGui::OpenPopup("##kf_ctx");
+                            } else {
+                                s_fxlane_ti = ti; s_fxlane_ci = k; s_fxlane_idx = ei;
+                                s_fxlane_open = true;
+                            }
+                            s_clip_hit = true;
+                        }
+                    }
+                }
+                // L4: advance past the lane, then draw this effect's per-param sub-rows.
+                lane_y += FX_LANE_H;
+                // ei>=0: a chain entry's params (gated by its own L4 chevron). ei==-1:
+                // a standalone single brick discloses its OWN params directly when open.
+                bool show_sub = !fx_brick_is_audio_kind(brick) &&
+                                (ei >= 0 ? brick.fx_chain[(size_t)ei].params_expanded : true);
+                if (show_sub) {
+                    Clip& se = (ei >= 0) ? brick.fx_chain[(size_t)ei] : brick;
+                    for (auto& kv : se.ktracks) {
+                        if (kv.second.keys.empty()) continue;
+                        float sly0 = lane_y, sly1 = lane_y + SUBROW_H - 2.f;
+                        if (sly1 <= track_area_bot && sly0 >= track_area_top) {
+                            dl->AddRectFilled({vx0, sly0}, {vx1, sly1}, IM_COL32(8,8,12,150), 2.f);
+                            ImGui::PushClipRect({vx0, sly0}, {vx1, sly1}, true);
+                            dl->AddText({vx0 + 6.f, sly0 - 1.f}, IM_COL32(165,178,200,220),
+                                        kv.first.c_str());
+                            ImGui::PopClipRect();
+                            std::vector<std::pair<float,int>> pg;
+                            for (auto& kk : kv.second.keys) pg.push_back({kk.time, 1});
+                            float xo = origin.x + TL_LABEL_W + brick.start * zoom - scroll;
+                            bool rh = !tl_any_popup && mouse.y >= sly0 && mouse.y <= sly1;
+                            int hki = rh ? kf_hit_index(kv.second, xo, zoom, mouse.x) : -1;
+                            float hov_t = hki >= 0 ? kv.second.keys[(size_t)hki].time : -1.f;
+                            float sel_t = (state.kf_sel_track == ti && state.kf_sel_clip == k &&
+                                           state.kf_sel_source == ei && state.kf_sel_prop == kv.first &&
+                                           state.kf_sel_idx >= 0 && state.kf_sel_idx < (int)kv.second.keys.size())
+                                        ? kv.second.keys[(size_t)state.kf_sel_idx].time : -1.f;
+                            draw_kf_groups(dl, pg, xo, zoom, vx0, vx1, (sly0 + sly1) * 0.5f, hov_t, sel_t);
+                            if (hki >= 0 && !track.locked) {
+                                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                                ImGui::SetTooltip("%s = %.3f  @ %.2fs\nclick to edit \xc2\xb7 drag to move \xc2\xb7 right-click to unpair",
+                                    kv.first.c_str(), kv.second.keys[(size_t)hki].value, kv.second.keys[(size_t)hki].time);
+                            }
+                            // Click a diamond → select the effect + navigate to this param + seek.
+                            if (!track.locked && !tl_any_popup && ImGui::IsMouseClicked(0) &&
+                                mouse.y >= sly0 && mouse.y <= sly1) {
+                                int ki = kf_hit_index(kv.second, xo, zoom, mouse.x);
+                                if (ki >= 0) {
+                                    state.selected_track = ti; state.selected_clip = ci;
+                                    state.clip_selection.clear(); state.clip_selection.insert({ti, ci});
+                                    if (ei >= 0) {   // chain entry → open the host's FX tab
+                                        brick.fx_chain_selected = ei;
+                                        request_panel_view(fx_brick_is_audio_kind(brick)
+                                            ? PanelView::HostAudioFX : PanelView::HostFX);
+                                    }   // ei==-1: ci IS the brick — pv_derive opens its own FX editor
+                                    state.kf_sel_track = ti; state.kf_sel_clip = k;
+                                    state.kf_sel_source = ei; state.kf_sel_prop = kv.first;
+                                    state.kf_sel_idx = ki;
+                                    state.focus_prop = kv.first;
+                                    state.focus_prop_t = ImGui::GetTime();
+                                    seek_to(state, brick.start + kv.second.keys[(size_t)ki].time);
+                                    s_kf_subdrag.active = true; s_kf_subdrag.ti = ti;
+                                    s_kf_subdrag.ci = k; s_kf_subdrag.source = ei;
+                                    s_kf_subdrag.prop = kv.first; s_kf_subdrag.idx = ki;
+                                    s_kf_subdrag.moved = false; s_kf_subdrag.ref_x = mouse.x;
+                                    s_kf_subdrag.ref_t = kv.second.keys[(size_t)ki].time;
+                                    s_clip_hit = true;
+                                }
+                            }
+                        }
+                        lane_y += SUBROW_H;
                     }
                 }
                 row++;
@@ -3283,14 +3933,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // Only select clips when the box has meaningful size — a zero-size
                 // box (single click, t0==t1) would match any clip spanning the cursor,
                 // immediately re-selecting what we just deselected.
-                if (bx1 - bx0 > 4.f || by1 - by0 > 4.f)
-                for (int t2=0; t2<(int)state.tracks.size(); ++t2) {
-                    if (t2 < tr0 || t2 > tr1) continue;
-                    for (int c2=0; c2<(int)state.tracks[t2].clips.size(); ++c2) {
-                        const Clip& bc = state.tracks[t2].clips[c2];
-                        if (bc.end > t0 && bc.start < t1)
-                            state.clip_selection.insert({t2, c2});
+                if (bx1 - bx0 > 4.f || by1 - by0 > 4.f) {
+                    for (int t2=0; t2<(int)state.tracks.size(); ++t2) {
+                        if (t2 < tr0 || t2 > tr1) continue;
+                        for (int c2=0; c2<(int)state.tracks[t2].clips.size(); ++c2) {
+                            const Clip& bc = state.tracks[t2].clips[c2];
+                            if (bc.end > t0 && bc.start < t1)
+                                state.clip_selection.insert({t2, c2});
+                        }
                     }
+                    expand_selection_groups(state);
                 }
             } else {
                 // Released — finalise, update focus to first selected clip
@@ -3543,7 +4195,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             if (dc.start == old_dc_start) return;
             std::string old_key = clip_slot_key(dc.text, old_dc_start);
             std::string new_key = clip_slot_key(dc.text, dc.start);
-            for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+            for (int i = 0; i < MAX_VIDEO_SLOTS; ++i)
                 if (state.proxy_paths[i] == old_key) { state.proxy_paths[i] = new_key; break; }
         };
 
@@ -3559,9 +4211,34 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         const float vis_t_lo = (scroll > 0.5f) ? (scroll + fit_margin) / zoom : 0.f;
         const float vis_t_hi = (scroll + clip_area_w - fit_margin) / zoom;
 
+        // Trim walls: a dragged edge stops at the nearest same-stream neighbor
+        // instead of sliding over it. Content/text clips wall against each
+        // other; FX bricks wall against same-kind FX bricks (the rules of
+        // clips_conflict, applied live during the drag — previously only FX
+        // trims were checked, and only with a bounce-back at release).
+        float trim_floor = 0.f;                 // left trim can't cross this
+        float trim_ceil  = std::numeric_limits<float>::max();  // right trim wall
+        {
+            auto same_stream = [&](const Clip& oc) {
+                if (is_fx_clip(dc) != is_fx_clip(oc)) return false;
+                if (fx_brick_is_audio_kind(dc) != fx_brick_is_audio_kind(oc)) return false;
+                return true;
+            };
+            auto& tcl = state.tracks[(size_t)drag_track].clips;
+            for (int oi = 0; oi < (int)tcl.size(); ++oi) {
+                if (oi == drag_clip) continue;
+                const Clip& oc = tcl[(size_t)oi];
+                if (!same_stream(oc)) continue;
+                if (oc.end <= dc.start + 1e-3f)  trim_floor = fmaxf(trim_floor, oc.end);
+                if (oc.start >= dc.end - 1e-3f)  trim_ceil  = fminf(trim_ceil,  oc.start);
+            }
+        }
+
         if (drag_left && !left_locked) {
-            float t = edge_snap(snap(new_t), cands);
-            t = fmaxf(vis_t_lo, fminf(t, vis_t_hi));
+            // Clamp to the visible window first, then snap (see the right-edge note)
+            // so a left trim stays frame-aligned while auto-scrolling toward 0:00.
+            float lt = fmaxf(vis_t_lo, fminf(new_t, vis_t_hi));
+            float t = fmaxf(trim_floor, edge_snap(snap(lt), cands));
             bool still_img_l = dc.clip_type == ClipType::Video && is_image_path(dc.text);
             float src_floor = (src_dur > 0.f && !still_img_l)
                 ? dc.start - dc.in_point / fmaxf(0.01f, dc.speed) : 0.f;
@@ -3577,14 +4254,31 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             sync_proxy_key();
         } else if (drag_right && !right_locked) {
             float et = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
-            float t = edge_snap(snap(et), cands);
-            t = fmaxf(vis_t_lo, fminf(t, vis_t_hi));
+            // Clamp to the visible window FIRST, then frame-snap, so the edge stays
+            // frame-aligned even while auto-scroll feeds timeline under it. Clamping
+            // AFTER the snap let vis_t_hi — a smooth function of the pixel-by-pixel
+            // scroll — override the snap, so the edge slid smoothly instead of frame
+            // to frame once auto-scroll kicked in.
+            et = fmaxf(vis_t_lo, fminf(et, vis_t_hi));
+            // When the playhead sits at this clip's end it's clamped to follow the
+            // shrinking end (app.cpp). Snapping the edge TO the playhead then makes
+            // the two chase each other and bounce — so drop it (and anything sitting
+            // on it) from the candidate set while they're coupled.
+            std::vector<float> rcands;
+            const std::vector<float>* use = &cands;
+            if (state.playhead >= dc.end - 1.5f * f1) {
+                rcands.reserve(cands.size());
+                for (float c : cands) if (fabsf(c - state.playhead) > 1e-4f) rcands.push_back(c);
+                use = &rcands;
+            }
+            float t = edge_snap(snap(et), *use);
             // Stills hold a single frame indefinitely, so the source-duration
             // cap doesn't apply — let the user stretch the brick freely.
             bool still_img = dc.clip_type == ClipType::Video && is_image_path(dc.text);
             float max_end = (src_dur > 0.f && !still_img)
                 ? dc.start + (src_dur - dc.in_point) / fmaxf(0.01f, dc.speed)
                 : t;
+            max_end = fminf(max_end, trim_ceil);   // wall at the next brick
             dc.end = fmaxf(dc.start + f1, fminf(t, max_end));
         } else if (!drag_left && !drag_right) {
             float dur_clip = dc.end - dc.start;
@@ -3622,15 +4316,26 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             dc.start = fmaxf(0.f, best_start);
             dc.end   = dc.start + dur_clip;
             sync_proxy_key();
-            // Co-move all other selected clips by the same delta
+            // Co-move all other selected clips by the same delta. The delta is
+            // clamped so the EARLIEST clip in the group stops at 0:00 — the old
+            // per-clip fmaxf(0,...) let clips hit the wall one by one, squashing
+            // the group's relative spacing when dragged toward the start.
             if (g_tl.drag_multi.size() > 1) {
                 float delta = dc.start - drag_origin_start;
+                float min_start = drag_origin_start;
+                for (auto& orig : g_tl.drag_multi)
+                    min_start = fminf(min_start, orig.start);
+                if (min_start + delta < 0.f) {
+                    delta    = -min_start;
+                    dc.start = drag_origin_start + delta;
+                    dc.end   = dc.start + dur_clip;
+                }
                 for (auto& orig : g_tl.drag_multi) {
                     if (orig.ti == drag_track && orig.ci == drag_clip) continue;
                     if (orig.ti >= (int)state.tracks.size()) continue;
                     if (orig.ci >= (int)state.tracks[orig.ti].clips.size()) continue;
                     Clip& oc = state.tracks[orig.ti].clips[orig.ci];
-                    oc.start = fmaxf(0.f, orig.start + delta);
+                    oc.start = orig.start + delta;
                     oc.end   = oc.start + (orig.end - orig.start);
                 }
             }
@@ -3674,12 +4379,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                           drag_hot_track < (int)state.tracks.size())
                              ? drag_hot_track : drag_track;
                 if (is_fx_clip(dc_ref)) {
+                    // Merge onto the FX brick UNDER THE CURSOR — what you point at — not
+                    // whatever the (possibly long) span happens to overlap. Mirrors the
+                    // couple's cursor-first rule so the two can't disagree: cursor over a
+                    // weldable brick → merge here; over bare content → couple (below).
+                    float cur_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
                     for (int ci2 = 0; ci2 < (int)state.tracks[tt].clips.size(); ++ci2) {
                         if (tt == drag_track && ci2 == drag_clip) continue;
                         const Clip& oc = state.tracks[tt].clips[ci2];
                         if (!is_fx_clip(oc)) continue;
                         if (!fx_bricks_weldable(dc_ref, oc)) continue;
-                        if (dc_ref.start < oc.end && dc_ref.end > oc.start) {
+                        if (cur_t >= oc.start && cur_t < oc.end) {
                             g_tl.drag_merge_ti = tt;
                             g_tl.drag_merge_ci = ci2;
                             break;
@@ -3693,21 +4403,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 // the best-overlap host on the mouse row (same rule as couple_fx_now).
                 if (g_tl.drag_merge_ci < 0 && is_fx_clip(dc_ref) && !dc_ref.fx_coupled) {
                     bool audio_kind = fx_brick_is_audio_kind(dc_ref);
-                    float best_ov = 0.05f; int best = -1;
-                    for (int ci2 = 0; ci2 < (int)state.tracks[tt].clips.size(); ++ci2) {
-                        if (tt == drag_track && ci2 == drag_clip) continue;
-                        const Clip& hc = state.tracks[tt].clips[ci2];
-                        bool hostable = audio_kind
-                            ? (hc.clip_type == ClipType::Audio ||
-                               hc.clip_type == ClipType::Record ||
-                               hc.clip_type == ClipType::Video ||
-                               hc.clip_type == ClipType::VideoRecord)
-                            : (clip_is_videolike_type(hc.clip_type) ||
-                               hc.clip_type == ClipType::Background);
-                        if (!hostable) continue;
-                        float ov = fminf(dc_ref.end, hc.end) - fmaxf(dc_ref.start, hc.start);
-                        if (ov > best_ov) { best_ov = ov; best = ci2; }
-                    }
+                    int excl = (tt == drag_track) ? drag_clip : -1;
+                    // Prefer the clip under the cursor on the hovered row so the
+                    // brick welds to what you point at, not the widest overlap.
+                    float cur_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
+                    int best = fx_host_pick(state, tt, excl, audio_kind,
+                                            dc_ref.start, dc_ref.end, cur_t);
                     if (best >= 0) { g_tl.drag_couple_ti = tt; g_tl.drag_couple_ci = best; }
                 }
                 // Multi-drags never weld (merge or couple).
@@ -3899,10 +4600,93 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 state.clip_selection.insert({state.selected_track, state.selected_clip});
                 history_push(state, "Move clip to new track");
             } else if (!drag_left && !drag_right && s_drag_moved &&
+                drag_hot_track >= 0 && drag_hot_track != drag_track &&
+                g_tl.drag_multi.size() > 1) {
+                // Cross-track MULTI move: every selected clip shifts by the same
+                // track offset, keeping the times the drag already applied. The
+                // old code moved only the grabbed clip and silently left the
+                // rest of the selection behind. All-or-nothing: if any member's
+                // target row is out of range, not a Normal track, locked, or
+                // conflicts with a non-selected clip, the whole drop reverts.
+                int track_delta = drag_hot_track - drag_track;
+                bool ok = drag_hot_track < (int)state.tracks.size();
+                if (ok) for (auto& orig : g_tl.drag_multi) {
+                    int dst = orig.ti + track_delta;
+                    if (dst < 0 || dst >= (int)state.tracks.size() ||
+                        state.tracks[(size_t)dst].kind != TrackKind::Normal ||
+                        state.tracks[(size_t)dst].locked) { ok = false; break; }
+                    if (orig.ti >= (int)state.tracks.size() ||
+                        orig.ci >= (int)state.tracks[orig.ti].clips.size()) { ok = false; break; }
+                    const Clip& mc = state.tracks[orig.ti].clips[orig.ci];
+                    for (int c2 = 0; c2 < (int)state.tracks[(size_t)dst].clips.size(); ++c2) {
+                        bool member = false;
+                        for (auto& o2 : g_tl.drag_multi)
+                            if (o2.ti == dst && o2.ci == c2) { member = true; break; }
+                        if (member) continue;
+                        if (clips_conflict(mc, state.tracks[(size_t)dst].clips[c2])) { ok = false; break; }
+                    }
+                    if (!ok) break;
+                }
+                if (!ok) {
+                    // Revert every member to its drag origin (times only; tracks
+                    // never changed yet).
+                    for (auto& orig : g_tl.drag_multi) {
+                        if (orig.ti >= (int)state.tracks.size()) continue;
+                        if (orig.ci >= (int)state.tracks[orig.ti].clips.size()) continue;
+                        Clip& oc = state.tracks[orig.ti].clips[orig.ci];
+                        oc.start = orig.start;
+                        oc.end   = orig.end;
+                    }
+                } else {
+                    // Extract members per source track in DESCENDING clip order so
+                    // earlier indices stay valid, then append to their targets.
+                    std::vector<TlState::Origin> mems(g_tl.drag_multi.begin(), g_tl.drag_multi.end());
+                    std::sort(mems.begin(), mems.end(), [](const TlState::Origin& a, const TlState::Origin& b){
+                        return a.ti != b.ti ? a.ti < b.ti : a.ci > b.ci;
+                    });
+                    std::vector<std::pair<int, Clip>> moving;   // (dst track, clip)
+                    for (auto& orig : mems) {
+                        if (orig.ti >= (int)state.tracks.size() ||
+                            orig.ci >= (int)state.tracks[orig.ti].clips.size()) continue;
+                        auto& clips = state.tracks[orig.ti].clips;
+                        moving.push_back({orig.ti + track_delta, clips[(size_t)orig.ci]});
+                        clips.erase(clips.begin() + orig.ci);
+                    }
+                    state.clip_selection.clear();
+                    for (auto& [dst, mc] : moving) {
+                        state.tracks[(size_t)dst].clips.push_back(mc);
+                        state.clip_selection.insert({dst, (int)state.tracks[(size_t)dst].clips.size() - 1});
+                    }
+                    state.selected_track = drag_hot_track;
+                    state.selected_clip  = state.clip_selection.count({drag_hot_track,
+                                             (int)state.tracks[(size_t)drag_hot_track].clips.size() - 1})
+                                             ? (int)state.tracks[(size_t)drag_hot_track].clips.size() - 1 : -1;
+                    if (state.selected_clip < 0 && !state.clip_selection.empty()) {
+                        auto first = *state.clip_selection.begin();
+                        state.selected_track = first.first;
+                        state.selected_clip  = first.second;
+                    }
+                    history_push(state, "Move clips to track");
+                }
+            } else if (!drag_left && !drag_right && s_drag_moved &&
                 drag_hot_track >= 0 && drag_hot_track != drag_track) {
                 std::vector<Clip> grp = extract_host_group(state, drag_track, drag_clip);
                 Clip& moved = grp[0];
-                if (drag_hot_track == (int)state.tracks.size()) {
+                // Folder rows hold no clips — bounce the drop back like an overlap.
+                if (drag_hot_track < (int)state.tracks.size() &&
+                    is_group_head(state.tracks[(size_t)drag_hot_track])) {
+                    moved.start = drag_origin_start;
+                    moved.end   = drag_origin_end;
+                    int at = drag_clip < (int)state.tracks[drag_track].clips.size()
+                             ? drag_clip : (int)state.tracks[drag_track].clips.size();
+                    for (int gi = (int)grp.size()-1; gi >= 0; --gi)
+                        state.tracks[drag_track].clips.insert(
+                            state.tracks[drag_track].clips.begin() + at, grp[(size_t)gi]);
+                    state.selected_track = drag_track;
+                    state.selected_clip  = at;
+                    state.clip_selection.clear();
+                    state.clip_selection.insert({state.selected_track, state.selected_clip});
+                } else if (drag_hot_track == (int)state.tracks.size()) {
                     // Drop below all tracks — create new track
                     Track nt;
                     char name[32];
@@ -3943,7 +4727,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         int sel = base;
                         const char* act = "Move clip to track";
                         if (is_fx_clip(grp[0])) {
-                            sel = couple_fx_now(state, drag_hot_track, base);
+                            // Couple to the clip under the cursor (drop point), so
+                            // a brick lands where you released it — not on whatever
+                            // the wide brick body overlapped most.
+                            float drop_t = (mouse.x - origin.x - TL_LABEL_W + scroll) / zoom;
+                            sel = couple_fx_now(state, drag_hot_track, base, drop_t);
                             if (sel != base || state.tracks[drag_hot_track]
                                     .clips[(size_t)sel].fx_coupled)
                                 act = "Couple FX brick";
@@ -4002,7 +4790,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                         && moved_clip.start != drag_origin_start) {
                         std::string old_key = clip_slot_key(moved_clip.text, moved_clip.start);
                         std::string new_key = clip_slot_key(moved_clip.text, drag_origin_start);
-                        for (int i = 0; i < MAX_VIDEO_TRACKS; ++i)
+                        for (int i = 0; i < MAX_VIDEO_SLOTS; ++i)
                             if (state.proxy_paths[i] == old_key) { state.proxy_paths[i] = new_key; break; }
                     }
                     moved_clip.start = drag_origin_start;
@@ -4023,7 +4811,21 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             }
         }
+        // Deferred collapse: the press landed on an already-selected clip and
+        // kept the multi-selection for a potential group drag — it never
+        // moved, so NOW it reads as "select just this clip". (goto cancels
+        // skip this on purpose; an aborted drag shouldn't reshape selection.)
+        if (!s_drag_moved && !drag_left && !drag_right &&
+            s_sel_collapse_ti == drag_track && s_sel_collapse_ci == drag_clip &&
+            drag_track >= 0) {
+            state.clip_selection.clear();
+            state.clip_selection.insert({drag_track, drag_clip});
+            if (!ImGui::GetIO().KeyAlt) expand_selection_groups(state);
+            state.selected_track = drag_track;
+            state.selected_clip  = drag_clip;
+        }
         drag_done:
+        s_sel_collapse_ti = -1; s_sel_collapse_ci = -1;
         drag_track=-1; drag_clip=-1; drag_left=false; drag_right=false;
         drag_hot_track=-1; drag_hot_gap=-1;
         g_tl.drag_merge_ti = -1; g_tl.drag_merge_ci = -1;
@@ -4137,6 +4939,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     if (target < 0) {
                         Track nt;
                         nt.name = clip_type_name(cl.clip_type);
+                        if (cl.clip_type == ClipType::Lyrics) nt.kind = TrackKind::Lyrics;
                         state.tracks.push_back(std::move(nt));
                         target = (int)state.tracks.size() - 1;
                     }
@@ -4170,6 +4973,11 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     AnimStyle st = (AnimStyle)*(const int*)pay->Data;
                     make_new_track(make_text_brick(st, drop_t),
                                    (std::string("Drop text brick: ") + text_style_name(st)).c_str(), true);
+                }
+                if (ImGui::AcceptDragDropPayload("LYRIC_BRICK")) {
+                    // Always a fresh kind==Lyrics track (reuse_empty=false) so the brick
+                    // lands on an exclusive lyrics lane it can call its own.
+                    make_new_track(make_lyric_brick(state, drop_t), "Drop lyric brick", false);
                 }
                 if (const ImGuiPayload* pay = ImGui::AcceptDragDropPayload("FX_CREATIVE")) {
                     FXType ft = (FXType)*(const int*)pay->Data;
@@ -4237,18 +5045,55 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8.f, 6.f});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   {8.f, 4.f});
 
+    // FX chain lane right-click → per-effect menu (shared clipboard + ops with the
+    // FX panel). Named header so there's no doubt which effect you grabbed. Opened
+    // HERE (not in Pass 2) so OpenPopup + BeginPopup share one ID scope, and AFTER
+    // the clip menu's OpenPopup so it wins the same-level slot.
+    if (s_fxlane_open) { ImGui::OpenPopup("##fxlane_ctx"); s_fxlane_open = false; }
+    if (ImGui::BeginPopup("##fxlane_ctx")) {
+        bool ok = s_fxlane_ti >= 0 && s_fxlane_ti < (int)state.tracks.size() &&
+                  s_fxlane_ci >= 0 && s_fxlane_ci < (int)state.tracks[s_fxlane_ti].clips.size();
+        if (ok) {
+            Clip& brick = state.tracks[s_fxlane_ti].clips[s_fxlane_ci];
+            if (s_fxlane_idx >= 0 && s_fxlane_idx < (int)brick.fx_chain.size()) {
+                const Clip& se = brick.fx_chain[(size_t)s_fxlane_idx];
+                const BodyFXInfo* bfi = (se.clip_type == ClipType::BodyFX)
+                    ? body_fx_find_info(se.body_fx_type) : nullptr;
+                ImGui::TextDisabled("%s", bfi ? bfi->name : fx_type_name(se.fx_type));
+                ImGui::Separator();
+                int act = 0;   // 0=none 1=dup 3=paste 4=del; Copy applies inline (uses se)
+                if (ImGui::MenuItem("Duplicate")) act = 1;
+                if (ImGui::MenuItem("Copy")) fx_clip_copy(se, fx_brick_is_audio_kind(brick));
+                if (ImGui::MenuItem("Paste after", nullptr, false, fx_clip_can_paste(brick))) act = 3;
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete")) act = 4;
+                if (act == 1)      fx_chain_duplicate(state, brick, s_fxlane_idx);
+                else if (act == 3) fx_chain_paste(state, brick, s_fxlane_idx);
+                else if (act == 4) fx_chain_delete(state, brick, s_fxlane_idx);
+            }
+        }
+        ImGui::EndPopup();
+    }
+
     // Super-diamond unpair menu — pulls members back out of a welded group by
     // nudging their keys one frame apart (just past the grouping tolerance).
     if (ImGui::BeginPopup("##kf_ctx")) {
         bool ctx_ok = s_kf_ctx.ti >= 0 && s_kf_ctx.ti < (int)state.tracks.size() &&
                       s_kf_ctx.ci >= 0 &&
                       s_kf_ctx.ci < (int)state.tracks[s_kf_ctx.ti].clips.size();
+        if (ctx_ok) {
+            Clip& kc = state.tracks[s_kf_ctx.ti].clips[s_kf_ctx.ci];
+            ctx_ok = s_kf_ctx.source < 0 || s_kf_ctx.source < (int)kc.fx_chain.size();
+        }
         if (!ctx_ok) {
             ImGui::CloseCurrentPopup();
         } else {
             Clip& kclip = state.tracks[s_kf_ctx.ti].clips[s_kf_ctx.ci];
+            // Unpair targets the clip's own keys, or a Pass-3 FX-chain entry.
+            auto& kt = (s_kf_ctx.source < 0) ? kclip.ktracks
+                                             : kclip.fx_chain[(size_t)s_kf_ctx.source].ktracks;
             std::vector<std::string> mems;
-            for (auto& [p, pt] : kclip.ktracks)
+            for (auto& [p, pt] : kt)
                 if (pt.find_nearest(s_kf_ctx.time, 0.02f) >= 0) mems.push_back(p);
             std::sort(mems.begin(), mems.end());
 
@@ -4258,7 +5103,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 float dur  = kclip.end - kclip.start;
                 float step = fmaxf(1.f / (float)state.fps, 0.04f);
                 auto occupied = [&](float t) {
-                    for (auto& [p2, pt2] : kclip.ktracks)
+                    for (auto& [p2, pt2] : kt)
                         if (pt2.find_nearest(t, 0.025f) >= 0) return true;
                     return false;
                 };
@@ -4272,8 +5117,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 return nt;
             };
             auto unpair_one = [&](const std::string& prop) {
-                auto it = kclip.ktracks.find(prop);
-                if (it == kclip.ktracks.end()) return;
+                auto it = kt.find(prop);
+                if (it == kt.end()) return;
                 int ki = it->second.find_nearest(s_kf_ctx.time, 0.02f);
                 if (ki < 0) return;
                 it->second.keys[ki].time = free_spot();
@@ -4444,10 +5289,70 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
         }
         if (ImGui::MenuItem("Duplicate clip")) {
-            if (valid) {
-                Clip dup = *cc; dup.start = cc->end; dup.end = dup.start + (cc->end - cc->start);
-                ct->clips.insert(ct->clips.begin()+ci+1, dup);
-                history_push(state, "Duplicate clip");
+            if (duplicate_selected_clips(state)) history_push(state, "Duplicate clip");
+        }
+        // ── Grouping: clips sharing a group_id select and drag as one ─────────
+        {
+            bool any_grouped = false;
+            for (auto& [sti, sci] : state.clip_selection) {
+                if (sti < 0 || sti >= (int)state.tracks.size()) continue;
+                if (sci < 0 || sci >= (int)state.tracks[sti].clips.size()) continue;
+                if (state.tracks[sti].clips[sci].group_id != 0) { any_grouped = true; break; }
+            }
+            if (state.clip_selection.size() >= 2 &&
+                ImGui::MenuItem("Group clips", nullptr, false, !trk_locked)) {
+                int gid = 0;
+                for (auto& tr : state.tracks)
+                    for (auto& c2 : tr.clips)
+                        if (c2.group_id > gid) gid = c2.group_id;
+                ++gid;
+                for (auto& [sti, sci] : state.clip_selection) {
+                    if (sti < 0 || sti >= (int)state.tracks.size()) continue;
+                    if (sci < 0 || sci >= (int)state.tracks[sti].clips.size()) continue;
+                    state.tracks[sti].clips[sci].group_id = gid;
+                }
+                history_push(state, "Group clips");
+            }
+            if (any_grouped && ImGui::MenuItem("Ungroup", nullptr, false, !trk_locked)) {
+                std::set<int> gids;
+                for (auto& [sti, sci] : state.clip_selection) {
+                    if (sti < 0 || sti >= (int)state.tracks.size()) continue;
+                    if (sci < 0 || sci >= (int)state.tracks[sti].clips.size()) continue;
+                    int g = state.tracks[sti].clips[sci].group_id;
+                    if (g != 0) gids.insert(g);
+                }
+                for (auto& tr : state.tracks)
+                    for (auto& c2 : tr.clips)
+                        if (gids.count(c2.group_id)) c2.group_id = 0;
+                history_push(state, "Ungroup clips");
+            }
+        }
+        // Merge lyric bricks: the selected lyrics on this track, else this brick + the next.
+        if (valid && cc->clip_type == ClipType::Lyrics) {
+            std::vector<int> mids;
+            for (auto& [sti, sci] : state.clip_selection)
+                if (sti == ti) mids.push_back(sci);
+            std::sort(mids.begin(), mids.end());
+            if (mids.size() < 2) {
+                mids.clear();
+                if (ci + 1 < (int)ct->clips.size() && ct->clips[ci + 1].clip_type == ClipType::Lyrics)
+                    mids = {ci, ci + 1};
+            }
+            if (mids.size() >= 2 && ImGui::MenuItem("Merge lyric bricks")) {
+                Clip merged = ct->clips[mids[0]];
+                for (size_t k = 1; k < mids.size(); ++k) {
+                    Clip& o = ct->clips[mids[k]];
+                    merged.end = fmaxf(merged.end, o.end);
+                    for (auto& we : o.words) merged.words.push_back(we);
+                    if (!merged.text.empty() && !o.text.empty()) merged.text += ' ';
+                    merged.text += o.text;
+                }
+                for (int k = (int)mids.size() - 1; k >= 0; --k)
+                    ct->clips.erase(ct->clips.begin() + mids[k]);
+                ct->clips.insert(ct->clips.begin() + mids[0], merged);
+                state.clip_selection.clear();
+                state.selected_track = ti; state.selected_clip = mids[0];
+                history_push(state, "Merge lyric bricks");
             }
         }
         if (valid && cc->clip_type == ClipType::Video &&
@@ -4476,11 +5381,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Delete clip")) {
-            if (valid) {
-                ct->clips.erase(ct->clips.begin()+ci);
-                state.selected_clip = -1;
-                history_push(state, "Delete clip");
-            }
+            if (delete_selected_clips(state)) history_push(state, "Delete clip");
         }
         if (trk_locked) ImGui::EndDisabled();
         ImGui::EndPopup();
@@ -4523,19 +5424,92 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
             }
             rename_open = ImGui::IsItemActive();
             ImGui::Separator();
+
+            // ── Track groups (folder rows) ────────────────────────────────
+            if (is_group_head(*ct)) {
+                if (ImGui::MenuItem(ct->group_collapsed ? "Expand group"
+                                                        : "Collapse group")) {
+                    ct->group_collapsed = !ct->group_collapsed;
+                    history_push(state, ct->group_collapsed ? "Collapse group"
+                                                            : "Expand group");
+                }
+                if (ImGui::MenuItem("Ungroup")) {
+                    // Delete the folder row; members stay where they are.
+                    if (state.selected_track == ti) { state.selected_track = -1; state.selected_clip = -1; }
+                    state.tracks.erase(state.tracks.begin() + ti);
+                    history_push(state, "Ungroup tracks");
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::Separator();
+            } else {
+                int in_grp = group_head_of(state, ti);
+                if (in_grp < 0) {
+                    if (ImGui::MenuItem("New track group")) {
+                        Track head;
+                        char gn[32];
+                        int n_grp = 1;
+                        for (auto& t2 : state.tracks) if (is_group_head(t2)) ++n_grp;
+                        snprintf(gn, sizeof(gn), "Group %d", n_grp);
+                        head.name           = gn;
+                        head.kind           = TrackKind::GroupHead;
+                        head.group_children = 1;
+                        state.tracks.insert(state.tracks.begin() + ti, head);
+                        state.selected_track = -1; state.selected_clip = -1;
+                        history_push(state, "Group tracks");
+                        ImGui::CloseCurrentPopup();
+                    }
+                    // Track sits directly below a group's run — offer to join it.
+                    int above_head = -1;
+                    if (ti > 0) {
+                        if (is_group_head(state.tracks[(size_t)(ti - 1)]) &&
+                            state.tracks[(size_t)(ti - 1)].group_children == 0)
+                            above_head = ti - 1;
+                        else {
+                            int h2 = group_head_of(state, ti - 1);
+                            if (h2 >= 0 && h2 + state.tracks[(size_t)h2].group_children == ti - 1)
+                                above_head = h2;
+                        }
+                    }
+                    if (above_head >= 0) {
+                        char lbl[96];
+                        snprintf(lbl, sizeof(lbl), "Add to \"%s\"",
+                                 state.tracks[(size_t)above_head].name.c_str());
+                        if (ImGui::MenuItem(lbl)) {
+                            ++state.tracks[(size_t)above_head].group_children;
+                            history_push(state, "Add track to group");
+                            ImGui::CloseCurrentPopup();
+                        }
+                    }
+                } else {
+                    Track& gh = state.tracks[(size_t)in_grp];
+                    // Only the LAST member can leave cleanly (contiguity).
+                    bool last = (in_grp + gh.group_children == ti);
+                    if (ImGui::MenuItem("Remove from group", nullptr, false, last)) {
+                        --gh.group_children;
+                        history_push(state, "Remove track from group");
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (!last && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("Only the bottom track of a group can leave\n(groups are contiguous)");
+                }
+                ImGui::Separator();
+            }
         }
 
         // Managed track controls
-        if (ct && ct->managed) {
+        if (ct && (ct->managed || is_lyrics_track(*ct))) {
             if (ImGui::MenuItem("Detach from preset")) {
                 ct->managed = false;
+                ct->kind    = TrackKind::Normal;   // typography no longer owns/regenerates it
+                for (auto& c : ct->clips)          // its lyrics become freestanding (durable)
+                    if (c.clip_type == ClipType::Lyrics) c.source_id.clear();
                 history_push(state, "Detach track from preset");
             }
             ImGui::Separator();
         }
 
         // ── Add clip to this track ────────────────────────────────────────────
-        if (valid && (!ct || !ct->managed)) {
+        if (valid && (!ct || ct->kind == TrackKind::Normal)) {
             if (ImGui::MenuItem("Add Text Clip")) {
                 add_clip_to_track(state, ti, "", ClipType::Text);
                 s_edit_focus_next = true;
@@ -4582,6 +5556,10 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         if (ImGui::MenuItem("Delete track", nullptr, false, valid)) {
             std::string tname = ct ? ct->name : "";
             if (state.selected_track == ti) { state.selected_track=-1; state.selected_clip=-1; }
+            // Deleting a group member shrinks its folder's run (deleting the
+            // folder row itself is just an ungroup — members stay).
+            int gh = group_head_of(state, ti);
+            if (gh >= 0) --state.tracks[(size_t)gh].group_children;
             state.tracks.erase(state.tracks.begin()+ti);
             history_push(state, "Delete track — " + tname);
         }
@@ -4590,6 +5568,17 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
     if (ImGui::BeginPopup("##tl_ctx")) {
         open_tl_ctx = false;
+        // On a lyrics track, offer the one brick it accepts — at the clicked time.
+        if (ctx_track >= 0 && ctx_track < (int)state.tracks.size() &&
+            is_lyrics_track(state.tracks[ctx_track])) {
+            if (ImGui::MenuItem("Add lyric brick")) {
+                state.tracks[ctx_track].clips.push_back(make_lyric_brick(state, s_tl_ctx_t));
+                state.selected_track = ctx_track;
+                state.selected_clip  = (int)state.tracks[ctx_track].clips.size() - 1;
+                history_push(state, "Add lyric brick");
+            }
+            ImGui::Separator();
+        }
         if (ImGui::MenuItem("Add Track")) {
             Track t;
             char n[32]; snprintf(n,sizeof(n),"Track %d",(int)state.tracks.size()+1);

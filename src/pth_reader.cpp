@@ -20,10 +20,12 @@
 //   'sr', 'f0', 'version', 'epoch', 'step', … (ignored)
 
 #include "pth_reader.h"
+#include "platform.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>   // mkdtemp (stdlib.h on glibc, unistd.h on macOS)
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
@@ -523,7 +525,7 @@ PthModel pth_open(const std::string& path) {
 
     // Extract the zip
     std::string cmd = "unzip -q \"" + path + "\" -d \"" + tmpdir + "\" 2>&1";
-    if (system(cmd.c_str()) != 0) { // NOLINT
+    if (pms_system(cmd.c_str()) != 0) { // NOLINT
         m.err = "Failed to extract .pth zip: " + path;
         return m;
     }
@@ -619,7 +621,7 @@ PthModel pth_open(const std::string& path) {
 void pth_close(PthModel& m) {
     if (!m.tmpdir.empty()) {
         std::string cmd = "rm -rf \"" + m.tmpdir + "\"";
-        system(cmd.c_str()); // NOLINT
+        pms_system(cmd.c_str()); // NOLINT
         m.tmpdir.clear();
     }
 }

@@ -1,3 +1,4 @@
+#include "platform.h"
 #include "render.h"
 #include "inter_font.h"   // inter_black_ttf[], inter_black_ttf_size
 #include "bg_remove.h"
@@ -10,18 +11,14 @@
 #include "face_filters.h"
 #include "face_cache.h"
 
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
+#if PMS_HAS_FFMPEG
+#include "gl_compat.h"
 #include <imgui_impl_opengl3.h>
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
-#include "stb_image_write.h"
-#pragma GCC diagnostic pop
+#include "stb_image_write.h"  // impl in stb_impl.cpp (always compiled)
 
 #include "stb_image.h"  // declarations only — implementation lives in video.cpp
+#include "proxy.h"      // proxy_load — the counted frame rate the bg masks are keyed by
 
 #include <fstream>
 #include <sstream>
@@ -48,7 +45,7 @@
 #include <cstdarg>
 
 #include "audio.h"             // audio_source_cached / audio_fx_cached (FX bake)
-#include "ui/studio_shared.h"  // collect_audio_fx_for_clip
+#include "engine_seams.h"
 
 namespace fs = std::filesystem;
 
@@ -1113,11 +1110,16 @@ static bool write_filter_script(
 
             // Karaoke overlays: one bright drawtext per word timed to its exact window
             if (has_karaoke) {
+                // Match the preview / GL export: the highlight is the per-clip
+                // karaoke_highlight_color (set by typography presets), not sub_color
+                // (which is the BASE line). Falls back to white when unset. The GL
+                // MP4 export already renders this correctly via the C++ text path;
+                // this is the ffmpeg-filter/GIF path keeping the same colour.
                 char hi_col[32];
-                if (cl.sub_color_override)
+                const float* hc = cl.karaoke_highlight_color;
+                if (hc[3] > 0.01f)
                     snprintf(hi_col, sizeof(hi_col), "0x%02x%02x%02x%02x",
-                        (int)(cl.sub_color[0]*255), (int)(cl.sub_color[1]*255),
-                        (int)(cl.sub_color[2]*255), (int)(cl.sub_color[3]*255));
+                        (int)(hc[0]*255), (int)(hc[1]*255), (int)(hc[2]*255), (int)(hc[3]*255));
                 else
                     strcpy(hi_col, "white");
 
@@ -2096,7 +2098,7 @@ static bool is_still_ext(const std::string& path) {
     auto ext = fs::path(path).extension().string();
     for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
     return ext==".jpg"||ext==".jpeg"||ext==".png"||ext==".bmp"||ext==".webp"
-        || ext==".tiff"||ext==".heic"||ext==".heif";
+        || ext==".tiff"||ext==".heic"||ext==".heif"||ext==".svg";
 }
 
 // One GL texture per DISTINCT still image, keyed by source path, for the whole
@@ -2111,6 +2113,28 @@ static void clear_ex_still_tex() {
     for (auto& kv : g_ex_still_tex)
         if (kv.second.tex) glDeleteTextures(1, &kv.second.tex);
     g_ex_still_tex.clear();
+}
+
+// Map an export source-time to the proxy frame index the bg-removal masks are keyed
+// by. The masks are indexed by the proxy's COUNTED rate (frames÷duration, e.g. 29.97),
+// the same rate the preview uses (video.cpp:1002 / playhead_to_frame_idx) and that
+// start_frame is computed in. fps.txt instead records the raw proxy MJPEG's CONTAINER
+// rate (a forced 30, see proxy.cpp:238) — using it drifts the mask out of sync as time
+// grows. Cache the rational rate per source path (proxy_load spawns ffprobe).
+static int export_proxy_frame_idx(const std::string& video_path, double t) {
+    static std::map<std::string, std::pair<int64_t,int64_t>> s_cache;  // path → (num, den)
+    auto it = s_cache.find(video_path);
+    if (it == s_cache.end()) {
+        int64_t num = 0, den = 1;
+        ProxyInfo pi;
+        if (proxy_load(video_path, pi) && pi.fps_num > 0 && pi.fps_den > 0) {
+            num = pi.fps_num; den = pi.fps_den;
+        }
+        it = s_cache.insert({video_path, {num, den}}).first;
+    }
+    int64_t num = it->second.first, den = it->second.second;
+    return (num > 0 && den > 0) ? (int)((int64_t)(t * (double)num) / den)
+                                : (int)(t * 30.0);
 }
 
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
@@ -2241,19 +2265,17 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     if (glass_cfx.datamosh_on && glass_cfx.datamosh_intensity > 0.01f)
         video_apply_datamosh(vf, glass_cfx.datamosh_intensity, (float)src_t);
 
-    // AI bg-remove: apply mask alpha before GL upload so the compositor can
-    // correctly composite over background layers.
-    if (cl->bg_remove_on && cl->bg_remove_status == BgRemoveStatus::Ready
-            && !cl->bg_remove_mask_dir.empty()) {
-        float mask_fps = bg_remove_read_fps(cl->bg_remove_mask_dir);
-        int   frame_i  = (int)(src_t * mask_fps);
-        video_apply_bg_remove_export(vf, *cl, frame_i);
-    }
+    // AI bg-removal is applied solely by the RemoveBackground BodyFX brick (below) —
+    // no CPU alpha-bake here. The frame uploads OPAQUE and the brick shader cuts it
+    // once (α = orig.a · mask); baking here too would square the mask.
 
     glBindTexture(GL_TEXTURE_2D, tex_id);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, vf->data);
     int vid_w = vf->width, vid_h = vf->height;
+    double vid_pts = vf->pts;   // the decoded frame's ACTUAL timestamp; the bg mask is
+                                // indexed off this (not the requested src_t) so the cutout
+                                // tracks the exact frame rendered — no temporal lag.
     video_free_frame(vf);
 
     // Pre-composite: glass FX/adjustments on the same track as this video clip.
@@ -2270,21 +2292,37 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // Both use the video clip's own bg_remove masks (hires at export time).
     if (cl->bg_remove_status == BgRemoveStatus::Ready && !cl->bg_remove_mask_dir.empty()) {
         std::string mask_dir = cl->bg_remove_mask_dir;
-        float mask_fps = bg_remove_read_fps(mask_dir);
-        // Same source-time mapping as the frame fetch (×speed — this used to
-        // divide, desyncing body-FX masks on any retimed clip).
-        float bfx_src_t = clip_src_time(*cl, at_time);
-        int frame_i = (int)(bfx_src_t * mask_fps);
+        // Index by the proxy's COUNTED rate (matches the preview + start_frame), NOT
+        // fps.txt's container rate. Use the DECODED frame's pts, not the requested
+        // src_t: the decoder snaps to the nearest source frame, and keying the mask off
+        // the request rather than the delivered frame is what made the export mask lag.
+        int frame_i = export_proxy_frame_idx(cl->text, vid_pts);
+        // Bounding box (keep-region in v_uv — y is bottom-up, so flip t/b) + softness,
+        // fed into the RemoveBackground brick shader (was the CPU alpha-bake's job).
+        float bg_box[4] = {0.f, 1.f, 0.f, 1.f};
+        if (cl->bg_remove_box_on) {
+            bg_box[0] = cl->bg_remove_box_l;        bg_box[1] = cl->bg_remove_box_r;
+            bg_box[2] = 1.f - cl->bg_remove_box_b;  bg_box[3] = 1.f - cl->bg_remove_box_t;
+        }
+        float bg_soft = cl->bg_remove_softness;
+
+        // At most ONE RemoveBackground may apply per frame across both loops below:
+        // stacking the cutout multiplies alpha by the mask twice (mask^2), eroding the
+        // soft edges into a smudge. Other body-FX still stack freely (they preserve alpha).
+        bool bg_removed = false;
 
         // Standalone glass BodyFX bricks on this track
         for (auto& bfx_cl : state.tracks[ti].clips) {
             if (bfx_cl.clip_type != ClipType::BodyFX) continue;
             if (at_time < bfx_cl.start || at_time >= bfx_cl.end) continue;
+            bool is_rmbg = (bfx_cl.body_fx_type == BodyFXType::RemoveBackground);
+            if (is_rmbg && bg_removed) continue;
             unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
             if (!mask_tex) continue;
             cur_tex = body_fx_apply(bfx_cl.body_fx_type, cur_tex, mask_tex,
                                     vid_w, vid_h, bfx_cl.body_fx_params,
-                                    bfx_cl.body_fx_amount, at_time);
+                                    bfx_cl.body_fx_amount, at_time, bg_box, bg_soft);
+            if (is_rmbg) bg_removed = true;
         }
 
         // BodyFX sub-effects inside glass MultiFX bricks on this track
@@ -2298,11 +2336,14 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                 if (se.clip_type != ClipType::BodyFX) continue;
                 float se_end = (se.rel_end <= 0.f) ? parent_dur : se.rel_end;
                 if (rel < se.rel_start || rel >= se_end) continue;
+                bool is_rmbg = (se.body_fx_type == BodyFXType::RemoveBackground);
+                if (is_rmbg && bg_removed) continue;
                 unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
                 if (!mask_tex) continue;
                 cur_tex = body_fx_apply(se.body_fx_type, cur_tex, mask_tex,
                                         vid_w, vid_h, se.body_fx_params,
-                                        se.body_fx_amount, at_time);
+                                        se.body_fx_amount, at_time, bg_box, bg_soft);
+                if (is_rmbg) bg_removed = true;
             }
         }
     }
@@ -2310,13 +2351,15 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // RuntimeFX — custom hot-reload shader on this clip.
     if (!cl->runtime_fx_id.empty())
         cur_tex = runtime_fx_apply(cl->runtime_fx_id, cur_tex, vid_w, vid_h,
-                                   cl->runtime_fx_params, cl->runtime_fx_amount, at_time);
+                                   cl->runtime_fx_params,
+                                   cl->eval_prop("runtime_fx_amount", at_time), at_time);
 
     // Face filter on the take — same cached-landmark helper as preview.
     // Export prep blocks until the cache is built (see export start).
     if (cl->face_filter != 0)
         cur_tex = face_filter_apply_take(*cl, (double)src_t, cur_tex,
-                                         fx_slot, vid_w, vid_h);
+                                         fx_slot, vid_w, vid_h,
+                                         /*sync_track=*/true);
 
     // BodyFX is now a solid brick on its own track — applied post-composite (see below).
 
@@ -3407,3 +3450,9 @@ void render_tick_gl(AppState& state) {
         g_perf.reset();
     }
 }
+
+#else
+void render_cancel() {}
+void render_start_gl(AppState&) {}
+void render_tick_gl(AppState&) {}
+#endif  // PMS_HAS_FFMPEG

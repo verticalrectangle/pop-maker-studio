@@ -9,6 +9,7 @@
 // secret-tool are subprocesses too) so streaming reads are line-buffered SSE
 // and Stop can SIGTERM the child.
 #include "agent_harness.h"
+#include "platform.h"
 #include "generated/agent_tools.h"
 #include "json.hpp"
 
@@ -551,7 +552,7 @@ static void curl_end(CurlStream& cs) {
 // ── Secret Service (secret-tool) ──────────────────────────────────────────────
 
 static int run_cmd_status(const std::string& cmd) {
-    int rc = system(cmd.c_str());
+    int rc = pms_system(cmd.c_str());
     return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
 }
 

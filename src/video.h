@@ -57,6 +57,10 @@ bool          video_is_open    (int track_id = 0);
 PreviewSource video_source     (int track_id);
 VideoInfo     video_info       (int track_id = 0);
 uintptr_t     video_get_texture(int track_id, double playhead);
+// Proxy frame index for a playhead on an open slot — same mapping as
+// video_get_texture, but with NO ffprobe fork, so it is safe in the render path.
+// Returns -1 if the slot is closed.
+int           video_proxy_frame_idx(int track_id, double playhead);
 
 // Parallel pre-decode for multiple tracks. Each pair is (track_id, playhead).
 // Runs JPEG decode + CPU FX in worker threads, then performs the GL uploads
@@ -112,6 +116,14 @@ struct PixelFX {
     float datamosh_spread    = 0.3f;
 
     // Remove Background
+    // DEAD CODE — preview-side remnant of "mechanism A", the old CPU alpha-bake
+    // background removal. The brick-only refactor (fba861c) removed every writer of
+    // these fields, so bg_remove_on is always false: the mask-read block in
+    // prepare_proxy_frame_cpu and the bg branch in apply_pixel_fx_rgb never execute.
+    // Background removal is now done entirely by the RemoveBackground body-FX brick
+    // (body_fx_apply, on the GPU). Left inert on purpose — the export half was deleted
+    // (commit 49b6390), but this half threads the hot CPU decode path, so it wasn't
+    // worth churning for zero functional gain. Do NOT wire new code to these fields.
     bool        bg_remove_on       = false;
     std::string bg_remove_mask_dir;
     float       bg_remove_softness = 0.1f;
@@ -151,7 +163,7 @@ void video_set_pixel_fx(int track_id, const PixelFX& fx);
 
 // FX browser preview thumbnail — 80×45 GL texture per FXType.
 // Animated types (Glitch, VHS) regenerate each frame; others cached after first call.
-uintptr_t video_fx_preview_texture(FXType ft, float t);
+uintptr_t video_fx_preview_texture(FXType ft, float t, bool live = false);
 
 // Advance the shared FX-preview source clip to the frame for `now` (seconds).
 // Call once per UI frame while the FX picker is visible so the cards show motion.
@@ -172,7 +184,7 @@ uintptr_t video_default_preview_tex();
 uintptr_t video_adj_preview_texture(int unique_id,
                                      float brightness, float contrast,
                                      float saturation, float hue,
-                                     float blur, float vignette);
+                                     float blur, float vignette, bool live = false);
 
 // Probe original video container for duration without full stream scan.
 // Reads container header only — safe to call on the main thread, < 100 ms.
@@ -235,12 +247,6 @@ int video_export_height(int slot = 0);
 // Preview-frame dimensions for a playback slot (0,0 if not decoded). Aspect
 // matches the clip's source; used to size the hover-preview popover.
 void video_preview_dims(int slot, int* w, int* h);
-
-// Apply AI bg-remove alpha mask to a decoded export frame in-place.
-// Reads the per-frame grayscale JPEG from cl.bg_remove_mask_dir / bg_masks.mjpeg.
-// The mask is bilinearly scaled to match vf dimensions if they differ.
-// No-op if bg_remove_on is false, mask_dir is empty, or the frame is not found.
-void video_apply_bg_remove_export(VideoFrame* vf, const Clip& cl, int mask_frame_idx);
 
 // Apply CPU JPEG datamosh corruption to an RGBA VideoFrame in-place.
 // Encodes to JPEG, corrupts scan bytes, decodes back.  Modifies vf->data.

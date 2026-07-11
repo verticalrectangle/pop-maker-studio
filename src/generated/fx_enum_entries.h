@@ -105,3 +105,19 @@
     GlowUp,   // Glow Up
     CamShake,   // Cam Shake
     GreenScreen,   // Chroma Key
+    RetroBeauty,   // Retro Beauty
+    Insta2016,   // 2016
+    GlassSkin,   // Glass Skin
+    PorcelainSkin,   // Porcelain
+    BlushDoll,   // Blush Doll
+    HoneyGlow,   // Honey Glow
+    SoftGlam,   // Soft Glam
+    AcidTrip,   // Acid Trip
+    LiquidMarble,   // Liquid Marble
+    FractalMirror,   // Fractal Mirror
+    BreatheWarp,   // Breathe
+    MeltDrip,   // Melt Drip
+    NeonCity,   // Neon City
+    ChromePulse,   // Chrome Pulse
+    HudGlitch,   // HUD Glitch
+    NightDrive,   // Night Drive

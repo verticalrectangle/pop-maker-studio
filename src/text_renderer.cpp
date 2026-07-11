@@ -1,7 +1,28 @@
 #include "text_renderer.h"
 #include "text_anim.h"
-#include "ui/theme.h"
 #include <cmath>
+
+
+// ── Typography font registry (hoisted from ui/theme.cpp) ─────────────────────
+// The app's theme_apply() registers faces after building the atlas; the
+// engine (text renderer, overlay renderer, typography pipeline) resolves
+// faces by id. Storage engine-side so typo_font_get links into pms-engine.
+ImFont* g_font_black = nullptr;   // assigned by the app after atlas build
+namespace {
+    struct TypoFace { const char* name; ImFont* font; };
+    std::vector<TypoFace> g_typo_faces;
+}
+void typo_font_clear() { g_typo_faces.clear(); }
+void typo_font_register(const char* name, ImFont* font) {
+    g_typo_faces.push_back({name, font});
+}
+ImFont* typo_font_get(const char* id) {
+    if (id && *id)
+        for (const auto& f : g_typo_faces)
+            if (f.font && strcmp(f.name, id) == 0) return f.font;
+    return g_font_black;   // default lyrics face / graceful fallback
+}
+
 
 static ImU32 col_f4_alpha(const float c[4], float extra_alpha) {
     float a = c[3] * extra_alpha;
@@ -71,7 +92,7 @@ static inline ImU32 lerp_rgb_keepa(ImU32 c1rgb, ImU32 c2rgb, float t, unsigned a
     return IM_COL32(r, g, b, a);
 }
 
-void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>& lines) {
+void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines) {
     if (lines.empty()) return;
 
     ImDrawList* dl        = ctx.dl;
@@ -92,7 +113,48 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
         if (lwidths[i] > block_max_w) block_max_w = lwidths[i];
     }
 
+    // Keep the resting block on-canvas. An edge/random anchor (e.g. the rave
+    // preset's per-word positions) on a wide word would otherwise spill off the
+    // frame — block_cx scales with the canvas but never accounted for the text's
+    // own width. Shift block_cx minimally so the block's bbox fits inside
+    // [canvas_x0, canvas_x0+canvas_w]; per-element animation (anim_dx) is applied
+    // afterward and can still travel off-frame intentionally. Text wider than the
+    // canvas is centred (symmetric overflow is unavoidable).
+    if (ctx.canvas_w > 0.f && block_max_w > 0.f) {
+        float left = (ctx.anchor_h == 0) ? ctx.block_cx
+                   : (ctx.anchor_h == 2) ? ctx.block_cx - block_max_w
+                                         : ctx.block_cx - block_max_w * 0.5f;
+        float right = left + block_max_w;
+        // Shortform safe zone: TikTok/Reels/IG zoom-crop the frame to fill and lay
+        // UI over the edges, so inset the clamp bounds instead of pinning flush to
+        // the literal edge — text at the boundary still survives on-platform.
+        float margin = ctx.canvas_w * 0.05f;   // 5% each side; bump if clips still clip
+        float lo = ctx.canvas_x0 + margin, hi = ctx.canvas_x0 + ctx.canvas_w - margin;
+        if (block_max_w <= hi - lo) {
+            if (left < lo)       ctx.block_cx += lo - left;
+            else if (right > hi) ctx.block_cx += hi - right;
+        } else {
+            ctx.block_cx += (lo + hi) * 0.5f - (left + right) * 0.5f;
+        }
+    }
+
     float block_h = lines.size() * ctx.line_h;
+
+    // Vertical safe zone: the top handle/tabs and (taller) the bottom caption
+    // strip eat into shortform frames, so keep the block out of those bands too.
+    // ty already includes anim_dy (the caller folds it in), so this clamps the
+    // displayed Y — text won't even dip into the caption mid-animation.
+    if (ctx.canvas_h > 0.f) {
+        float top_m = ctx.canvas_h * 0.08f;   // 8%  top    (handle / tabs / status)
+        float bot_m = ctx.canvas_h * 0.15f;   // 15% bottom (caption strip is taller)
+        float lo = ctx.canvas_y0 + top_m, hi = ctx.canvas_y0 + ctx.canvas_h - bot_m;
+        if (block_h <= hi - lo) {
+            if (ctx.ty < lo)                ctx.ty = lo;
+            else if (ctx.ty + block_h > hi) ctx.ty = hi - block_h;
+        } else {
+            ctx.ty = (lo + hi) * 0.5f - block_h * 0.5f;   // taller than zone — centre
+        }
+    }
 
     bool has_karaoke = ctx.clip_words && !ctx.clip_words->empty() && clip->karaoke;
 
@@ -341,7 +403,10 @@ void render_text_block(const TextRenderCtx& ctx, const std::vector<std::string>&
                 tcol = IM_COL32((int)(clip->sub_color[0]*255), (int)(clip->sub_color[1]*255),
                                  (int)(clip->sub_color[2]*255), (int)(a*255));
             } else if (ctx.eff_style == AnimStyle::Block) {
-                tcol = to_u32(Col::bg);
+                // App-theme background color, inlined: Block style knocks the
+                // text out of its plate. (Was to_u32(Col::bg) — theme.h is
+                // app-side; the engine renders with the literal, Col::bg = black.)
+                tcol = IM_COL32(0, 0, 0, 255);
             } else {
                 tcol = IM_COL32(255, 255, 255, (int)(255.f * alpha));
             }
