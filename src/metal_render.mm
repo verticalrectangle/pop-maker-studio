@@ -561,6 +561,8 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
             float sl = 0.5 + 0.5 * sin(p.y * 1.4);
             col *= 1.0 - u.cyber[3] * mask * 0.35 * smoothstep(0.55, 0.95, sl);
             col += tintc * u.cyber[3] * mask * 0.06 * (1.0 - sl);
+        }
+    }
     // ─── Procedural eyeliner + lashes + wing (hybrid: plates carry
     //     eyeshadow/blush/brow/lip/highlight, this provides all lash/liner)
     //     High-def design: liner sits exactly on the live lid polyline,
@@ -712,6 +714,7 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
              * (u.eyeglow[3] * 0.55 * max(gL, gR));
     }
     return float4(clamp(col, 0.0, 1.0), c0.a);
+}
 
 // ── UV-mapped makeup mesh (tracked 478-pt mesh × authored makeup PNG) ────────
 struct FaceMkUni { float dim[2]; float opacity; float adapt;
