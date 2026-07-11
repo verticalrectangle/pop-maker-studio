@@ -676,19 +676,14 @@ bool face_filter_build_plan_look(const BeautyLook& L, float amount,
         bp.jaw_shade  = L.jaw_shade  * amount;
         bp.chin_x = PX(a.chin[0]); bp.chin_y = PY(a.chin[1]);
         bp.chin_smooth = L.chin_smooth * amount;
-        // When a UV makeup texture plate is bound it already carries painted
-        // lash hairs, eyeliner, AND a wing tip — the procedural lash band,
-        // liner line, and wing would double them. Suppress all three so only
-        // the plate's painted elements show.
-        if (L.makeup_tex) {
-            bp.lash       = 0.f;
-            bp.liner      = 0.f;
-            bp.lash_wing  = 0.f;
-        } else {
-            bp.lash       = L.lash       * amount;
-            bp.liner      = L.liner      * amount;
-            bp.lash_wing  = L.lash_wing  * amount;  // wing length scales with intensity
-        }
+        // Hybrid model: plates carry eyeshadow/blush/brow/lip/highlight/
+        // contour — but lash+liner+wing are fully procedural so they contour
+        // to the live lid polyline, fan outward, curl, and taper. Plates no
+        // longer bake lashes or liner (removed from LOOKS table in
+        // gen_makeup_elements.py). Procedural always runs, plate or not.
+        bp.lash       = L.lash       * amount;
+        bp.liner      = L.liner      * amount;
+        bp.lash_wing  = L.lash_wing  * amount;  // scales with intensity
         bp.eyeoutL_x = PX(obs.pts[33][0]);  bp.eyeoutL_y = PY(obs.pts[33][1]);
         bp.eyeoutR_x = PX(obs.pts[263][0]); bp.eyeoutR_y = PY(obs.pts[263][1]);
         // Upper-lid chains, outer→inner — the lash/liner ride these.

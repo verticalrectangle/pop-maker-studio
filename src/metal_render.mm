@@ -400,6 +400,8 @@ static float f_seg(float2 p, float2 a, float2 b) {
     float t = clamp(dot(p - a, e) / max(dot(e, e), 1e-4), 0.0, 1.0);
     return length(p - (a + e * t));
 }
+// Deterministic hash for seeded jitter — no texture needed.
+static float f_hash(float x) { return fract(sin(x * 91.3458) * 47453.5453); }
 fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [[buffer(0)]],
                               texture2d<float> src [[texture(0)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
@@ -559,16 +561,23 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
             float sl = 0.5 + 0.5 * sin(p.y * 1.4);
             col *= 1.0 - u.cyber[3] * mask * 0.35 * smoothstep(0.55, 0.95, sl);
             col += tintc * u.cyber[3] * mask * 0.06 * (1.0 - sl);
-        }
-    }
-    if (u.lash[0] + u.lash[1] + u.lash[2] > 0.001) {   // lashes + liner + wing
+    // ─── Procedural eyeliner + lashes + wing (hybrid: plates carry
+    //     eyeshadow/blush/brow/lip/highlight, this provides all lash/liner)
+    //     High-def design: liner sits exactly on the live lid polyline,
+    //     lashes are individual tapered strokes fanning outward with curl,
+    //     wing curves along the lid direction at the outer corner with tip
+    //     fade. All values scale with the lash/liner/lash_wing controls.
+    if (u.lash[0] + u.lash[1] + u.lash[2] > 0.001) {
         float3 ink = float3(0.04, 0.03, 0.04);
         for (int side = 0; side < 2; ++side) {
             float bfade = 1.0 - 0.9 * smoothstep(0.25, 0.55,
                                     side == 0 ? u.blink[0] : u.blink[1]);
             float2 outc = side == 0 ? float2(u.eyeout[0], u.eyeout[1])
                                     : float2(u.eyeout[2], u.eyeout[3]);
+            // Find nearest segment on the upper lid + cumulative t.
             float dmin2 = 1e9; float tbest = 0.0;
+            float2 seg_a = float2(0.0); float2 seg_b = float2(0.0);
+            float2 seg_dir = float2(0.0);
             for (int i = 0; i < 6; ++i) {
                 float2 a3 = side == 0 ? float2(u.lidL[i*2],     u.lidL[i*2+1])
                                       : float2(u.lidR[i*2],     u.lidR[i*2+1]);
@@ -577,49 +586,122 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
                 float2 e3 = b3 - a3;
                 float ts = clamp(dot(p - a3, e3) / max(dot(e3, e3), 1e-4), 0.0, 1.0);
                 float dd = length(p - (a3 + e3 * ts));
-                if (dd < dmin2) { dmin2 = dd; tbest = (float(i) + ts) / 6.0; }
+                if (dd < dmin2) {
+                    dmin2 = dd; tbest = (float(i) + ts) / 6.0;
+                    seg_a = a3; seg_b = b3;
+                    float seg_len = max(length(e3), 1e-4);
+                    seg_dir = e3 / seg_len;
+                }
             }
-            float above = dot(p - outc, upv);
+            float2 lid_norm = float2(-seg_dir.y, seg_dir.x);
+            {
+                float2 tmpEye = side == 0 ? eyeL : eyeR;
+                if (dot(lid_norm, tmpEye - (seg_a + seg_b) * 0.5) > 0.0)
+                    lid_norm = -lid_norm;
+            }
+            float outer_factor = 1.0 - tbest;
             float taper = 1.0 - tbest * 0.6;
+            // ── crisp eyeliner: sits exactly on the lid polyline,
+            //    width tapered so it's sharp at inner corner, defined at outer.
             if (u.lash[2] > 0.001) {
-                float lt = er * 0.055 * taper;
+                float lt = er * 0.045 * taper;
                 float line = 1.0 - smoothstep(lt * 0.5, lt, dmin2);
-                col = mix(col, ink, line * u.lash[2] * 0.95 * bfade);
+                float above_clamp = smoothstep(-er * 0.08, er * 0.04, dot(p - outc, lid_norm));
+                float liner = line * above_clamp;
+                col = mix(col, ink, liner * u.lash[2] * 0.98 * bfade);
             }
+            // ── high-def lash strokes: individual fan from live lid polyline.
             if (u.lash[0] > 0.001) {
-                float bt = er * 0.16 * taper;
-                float band = (1.0 - smoothstep(bt * 0.35, bt, dmin2))
-                           * smoothstep(-er * 0.05, er * 0.10, above);
-                col = mix(col, col * 0.30, band * u.lash[0] * 0.75 * bfade);
+                float lash_total = 0.0;
+                float base_count = 18.0 * u.lash[0];
+                if (dmin2 < er * 0.42) {
+                    for (int hi = 0; hi < 28; ++hi) {
+                        if ((float)hi >= base_count + 6.0) break;
+                        float ht = fract((float)hi * 0.618034 + (float)side * 0.37);
+                        ht = clamp(ht, 0.02, 0.95);
+                        float h_jitter = f_hash(float(hi * 7) + float(side) * 13.0 + 0.11) * 0.08 - 0.04;
+                        ht = clamp(ht + h_jitter, 0.02, 0.97);
+                        // Find lid position at ht.
+                        float2 lid_at_t = float2(0.0);
+                        float2 lid_dir_at_t = float2(0.0);
+                        float accum2 = 0.0;
+                        float frag_per_seg = 1.0 / 6.0;
+                        for (int si = 0; si < 6; ++si) {
+                            float2 a3 = side == 0 ? float2(u.lidL[si*2],     u.lidL[si*2+1])
+                                                  : float2(u.lidR[si*2],     u.lidR[si*2+1]);
+                            float2 b3 = side == 0 ? float2(u.lidL[(si+1)*2], u.lidL[(si+1)*2+1])
+                                                  : float2(u.lidR[(si+1)*2], u.lidR[(si+1)*2+1]);
+                            if (ht >= accum2 && ht < accum2 + frag_per_seg) {
+                                float lt2 = (ht - accum2) / frag_per_seg;
+                                lid_at_t = a3 + (b3 - a3) * lt2;
+                                lid_dir_at_t = normalize(b3 - a3);
+                                break;
+                            }
+                            accum2 += frag_per_seg;
+                        }
+                        if (lid_dir_at_t.x == 0.0 && lid_dir_at_t.y == 0.0) {
+                            lid_at_t = seg_a;
+                            lid_dir_at_t = seg_dir;
+                        }
+                        float2 ln_n = float2(-lid_dir_at_t.y, lid_dir_at_t.x);
+                        {
+                            float2 tmpEye2 = side == 0 ? eyeL : eyeR;
+                            if (dot(ln_n, tmpEye2 - lid_at_t) > 0.0) ln_n = -ln_n;
+                        }
+                        // Fan outward more at outer corner.
+                        float fan = (1.0 - ht) * 0.55;
+                        float2 flair_dir = normalize(ln_n * 0.75 + lid_dir_at_t * (-fan + 0.20 * (1.0 - ht)));
+                        float ang_jitter = (f_hash(float(hi * 3 + side * 5) + 0.53) * 2.0 - 1.0) * 0.18;
+                        float cs = cos(ang_jitter), sn = sin(ang_jitter);
+                        float2 jaz = float2(flair_dir.x * cs - flair_dir.y * sn,
+                                            flair_dir.x * sn + flair_dir.y * cs);
+                        // Length: outer longer, varies per hair.
+                        float hl_jitter = f_hash(float(hi * 11 + side) + 0.77);
+                        float hl = er * (0.14 + u.lash[0] * 0.22) * (0.8 + ht * 0.3)
+                                 * (0.60 + hl_jitter * 0.80);
+                        // Curved: base → mid → tip with upward curl.
+                        float2 h_mid = lid_at_t + jaz * hl * 0.55;
+                        float2 h_tip = h_mid + jaz * hl * 0.45 + ln_n * hl * 0.18;
+                        float d1 = f_seg(p, lid_at_t, h_mid);
+                        float d2 = f_seg(p, h_mid, h_tip);
+                        float d_hair = min(d1, d2);
+                        float along1 = clamp(dot(p - lid_at_t, h_mid - lid_at_t) /
+                                             max(dot(h_mid - lid_at_t, h_mid - lid_at_t), 1e-4), 0.0, 1.0);
+                        float along_tot = along1 * 0.5;
+                        {
+                            float a2 = clamp(dot(p - h_mid, h_tip - h_mid) /
+                                             max(dot(h_tip - h_mid, h_tip - h_mid), 1e-4), 0.0, 1.0);
+                            if (d2 < d1) along_tot = 0.5 + a2 * 0.5;
+                        }
+                        float hw = mix(er * 0.022, er * 0.004, along_tot);
+                        hw *= (0.70 + u.lash[0] * 0.45);
+                        float hair = 1.0 - smoothstep(hw * 0.5, hw, d_hair);
+                        float tip_fade = 1.0 - smoothstep(0.55, 1.0, along_tot);
+                        lash_total = max(lash_total, hair * tip_fade);
+                    }
+                }
+                lash_total = clamp(lash_total, 0.0, 1.0);
+                col = mix(col, col * 0.18, lash_total * u.lash[0] * 0.85 * bfade);
+                col += float3(0.08, 0.06, 0.05) * lash_total * u.lash[0] * 0.12 * bfade;
             }
+            // ── wing: anchored on live lid line at outer corner, curves along
+            //    brow bone, tip tapered + faded.
             if (u.lash[1] > 0.001) {
                 float2 inc = side == 0 ? float2(u.lidL[12], u.lidL[13])
                                        : float2(u.lidR[12], u.lidR[13]);
                 float2 outdir = normalize(outc - inc);
-                // Eye-local up: perpendicular to the outer→inner corner
-                // direction, rotated toward the brow. This follows the eye's
-                // own orientation rather than the global face-up, so head tilt
-                // doesn't send the wing the wrong way relative to the eye.
                 float2 eye_up = float2(-outdir.y, outdir.x);
                 if (dot(eye_up, upv) < 0.0) eye_up = -eye_up;
-                // Curve the wing upward along its length by blending the
-                // straight outward direction with the eye-local up, more so
-                // toward the tip — follows the brow bone, not a straight spike.
-                float2 w_mid = outc + (outdir * 0.80 + eye_up * 0.35) * er * u.lash[1];
-                float2 w_tip = w_mid + eye_up * er * u.lash[1] * 0.25;
-                // Parametric position along the wing (0 at outer corner, 1 at tip).
+                float2 w_mid = outc + (outdir * 0.85 + eye_up * 0.38) * er * u.lash[1];
+                float2 w_tip = w_mid + (outdir * 0.15 + eye_up * 0.20) * er * u.lash[1];
                 float along = clamp(dot(p - outc, w_tip - outc) /
                                     max(dot(w_tip - outc, w_tip - outc), 1e-4), 0.0, 1.0);
-                // Quadratic Bézier through outc → w_mid → w_tip curves the
-                // wing upward toward the tip, following the brow bone.
                 float2 wp = mix(mix(outc, w_mid, along), mix(w_mid, w_tip, along), along);
                 float wd = distance(p, wp);
-                float wt = mix(er * 0.10, er * 0.015, along);
+                float wt = mix(er * 0.10, er * 0.010, along);
                 float wing = 1.0 - smoothstep(wt * 0.4, wt, wd);
-                // Tip alpha fade: feather the last 40% of the wing to zero so
-                // it doesn't end as a constant-ink spike.
-                float tip_fade = 1.0 - smoothstep(0.60, 1.0, along);
-                col = mix(col, ink, wing * u.lash[1] * tip_fade * 0.92 * bfade);
+                float tip_f_w = 1.0 - smoothstep(0.65, 1.0, along);
+                col = mix(col, ink, wing * u.lash[1] * tip_f_w * 0.96 * bfade);
             }
         }
     }
@@ -630,7 +712,6 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
              * (u.eyeglow[3] * 0.55 * max(gL, gR));
     }
     return float4(clamp(col, 0.0, 1.0), c0.a);
-}
 
 // ── UV-mapped makeup mesh (tracked 478-pt mesh × authored makeup PNG) ────────
 struct FaceMkUni { float dim[2]; float opacity; float adapt;
