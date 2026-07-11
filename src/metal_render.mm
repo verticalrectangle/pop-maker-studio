@@ -156,6 +156,22 @@ struct SolidUni { float r; float g; float b; float a; };
 fragment float4 solid_f(FSOut in [[stage_in]], constant SolidUni& u [[buffer(0)]]) {
     return float4(u.r * u.a, u.g * u.a, u.b * u.a, u.a);
 }
+
+// (5) camera downscale for face tracking: BGRA8 → RGB8 on the GPU.
+// stride = 1 (no downscale) or 2 (stride-2 for 1080p+), passed from the CPU.
+kernel void bgra_to_rgb_downscale(texture2d<float, access::read> bgra [[texture(0)]],
+                                  device uint8_t* rgb [[buffer(0)]],
+                                  constant uint2& out_dims [[buffer(1)]],
+                                  constant uint& stride [[buffer(2)]],
+                                  uint2 tid [[thread_position_in_grid]]) {
+    if (tid.x >= out_dims.x || tid.y >= out_dims.y) return;
+    uint2 src = tid * stride;
+    float4 px = bgra.read(src);   // BGRA8Unorm → float4 in channel order (B,G,R,A)
+    uint idx = (tid.y * out_dims.x + tid.x) * 3;
+    rgb[idx]     = (uint8_t)(px[2] * 255.0);   // R
+    rgb[idx + 1] = (uint8_t)(px[1] * 255.0);   // G
+    rgb[idx + 2] = (uint8_t)(px[0] * 255.0);   // B
+}
 )";
 
 // ── Body FX MSL ──────────────────────────────────────────────────────────────
@@ -791,6 +807,8 @@ fragment float4 face_mk_f(MkVOut in [[stage_in]], constant FaceMkUni& u [[buffer
 
 static id<MTLDevice>              g_dev     = nil;
 static id<MTLCommandQueue>        g_queue   = nil;
+static id<MTLComputePipelineState> g_downscale_pso = nil; // stride-2 BGRA→RGB
+static id<MTLBuffer>             g_downscale_buf = nil;  // face-feed output
 static id<MTLRenderPipelineState> g_bg_pso  = nil;   // background aurora
 static id<MTLRenderPipelineState> g_quad_pso = nil;  // textured blit
 static id<MTLTexture>             g_content = nil;    // current frame (BGRA8)
@@ -1752,10 +1770,15 @@ void metal_render_init(void* mtl_device) {
     g_dev = (__bridge id<MTLDevice>)mtl_device;
     if (!g_dev) return;
     g_queue = [g_dev newCommandQueue];
-
+    // Compute pipeline for face-track camera downscale.
     NSError* err = nil;
     id<MTLLibrary> lib = [g_dev newLibraryWithSource:kSrc options:nil error:&err];
     if (!lib) { NSLog(@"[metal_render] library: %@", err); return; }
+    id<MTLFunction> down_fn = [lib newFunctionWithName:@"bgra_to_rgb_downscale"];
+    if (down_fn) {
+        g_downscale_pso = [g_dev newComputePipelineStateWithFunction:down_fn error:&err];
+        if (!g_downscale_pso) NSLog(@"[metal_render] downscale pipeline: %@", err);
+    }
 
     MTLRenderPipelineDescriptor* bg = [MTLRenderPipelineDescriptor new];
     bg.vertexFunction   = [lib newFunctionWithName:@"bg_v"];
@@ -1895,21 +1918,63 @@ void metal_render_submit_layer(int track, int clip, void* cv_pixel_buffer_bgra,
     }
 }
 
-// Camera → face-tracker side-feed: stride-2 BGRA→RGB copy to the worker,
-// gated by face_feed_enabled() so plain recording pays nothing.
+// Camera → face-tracker side-feed: stride-2 BGRA→RGB downscale on the GPU.
+// The output is copied into the worker queue (face_track_submit), so the camera
+// queue only encodes a small compute pass and does no CPU pixel work.
 void metal_render_face_feed(void* cv_pixel_buffer_bgra) {
     if (!cv_pixel_buffer_bgra || !face_feed_enabled()) return;
     CVPixelBufferRef pb = (CVPixelBufferRef)cv_pixel_buffer_bgra;
     if (CVPixelBufferGetPixelFormatType(pb) != kCVPixelFormatType_32BGRA) return;
-    if (CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
-    const uint8_t* base = (const uint8_t*)CVPixelBufferGetBaseAddress(pb);
-    const size_t   bpr  = CVPixelBufferGetBytesPerRow(pb);
     const int fw = (int)CVPixelBufferGetWidth(pb);
     const int fh = (int)CVPixelBufferGetHeight(pb);
     const int step = (fw > 720 || fh > 720) ? 2 : 1;   // 720x1280 → 360x640
     const int dw = fw / step, dh = fh / step;
+    const size_t need = (size_t)dw * dh * 3;
+
+    // GPU downscale: zero-copy CVPixelBuffer → MTLTexture, compute writes RGB.
+    if (g_dev && g_queue && g_downscale_pso && g_texcache) {
+        if (!g_downscale_buf || [g_downscale_buf length] < need) {
+            g_downscale_buf = [g_dev newBufferWithLength:need
+                                                  options:MTLResourceStorageModeShared];
+        }
+        if (g_downscale_buf) {
+            CVMetalTextureRef cvt = NULL;
+            CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
+                kCFAllocatorDefault, g_texcache, pb, NULL,
+                MTLPixelFormatBGRA8Unorm, fw, fh, 0, &cvt);
+            if (r == kCVReturnSuccess && cvt) {
+                id<MTLTexture> tex = CVMetalTextureGetTexture(cvt);
+                id<MTLCommandBuffer> cmdbuf = [g_queue commandBuffer];
+                id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
+                [enc setComputePipelineState:g_downscale_pso];
+                [enc setTexture:tex atIndex:0];
+                [enc setBuffer:g_downscale_buf offset:0 atIndex:0];
+                uint32_t dims[2] = { (uint32_t)dw, (uint32_t)dh };
+                [enc setBytes:dims length:sizeof(dims) atIndex:1];
+                uint32_t stride = (uint32_t)step;
+                [enc setBytes:&stride length:sizeof(stride) atIndex:2];
+                MTLSize tg = MTLSizeMake(16, 16, 1);
+                MTLSize grid = MTLSizeMake((NSUInteger)(dw + 15) / 16,
+                                           (NSUInteger)(dh + 15) / 16, 1);
+                [enc dispatchThreadgroups:grid threadsPerThreadgroup:tg];
+                [enc endEncoding];
+                [cmdbuf commit];
+                [cmdbuf waitUntilCompleted];
+                CFRelease(cvt);
+                CVMetalTextureCacheFlush(g_texcache, 0);
+                face_track_submit((uint8_t*)[g_downscale_buf contents], dw, dh);
+                return;
+            }
+            if (cvt) CFRelease(cvt);
+        }
+    }
+
+    // CPU fallback (small/old devices, or compute pipeline not ready).
+    if (CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
+    const uint8_t* base = (const uint8_t*)CVPixelBufferGetBaseAddress(pb);
+    const size_t   bpr  = CVPixelBufferGetBytesPerRow(pb);
     static thread_local std::vector<uint8_t> rgb;
-    rgb.resize((size_t)dw * dh * 3);
+    rgb.resize(need);
     for (int y = 0; y < dh; ++y) {
         const uint8_t* row = base + (size_t)y * step * bpr;
         uint8_t* dst = rgb.data() + (size_t)y * dw * 3;

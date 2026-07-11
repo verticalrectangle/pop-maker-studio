@@ -3,6 +3,12 @@
 #include "video.h"
 
 #include <onnxruntime_cxx_api.h>
+// CoreML EP header ships only with ORT builds that bundle the CoreML EP.
+#if __has_include(<coreml_provider_factory.h>)
+#  include <coreml_provider_factory.h>
+#  define PMS_HAVE_COREML 1
+#endif
+
 
 #include <algorithm>
 #include <atomic>
@@ -47,6 +53,14 @@ static bool ensure_sessions() {
         Ort::SessionOptions o;
         o.SetIntraOpNumThreads(4);
         o.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // CoreML EP: routes face models to the Neural Engine on iOS (A14+).
+        // Falls through silently on macOS/Linux builds where the EP isn't linked.
+#ifdef PMS_HAVE_COREML
+        try {
+            OrtSessionOptionsAppendExecutionProvider_CoreML(o, 0);  // 0 = use ANE when possible
+        } catch (...) {}  // EP not in this ORT build → CPU fallback (existing behavior)
+#endif
+
         g_det = std::make_unique<Ort::Session>(
             ort_env(), (face_models_dir() + "/yunet.onnx").c_str(), o);
         g_lmk = std::make_unique<Ort::Session>(
@@ -338,7 +352,7 @@ static std::mutex g_latest_mtx;
 // points snap (no trailing makeup during speech or head turns). The old
 // global 0.65 EMA gated on NOSE velocity lagged the mouth by ~3 frames.
 static inline float adaptive_alpha(float speed_px, float frame_w) {
-    float a = 0.35f + (speed_px / frame_w) * 45.f;
+    float a = 0.55f + (speed_px / frame_w) * 45.f;
     return a > 1.f ? 1.f : a;
 }
 std::atomic<int>  g_dbg_flip180{0};      // worker debug state (IPC readout)
@@ -586,8 +600,8 @@ static bool track_step(FaceTrack& t, const std::vector<uint8_t>& frame,
         t.smooth.pts[k][1] += ddy * alpha;
         float vx = (t.smooth.pts[k][0] - px) / (float)dt;
         float vy = (t.smooth.pts[k][1] - py) / (float)dt;
-        t.vel[k][0] += (vx - t.vel[k][0]) * 0.5f;    // velocity EMA
-        t.vel[k][1] += (vy - t.vel[k][1]) * 0.5f;
+        t.vel[k][0] += (vx - t.vel[k][0]) * 0.75f;    // velocity EMA
+        t.vel[k][1] += (vy - t.vel[k][1]) * 0.75f;
     }
     if (obs.has_blend) {
         if (!t.smooth.has_blend) {
@@ -595,7 +609,7 @@ static bool track_step(FaceTrack& t, const std::vector<uint8_t>& frame,
         } else {
             for (int k = 0; k < FT_NBLEND; ++k) {
                 float db = obs.blend[k] - t.smooth.blend[k];
-                float ab = 0.4f + fabsf(db) * 6.f;
+                float ab = 0.6f + fabsf(db) * 6.f;
                 t.smooth.blend[k] += db * (ab > 1.f ? 1.f : ab);
             }
         }
@@ -646,7 +660,7 @@ static void worker_main() {
             std::unique_lock<std::mutex> lk(g_work_mtx);
             g_work_cv.wait(lk, [] { return g_pend_fresh || g_worker_quit.load(); });
             if (g_worker_quit.load()) return;
-            frame = g_pending;          // copy: keep last frame for debug dump
+            frame.swap(g_pending);          // swap: O(1) pointer exchange, no copy
             fw = g_pend_w; fh = g_pend_h;
             g_pend_fresh = false;
         }
@@ -780,7 +794,7 @@ static void predict_obs(const FaceTrack& t, double now, FaceObs& out) {
     out = t.smooth;
     double age = now - t.t_frame;
     if (age < 0) age = 0;
-    if (age > 0.066) age = 0.066;
+    if (age > 0.033) age = 0.033;
     for (int k = 0; k < FT_NPTS; ++k) {
         out.pts[k][0] += t.vel[k][0] * (float)age;
         out.pts[k][1] += t.vel[k][1] * (float)age;
