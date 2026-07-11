@@ -224,6 +224,12 @@ if(APPLE)
         "-framework QuartzCore" "-framework Foundation")
     target_include_directories(metal-render-test PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
     target_compile_options(metal-render-test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
+    add_executable(face-fx-smoke tools/face_fx_smoke.mm)
+    target_link_libraries(face-fx-smoke PRIVATE pms-engine
+        "-framework Metal" "-framework CoreVideo" "-framework IOSurface"
+        "-framework QuartzCore" "-framework Foundation")
+    target_include_directories(face-fx-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 endif()
 
 

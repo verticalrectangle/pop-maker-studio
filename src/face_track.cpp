@@ -1,15 +1,7 @@
 #include "face_track.h"
 #include "paths.h"
 #include "video.h"
-
 #include <onnxruntime_cxx_api.h>
-// CoreML EP header ships only with ORT builds that bundle the CoreML EP.
-#if __has_include(<coreml_provider_factory.h>)
-#  include <coreml_provider_factory.h>
-#  define PMS_HAVE_COREML 1
-#endif
-
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -52,14 +44,7 @@ static bool ensure_sessions() {
     try {
         Ort::SessionOptions o;
         o.SetIntraOpNumThreads(4);
-        o.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        // CoreML EP: routes face models to the Neural Engine on iOS (A14+).
-        // Falls through silently on macOS/Linux builds where the EP isn't linked.
-#ifdef PMS_HAVE_COREML
-        try {
-            OrtSessionOptionsAppendExecutionProvider_CoreML(o, 0);  // 0 = use ANE when possible
-        } catch (...) {}  // EP not in this ORT build → CPU fallback (existing behavior)
-#endif
+        // CPU-only EP (CoreML deferred; see AGENT_PLAYBOOK.md Phase 6).
 
         g_det = std::make_unique<Ort::Session>(
             ort_env(), (face_models_dir() + "/yunet.onnx").c_str(), o);
@@ -70,6 +55,7 @@ static bool ensure_sessions() {
         return true;
     } catch (...) {
         g_det.reset(); g_lmk.reset(); g_bls.reset();
+        g_init_tried = false;
         return false;
     }
 }
@@ -344,7 +330,7 @@ static int                     g_pend_w = 0, g_pend_h = 0;
 static bool                    g_pend_fresh = false;
 static std::atomic<bool>       g_worker_quit{false};
 static std::thread             g_worker;
-static bool                    g_worker_started = false;
+static std::atomic<bool>       g_worker_started{false};
 
 static std::mutex g_latest_mtx;
 // Velocity-adaptive smoothing (One-Euro spirit): each landmark picks its own

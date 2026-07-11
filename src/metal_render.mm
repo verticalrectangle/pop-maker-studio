@@ -815,6 +815,7 @@ static id<MTLTexture>             g_content = nil;    // current frame (BGRA8)
 static int                        g_cw = 0, g_ch = 0;
 static std::mutex                 g_content_mu;
 static CVMetalTextureCacheRef     g_texcache = NULL;  // zero-copy CVPixelBuffer→MTLTexture
+static std::mutex                 g_texcache_mu;      // CVMetalTextureCache is not thread-safe
 static CVMetalTextureRef          g_cvtex    = NULL;  // keeps the mapped frame alive
 // Person matte (background replacement) — latest R8 CVPixelBuffer from the
 // platform segmenter, mapped zero-copy like the content frame. All guarded by
@@ -1894,13 +1895,19 @@ void metal_render_submit_layer(int track, int clip, void* cv_pixel_buffer_bgra,
     int w = (int)CVPixelBufferGetWidth(pb);
     int h = (int)CVPixelBufferGetHeight(pb);
     CVMetalTextureRef cvt = NULL;
-    CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
-        kCFAllocatorDefault, g_texcache, pb, NULL,
-        MTLPixelFormatBGRA8Unorm, w, h, 0, &cvt);
-    if (r != kCVReturnSuccess || !cvt) {
-        if (cvt) CFRelease(cvt);
-        NSLog(@"[metal_render] layer (%d,%d) map failed (%d)", track, clip, (int)r);
-        return;
+    {
+        // CVMetalTextureCache is not thread-safe: submissions arrive from
+        // several queues (camera / matte / layer feeder). Lock only around
+        // the cache call, never while holding g_content_mu below.
+        std::lock_guard<std::mutex> lk(g_texcache_mu);
+        CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, g_texcache, pb, NULL,
+            MTLPixelFormatBGRA8Unorm, w, h, 0, &cvt);
+        if (r != kCVReturnSuccess || !cvt) {
+            if (cvt) CFRelease(cvt);
+            NSLog(@"[metal_render] layer (%d,%d) map failed (%d)", track, clip, (int)r);
+            return;
+        }
     }
     std::lock_guard<std::mutex> lk(g_content_mu);
     LayerFrame& lf = g_layers[key];
@@ -1939,9 +1946,15 @@ void metal_render_face_feed(void* cv_pixel_buffer_bgra) {
         }
         if (g_downscale_buf) {
             CVMetalTextureRef cvt = NULL;
-            CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
-                kCFAllocatorDefault, g_texcache, pb, NULL,
-                MTLPixelFormatBGRA8Unorm, fw, fh, 0, &cvt);
+            // Create + release/flush share the cache lock (not thread-safe);
+            // the GPU compute between them runs outside it.
+            CVReturn r;
+            {
+                std::lock_guard<std::mutex> lk(g_texcache_mu);
+                r = CVMetalTextureCacheCreateTextureFromImage(
+                    kCFAllocatorDefault, g_texcache, pb, NULL,
+                    MTLPixelFormatBGRA8Unorm, fw, fh, 0, &cvt);
+            }
             if (r == kCVReturnSuccess && cvt) {
                 id<MTLTexture> tex = CVMetalTextureGetTexture(cvt);
                 id<MTLCommandBuffer> cmdbuf = [g_queue commandBuffer];
@@ -1960,8 +1973,11 @@ void metal_render_face_feed(void* cv_pixel_buffer_bgra) {
                 [enc endEncoding];
                 [cmdbuf commit];
                 [cmdbuf waitUntilCompleted];
-                CFRelease(cvt);
-                CVMetalTextureCacheFlush(g_texcache, 0);
+                {
+                    std::lock_guard<std::mutex> lk(g_texcache_mu);
+                    CFRelease(cvt);
+                    CVMetalTextureCacheFlush(g_texcache, 0);
+                }
                 face_track_submit((uint8_t*)[g_downscale_buf contents], dw, dh);
                 return;
             }
@@ -2010,13 +2026,17 @@ void metal_render_submit_matte(void* cv_pixel_buffer_r8, double t) {
     int w = (int)CVPixelBufferGetWidth(pb);
     int h = (int)CVPixelBufferGetHeight(pb);
     CVMetalTextureRef cvt = NULL;
-    CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
-        kCFAllocatorDefault, g_texcache, pb, NULL,
-        MTLPixelFormatR8Unorm, w, h, 0, &cvt);
-    if (r != kCVReturnSuccess || !cvt) {
-        if (cvt) CFRelease(cvt);
-        NSLog(@"[metal_render] matte map failed (%d)", (int)r);
-        return;
+    {
+        // See submit_layer: lock only the cache call, not g_content_mu.
+        std::lock_guard<std::mutex> lk(g_texcache_mu);
+        CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, g_texcache, pb, NULL,
+            MTLPixelFormatR8Unorm, w, h, 0, &cvt);
+        if (r != kCVReturnSuccess || !cvt) {
+            if (cvt) CFRelease(cvt);
+            NSLog(@"[metal_render] matte map failed (%d)", (int)r);
+            return;
+        }
     }
     std::lock_guard<std::mutex> lk(g_content_mu);
     release_matte();
@@ -2056,17 +2076,22 @@ void metal_render_submit_pixelbuffer(void* cv_pixel_buffer) {
     // Zero-copy: map the IOSurface-backed pixel buffer straight to an MTLTexture
     // (no CPU copy/upload) — the fix for 1080p/4K choppiness.
     CVMetalTextureRef cvt = NULL;
-    CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
-        kCFAllocatorDefault, g_texcache, pb, NULL,
-        MTLPixelFormatBGRA8Unorm, w, h, 0, &cvt);
-    if (r != kCVReturnSuccess || !cvt) { if (cvt) CFRelease(cvt); return; }
+    {
+        std::lock_guard<std::mutex> lk(g_texcache_mu);
+        CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, g_texcache, pb, NULL,
+            MTLPixelFormatBGRA8Unorm, w, h, 0, &cvt);
+        if (r != kCVReturnSuccess || !cvt) { if (cvt) CFRelease(cvt); return; }
+    }
 
-    std::lock_guard<std::mutex> lk(g_content_mu);
-    release_cvtex();
-    g_cvtex   = cvt;                                   // retain until next frame / render
-    g_content = CVMetalTextureGetTexture(cvt);
-    g_cw = w; g_ch = h;
-    CVMetalTextureCacheFlush(g_texcache, 0);
+    {
+        std::lock_guard<std::mutex> lk(g_content_mu);
+        release_cvtex();
+        g_cvtex   = cvt;                                   // retain until next frame / render
+        g_content = CVMetalTextureGetTexture(cvt);
+        g_cw = w; g_ch = h;
+    }
+    { std::lock_guard<std::mutex> lk(g_texcache_mu); CVMetalTextureCacheFlush(g_texcache, 0); }
 }
 
 // ── Scene FX stacks from AppState ────────────────────────────────────────────

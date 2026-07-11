@@ -7,6 +7,7 @@
 #include "pms_engine.h"
 #include "app.h"
 #include "audio.h"
+#include "face_track.h"
 #include "ipc_server.h"
 #include "engine_runtime.h"
 #if defined(__APPLE__)
@@ -54,8 +55,13 @@ pms_engine* pms_create(void* graphics_device,   // MTLDevice* on iOS; null on de
 #endif
     return e;
 }
-
-void pms_destroy(pms_engine* e) { delete e; }
+void pms_destroy(pms_engine* e) {
+    if (e) {
+        face_feed_enable(false);
+        face_track_shutdown();
+        delete e;
+    }
+}
 
 void pms_tick(pms_engine* e, double dt) {
     if (!e) return;
