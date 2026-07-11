@@ -60,6 +60,7 @@ struct BeautyLook {
     float eye_glow = 0; float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
     float skin_tint = 0; float tint_col[3] = {0.7f, 0.8f, 1.f};
     float desat = 0, chrome = 0, scanlines = 0;
+    float iris_tint = 0; float iris_col[3] = {0.3f, 0.5f, 0.8f};
 };
 bool beauty_look_for(int filter_id, BeautyLook& L);
 

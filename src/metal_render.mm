@@ -392,7 +392,7 @@ struct FaceBeautyUni {
     float lippoly[24];
     float nose[4]; float lash[4]; float chin[4]; float eyeout[4];
     float lidL[14]; float lidR[14];
-    float brow_r; float pad0; float blink[2];
+    float brow_r; float pad0; float blink[2]; float iris[4];
 };
 static float f_lum(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
 static float f_seg(float2 p, float2 a, float2 b) {
@@ -713,6 +713,21 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
         col += float3(u.eyeglow[0], u.eyeglow[1], u.eyeglow[2])
              * (u.eyeglow[3] * 0.55 * max(gL, gR));
     }
+    if (u.iris[3] > 0.001) {
+        float iL = 1.0 - smoothstep(er * 0.10, er * 0.38, distance(p, eyeL));
+        float iR = 1.0 - smoothstep(er * 0.10, er * 0.38, distance(p, eyeR));
+        float iris_mask = max(iL, iR);
+        float bfade_iris = 1.0 - 0.9 * max(
+            smoothstep(0.25, 0.55, u.blink[0]),
+            smoothstep(0.25, 0.55, u.blink[1]));
+        float lum_i = f_lum(col);
+        float iris_sel = iris_mask * bfade_iris
+          * (1.0 - smoothstep(0.55, 0.75, lum_i))
+          * smoothstep(0.08, 0.20, lum_i);
+        float3 target_i = float3(u.iris[0], u.iris[1], u.iris[2]);
+        float3 tinted_i = mix(col, target_i * (lum_i / max(f_lum(target_i), 0.15)), 0.78);
+        col = mix(col, tinted_i, iris_sel * u.iris[3]);
+    }
     return float4(clamp(col, 0.0, 1.0), c0.a);
 }
 
@@ -996,7 +1011,7 @@ struct FaceBeautyUniCPU {
     float lippoly[24];
     float nose[4]; float lash[4]; float chin[4]; float eyeout[4];
     float lidL[14]; float lidR[14];
-    float brow_r; float pad0; float blink[2];
+    float brow_r; float pad0; float blink[2]; float iris[4];
 };
 struct FaceMkUniCPU { float dim[2]; float opacity, adapt;
                       float eyes[4]; float blink[2]; float eye_r, pad0; };
@@ -1063,6 +1078,8 @@ static FaceBeautyUniCPU face_beauty_uniforms(const FaceBeautyParams& p, int w, i
     }
     u.brow_r = p.brow_r;
     u.blink[0] = p.blink_l; u.blink[1] = p.blink_r;
+    u.iris[0] = p.iris_col[0]; u.iris[1] = p.iris_col[1];
+    u.iris[2] = p.iris_col[2]; u.iris[3] = p.iris_tint;
     return u;
 }
 
@@ -1094,6 +1111,8 @@ static BeautyLook face_look_from(const LiveFx& fx) {
     ov("skin_tint", L.skin_tint);
     ov("tint_r", L.tint_col[0]); ov("tint_g", L.tint_col[1]); ov("tint_b", L.tint_col[2]);
     ov("desat", L.desat); ov("chrome", L.chrome); ov("scanlines", L.scanlines);
+    ov("iris_tint", L.iris_tint);
+    ov("iris_r", L.iris_col[0]); ov("iris_g", L.iris_col[1]); ov("iris_b", L.iris_col[2]);
     if (!fx.face_makeup_tex.empty()) L.makeup_tex = fx.face_makeup_tex.c_str();
     return L;
 }
