@@ -351,6 +351,7 @@ static bool run_inference(const uint8_t* rgb, int w, int h, FaceObs& out) {
 // ── Worker (live path) ────────────────────────────────────────────────────────
 
 static std::mutex              g_work_mtx;
+static std::mutex              g_worker_lifecycle_mtx;
 static std::condition_variable g_work_cv;
 static std::vector<uint8_t>    g_pending;        // latest submitted frame
 static int                     g_pend_w = 0, g_pend_h = 0;
@@ -358,7 +359,6 @@ static bool                    g_pend_fresh = false;
 static double                  g_pend_host_time = 0.0;
 static std::atomic<bool>       g_worker_quit{false};
 static std::thread             g_worker;
-static std::atomic<bool>       g_worker_started{false};
 static std::atomic<bool>       g_sync_mode{false};
 
 static std::mutex g_latest_mtx;
@@ -791,12 +791,14 @@ bool face_feed_enabled()       { return g_face_feed.load(std::memory_order_relax
 void face_track_submit(const uint8_t* rgb, int w, int h, double host_time) {
     if (!face_track_available() || w <= 0 || h <= 0) return;
     bool sync = g_sync_mode.load(std::memory_order_relaxed);
-    if (!sync && !g_worker_started) {
-        g_worker_started = true;
-        g_worker = std::thread(worker_main);
-        g_worker.detach();
+    if (!sync) {
+        std::lock_guard<std::mutex> lifecycle_lock(g_worker_lifecycle_mtx);
+        if (!g_worker.joinable()) {
+            g_worker_quit.store(false, std::memory_order_relaxed);
+            g_worker = std::thread(worker_main);
+        }
     }
-    std::lock_guard<std::mutex> lk(g_work_mtx);
+    std::lock_guard<std::mutex> work_lock(g_work_mtx);
     g_pending.assign(rgb, rgb + (size_t)w * h * 3);
     g_pend_w = w; g_pend_h = h;
     g_pend_host_time = host_time;
@@ -900,8 +902,11 @@ void face_track_set_sync_mode(bool on) {
 bool face_track_sync_enabled() { return g_sync_mode.load(std::memory_order_relaxed); }
 
 void face_track_shutdown() {
-    g_worker_quit.store(true);
+    std::lock_guard<std::mutex> lifecycle_lock(g_worker_lifecycle_mtx);
+    if (!g_worker.joinable()) return;
+    g_worker_quit.store(true, std::memory_order_relaxed);
     g_work_cv.notify_all();
+    g_worker.join();
 }
 
 // ── Offline take pass ─────────────────────────────────────────────────────────
