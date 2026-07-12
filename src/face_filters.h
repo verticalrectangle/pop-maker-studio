@@ -99,6 +99,8 @@ struct ARKitFaceRenderPlan {
     float makeup_opacity = 0.f;
     float makeup_adapt   = 1.f;
     float mesh_pts[ARKIT_NPTS][2];      // ARKit vertex 2D positions
+    float uvs[ARKIT_NPTS][2];           // ARKit textureCoordinates
+    bool  has_uvs = false;              // false → skip mesh pass (no UV data)
     FaceWarpBump bumps[MAX_FACE_BUMPS];
     int   n_bumps = 0;
 };

@@ -123,6 +123,7 @@ void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8, double host_
 }
 
 void pms_submit_arkit_face(pms_engine*, const float* vertices_1220x2,
+                           const float* uvs_1220x2,
                            const float* blendshapes_52, int n_faces,
                            int w, int h) {
     if (!vertices_1220x2 || !blendshapes_52 || n_faces <= 0) {
@@ -135,6 +136,13 @@ void pms_submit_arkit_face(pms_engine*, const float* vertices_1220x2,
         for (int i = 0; i < ARKIT_NPTS; ++i) {
             obs[f].pts[i][0] = vertices_1220x2[f * ARKIT_NPTS * 2 + i * 2 + 0];
             obs[f].pts[i][1] = vertices_1220x2[f * ARKIT_NPTS * 2 + i * 2 + 1];
+            if (uvs_1220x2) {
+                obs[f].uvs[i][0] = uvs_1220x2[f * ARKIT_NPTS * 2 + i * 2 + 0];
+                obs[f].uvs[i][1] = uvs_1220x2[f * ARKIT_NPTS * 2 + i * 2 + 1];
+            } else {
+                obs[f].uvs[i][0] = 0.f;
+                obs[f].uvs[i][1] = 0.f;
+            }
         }
         for (int b = 0; b < ARKIT_NBLEND; ++b) {
             obs[f].blend[b] = blendshapes_52[f * ARKIT_NBLEND + b];

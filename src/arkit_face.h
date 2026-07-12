@@ -10,6 +10,7 @@ static constexpr int ARKIT_MAX_FACES = 4;
 struct ARKitFaceObs {
     bool   valid = false;
     float  pts[ARKIT_NPTS][2];    // 2D pixel coords in the submitted frame
+    float  uvs[ARKIT_NPTS][2];    // ARKit textureCoordinates (constant topology)
     float  blend[ARKIT_NBLEND] = {}; // ARKit blendshape coefficients
     bool   has_blend = false;
     float  score = 1.0f;          // ARKit always reports confidence

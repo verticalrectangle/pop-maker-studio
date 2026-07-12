@@ -55,7 +55,10 @@ void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8,
 // blendshapes: flat float array [n_faces * 52] — ARKit blendshape coefficients.
 // w,h: size of the frame the vertices are projected into (all faces share it).
 // n_faces: number of tracked faces (0..4). Pass n_faces=0 to clear (face lost).
+// uvs_1220x2: ARKit textureCoordinates (constant per topology, same every frame).
+//              May be NULL if unavailable — the mesh pass is then skipped.
 void pms_submit_arkit_face(pms_engine*, const float* vertices_1220x2,
+                           const float* uvs_1220x2,
                            const float* blendshapes_52, int n_faces,
                            int w, int h);
 

@@ -1429,7 +1429,8 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     cur = ping[dst]; dst ^= 1;
                 }
                 // 2. UV-mapped makeup texture over the tracked mesh.
-                id<MTLTexture> mk = plan.makeup_tex ? face_makeup_texture(plan.makeup_tex) : nil;
+                //    Skipped when uv is null (ARKit path with no textureCoordinates).
+                id<MTLTexture> mk = (uv && plan.makeup_tex) ? face_makeup_texture(plan.makeup_tex) : nil;
                 if (mk) {
                     id<MTLTexture> target = ping[dst];
                     id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
@@ -1529,7 +1530,7 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     ARKitFaceRenderPlan plan;
                     if (!face_filter_build_plan_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
                         continue;
-                    apply_plan(plan, &k_arkit_uv[0][0], &k_arkit_tris[0][0], ARKIT_NPTS, ARKIT_NTRI);
+                    apply_plan(plan, plan.has_uvs ? &plan.uvs[0][0] : nullptr, &k_arkit_tris[0][0], ARKIT_NPTS, ARKIT_NTRI);
                 }
             } else {
                 for (int fi = 0; fi < n_faces; ++fi) {
