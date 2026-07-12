@@ -1535,22 +1535,14 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     FaceRenderPlan plan;
                     if (!face_filter_build_plan_from_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
                         continue;
-                    // MediaPipe mesh topology (exact UVs for makeup PNGs) with
-                    // real ARKit screen positions looked up via cached UV-space
-                    // nearest-neighbor. This gives both correct UVs (eyeliner
-                    // and thin features sample the right texels) and correct
-                    // positions (no IDW smearing). Falls back to IDW-
-                    // interpolated positions when ARKit UVs are not yet
-                    // available (stubbed zeros before first device submission).
-                    float mp_pos[FACE_UV_NPTS][2];
-                    if (arkit_face_mp_positions(arkit_faces[fi], mp_pos)) {
-                        apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
-                                   FACE_UV_NPTS, FACE_UV_NTRI,
-                                   &mp_pos[0][0]);
-                    } else {
-                        apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
-                                   FACE_UV_NPTS, FACE_UV_NTRI);
-                    }
+                    // MediaPipe mesh topology (exact UVs for makeup PNGs).
+                    // plan.mesh_pts already has real ARKit screen positions:
+                    // ~72 hard-mapped + runtime landmarks get exact positions,
+                    // the rest are IDW-estimated then snapped to the nearest
+                    // ARKit vertex in screen space (snap_to_arkit). No UV
+                    // remap needed — ARKit UV space is never involved.
+                    apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
+                               FACE_UV_NPTS, FACE_UV_NTRI);
                 }
             } else {
                 for (int fi = 0; fi < n_faces; ++fi) {

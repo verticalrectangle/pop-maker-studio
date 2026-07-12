@@ -185,12 +185,16 @@ def main() -> None:
         fail(f"arkit_index_for_mp missing cases: {missing}")
 
     # Lower-lid cases must reference LOWER_LID arrays (not upper).
+    # MP indices 7,163,144,145,153,154,155 are image-LEFT (low U) = person's
+    # RIGHT, so they map via ARKIT_LOWER_LID_R.
+    # MP indices 249,390,373,374,380,381,382 are image-RIGHT (high U) =
+    # person's LEFT, so they map via ARKIT_LOWER_LID_L.
     for mp in (7, 163, 144, 145, 153, 154, 155):
-        if "LOWER_LID_L" not in cases[mp]:
-            fail(f"MP {mp} should map via ARKIT_LOWER_LID_L, got {cases[mp]}")
-    for mp in (249, 390, 373, 374, 380, 381, 382):
         if "LOWER_LID_R" not in cases[mp]:
-            fail(f"MP {mp} should map via ARKIT_LOWER_LID_R, got {cases[mp]}")
+            fail(f"MP {mp} should map via ARKIT_LOWER_LID_R (image-left=person R), got {cases[mp]}")
+    for mp in (249, 390, 373, 374, 380, 381, 382):
+        if "LOWER_LID_L" not in cases[mp]:
+            fail(f"MP {mp} should map via ARKIT_LOWER_LID_L (image-right=person L), got {cases[mp]}")
 
     # Contract comment present.
     if "UNMIRRORED" not in map_txt and "unmirrored" not in map_txt:

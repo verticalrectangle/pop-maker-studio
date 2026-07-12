@@ -35,17 +35,3 @@ bool arkit_face_available();
 // Clear the ARKit slot.
 void arkit_face_clear();
 
-// Build (if needed) and copy out MediaPipe-mesh screen positions for each of
-// the 468 MediaPipe vertices, looked up from the ARKit mesh via a cached
-// UV-space correspondence. The mapping (MediaPipe index → ARKit vertex index)
-// is built once from the ~46 hard-mapped landmark pairs as IDW control points
-// in MediaPipe UV space: each MediaPipe UV is mapped to an ARKit UV, then
-// snapped to the nearest ARKit vertex in ARKit UV space. ARKit
-// textureCoordinates and MediaPipe canonical UVs are both constant per
-// topology, so the mapping is stable across frames and faces.
-//
-// This gives the MediaPipe mesh (exact UVs for makeup PNGs) real ARKit
-// screen positions (no IDW position interpolation) — both UVs and positions
-// are correct. Returns false if ARKit UVs are not yet available (all zeros),
-// meaning the caller should fall back to IDW-interpolated positions.
-bool arkit_face_mp_positions(const ARKitFaceObs& obs, float out[FACE_UV_NPTS][2]);

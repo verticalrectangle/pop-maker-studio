@@ -62,72 +62,81 @@ static int arkit_index_for_mp(int mp) {
         case 14: return ARKIT_LIP_LOWER;
         case 17: return ARKIT_LIP_RING[9];
 
-        // Person's left eye: upper lid outer→inner + lower lid.
-        case 33:  return ARKIT_LID_L[0];          // outer corner
-        case 161: return ARKIT_LID_L[1];
-        case 160: return ARKIT_LID_L[2];
-        case 159: return ARKIT_LID_L[3];
-        case 158: return ARKIT_LID_L[4];
-        case 157: return ARKIT_LID_L[5];
-        case 133: return ARKIT_LID_L[6];          // inner corner
-        case 7:   return ARKIT_LOWER_LID_L[1];
-        case 163: return ARKIT_LOWER_LID_L[2];
-        case 144: return ARKIT_LOWER_LID_L[3];
-        case 145: return ARKIT_LOWER_LID_L[4];
-        case 153: return ARKIT_LOWER_LID_L[5];
-        case 154: return ARKIT_LOWER_LID_L[6];
-        case 155: return ARKIT_LOWER_LID_L[7];
+        // MediaPipe landmarks use IMAGE/viewer perspective (U=0 = left of
+        // image = person's RIGHT). ARKit constants use PERSON's perspective.
+        // So MP "left" indices (low U: 33,7,61,50,98,132,234...) map to
+        // ARKit _R constants, and MP "right" indices (high U: 263,249,291,
+        // 280,327,361,454...) map to ARKit _L constants.
+        //
+        // Person's right eye (image-left, low U): upper lid outer→inner.
+        case 33:  return ARKIT_LID_R[0];          // outer corner
+        case 161: return ARKIT_LID_R[1];
+        case 160: return ARKIT_LID_R[2];
+        case 159: return ARKIT_LID_R[3];
+        case 158: return ARKIT_LID_R[4];
+        case 157: return ARKIT_LID_R[5];
+        case 133: return ARKIT_LID_R[6];          // inner corner
+        case 7:   return ARKIT_LOWER_LID_R[1];
+        case 163: return ARKIT_LOWER_LID_R[2];
+        case 144: return ARKIT_LOWER_LID_R[3];
+        case 145: return ARKIT_LOWER_LID_R[4];
+        case 153: return ARKIT_LOWER_LID_R[5];
+        case 154: return ARKIT_LOWER_LID_R[6];
+        case 155: return ARKIT_LOWER_LID_R[7];
 
-        // Person's right eye: upper lid outer→inner + lower lid.
-        case 263: return ARKIT_LID_R[0];
-        case 388: return ARKIT_LID_R[1];
-        case 387: return ARKIT_LID_R[2];
-        case 386: return ARKIT_LID_R[3];
-        case 385: return ARKIT_LID_R[4];
-        case 384: return ARKIT_LID_R[5];
-        case 362: return ARKIT_LID_R[6];
-        case 249: return ARKIT_LOWER_LID_R[1];
-        case 390: return ARKIT_LOWER_LID_R[2];
-        case 373: return ARKIT_LOWER_LID_R[3];
-        case 374: return ARKIT_LOWER_LID_R[4];
-        case 380: return ARKIT_LOWER_LID_R[5];
-        case 381: return ARKIT_LOWER_LID_R[6];
-        case 382: return ARKIT_LOWER_LID_R[7];
+        // Person's left eye (image-right, high U): upper lid outer→inner.
+        case 263: return ARKIT_LID_L[0];
+        case 388: return ARKIT_LID_L[1];
+        case 387: return ARKIT_LID_L[2];
+        case 386: return ARKIT_LID_L[3];
+        case 385: return ARKIT_LID_L[4];
+        case 384: return ARKIT_LID_L[5];
+        case 362: return ARKIT_LID_L[6];
+        case 249: return ARKIT_LOWER_LID_L[1];
+        case 390: return ARKIT_LOWER_LID_L[2];
+        case 373: return ARKIT_LOWER_LID_L[3];
+        case 374: return ARKIT_LOWER_LID_L[4];
+        case 380: return ARKIT_LOWER_LID_L[5];
+        case 381: return ARKIT_LOWER_LID_L[6];
+        case 382: return ARKIT_LOWER_LID_L[7];
 
-        // Lips (outer ring + a few dense ring points used by beauty).
-        case 37:  return ARKIT_LIP_RING[2];
-        case 40:  return ARKIT_LIP_RING[1];
-        case 61:  return ARKIT_LIP_RING[0];
-        case 84:  return ARKIT_LIP_RING[10];
-        case 91:  return ARKIT_LIP_RING[11];
-        case 267: return ARKIT_LIP_RING[4];
-        case 270: return ARKIT_LIP_RING[5];
-        case 291: return ARKIT_LIP_RING[6];
-        case 314: return ARKIT_LIP_RING[8];
-        case 321: return ARKIT_LIP_RING[7];
+        // Lips (outer ring). ARKIT_LIP_RING is clockwise from person's L
+        // corner (249). MP indices are image-space: 61=left of image=
+        // person's R corner, 291=right of image=person's L corner.
+        case 37:  return ARKIT_LIP_RING[4];    // image-left → person's R upper
+        case 40:  return ARKIT_LIP_RING[5];    // image-left → person's R upper
+        case 61:  return ARKIT_LIP_RING[6];    // image-left → person's R corner
+        case 84:  return ARKIT_LIP_RING[8];    // image-left → person's R lower
+        case 91:  return ARKIT_LIP_RING[7];    // image-left → person's R lower
+        case 267: return ARKIT_LIP_RING[2];    // image-right → person's L upper
+        case 270: return ARKIT_LIP_RING[1];    // image-right → person's L upper
+        case 291: return ARKIT_LIP_RING[0];    // image-right → person's L corner
+        case 314: return ARKIT_LIP_RING[10];   // image-right → person's L lower
+        case 321: return ARKIT_LIP_RING[11];   // image-right → person's L lower
 
         // Runtime-filled semantic points (constants are 0 placeholders).
-        case 50:  return ARKIT_CHEEK_L;
-        case 98:  return ARKIT_NOSE_L;
-        case 132: return ARKIT_JAW_CHAIN_L[0];
-        case 136: return ARKIT_JAW_CHAIN_L[2];
-        case 149: return ARKIT_JAW_CHAIN_L[3];
+        // Image-left indices → person's RIGHT, image-right → person's LEFT.
+        case 50:  return ARKIT_CHEEK_R;     // image-left → person's R cheek
+        case 98:  return ARKIT_NOSE_R;      // image-left → person's R nose
+        case 132: return ARKIT_JAW_CHAIN_R[0];
+        case 136: return ARKIT_JAW_CHAIN_R[2];
+        case 149: return ARKIT_JAW_CHAIN_R[3];
         case 152: return ARKIT_CHIN;
-        case 172: return ARKIT_JAW_CHAIN_L[1];
-        case 176: return ARKIT_JAW_CHAIN_L[4];
-        case 234: return ARKIT_FACE_L;
-        case 280: return ARKIT_CHEEK_R;
-        case 327: return ARKIT_NOSE_R;
-        case 361: return ARKIT_JAW_CHAIN_R[0];
-        case 365: return ARKIT_JAW_CHAIN_R[2];
-        case 378: return ARKIT_JAW_CHAIN_R[3];
-        case 397: return ARKIT_JAW_CHAIN_R[1];
-        case 400: return ARKIT_JAW_CHAIN_R[4];
-        case 454: return ARKIT_FACE_R;
+        case 172: return ARKIT_JAW_CHAIN_R[1];
+        case 176: return ARKIT_JAW_CHAIN_R[4];
+        case 234: return ARKIT_FACE_R;      // image-left → person's R face
+        case 280: return ARKIT_CHEEK_L;     // image-right → person's L cheek
+        case 327: return ARKIT_NOSE_L;      // image-right → person's L nose
+        case 361: return ARKIT_JAW_CHAIN_L[0];
+        case 365: return ARKIT_JAW_CHAIN_L[2];
+        case 378: return ARKIT_JAW_CHAIN_L[3];
+        case 397: return ARKIT_JAW_CHAIN_L[1];
+        case 400: return ARKIT_JAW_CHAIN_L[4];
+        case 454: return ARKIT_FACE_L;      // image-right → person's L face
 
-        // Irises
-        case 468: return ARKIT_IRIS_L;
-        case 473: return ARKIT_IRIS_R;
+        // Irises: 468=image-left=person's R, 473=image-right=person's L
+        case 468: return ARKIT_IRIS_R;
+        case 473: return ARKIT_IRIS_L;
         default: return 0;
     }
 }
@@ -170,8 +179,8 @@ static int nearest_pred(const ARKitFaceObs& obs, float tx, float ty, Pred ok) {
 static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp,
                                    bool* known) {
     // Seed landmarks already filled by arkit_index_for_mp.
-    float eyeLx = mp.pts[468][0], eyeLy = mp.pts[468][1]; // person's left iris
-    float eyeRx = mp.pts[473][0], eyeRy = mp.pts[473][1]; // person's right iris
+    float eyeLx = mp.pts[473][0], eyeLy = mp.pts[473][1]; // person's left iris (MP 473=image-right)
+    float eyeRx = mp.pts[468][0], eyeRy = mp.pts[468][1]; // person's right iris (MP 468=image-left)
     float noseX = mp.pts[1][0],   noseY = mp.pts[1][1];   // nose tip
     float mouthX = (mp.pts[13][0] + mp.pts[14][0]) * 0.5f;
     float mouthY = (mp.pts[13][1] + mp.pts[14][1]) * 0.5f;
@@ -408,128 +417,42 @@ static void interpolate_missing_landmarks(FaceObs& mp, const bool* known) {
     }
 }
 
-// ── MediaPipe mesh positions from ARKit mesh ────────────────────────────────
-// Cached mapping: for each of the 468 MediaPipe vertices, the ARKit vertex
-// index to use for screen position. Built once from the ~46 hard-mapped
-// landmark pairs (arkit_index_for_mp) as IDW control points in MediaPipe UV
-// space: each MediaPipe UV is mapped to an ARKit UV, then snapped to the
-// nearest ARKit vertex in ARKit UV space. Both ARKit textureCoordinates and
-// MediaPipe canonical UVs are constant per topology, so the mapping is stable
-// across frames and faces.
-//
-// This gives the MediaPipe mesh (exact UVs for makeup PNGs) real ARKit screen
-// positions — no IDW position interpolation. Both UVs and positions are
-// correct: the eyeliner is sampled at the right texel (exact UV) and rendered
-// at a real screen location (nearest ARKit vertex, no averaging).
-static int  s_mp_to_arkit[FACE_UV_NPTS] = {};
-static bool s_mp_to_arkit_built = false;
-
-bool arkit_face_mp_positions(const ARKitFaceObs& obs, float out[FACE_UV_NPTS][2]) {
-    if (s_mp_to_arkit_built) {
-        for (int i = 0; i < FACE_UV_NPTS; ++i) {
-            int ai = s_mp_to_arkit[i];
-            out[i][0] = obs.pts[ai][0];
-            out[i][1] = obs.pts[ai][1];
-        }
-        return true;
-    }
-
-    // Check ARKit UVs are available (not stubbed zeros).
-    bool any_uv = false;
-    for (int i = 0; i < ARKIT_NPTS && !any_uv; ++i)
-        if (obs.uvs[i][0] != 0.f || obs.uvs[i][1] != 0.f) any_uv = true;
-    if (!any_uv) return false;
-
-    // Collect control points: (MediaPipe UV, ARKit UV) pairs from the ~46
-    // hard-mapped landmark correspondences.
-    float ctrl_muv[FT_NPTS][2];
-    float ctrl_auv[FT_NPTS][2];
-    int n_ctrl = 0;
-    for (int mp = 0; mp < FACE_UV_NPTS; ++mp) {
-        int ai = arkit_index_for_mp(mp);
-        if (ai <= 0 || ai >= ARKIT_NPTS) continue;
-        if (obs.uvs[ai][0] == 0.f && obs.uvs[ai][1] == 0.f) continue;
-        ctrl_muv[n_ctrl][0] = k_face_uv[mp][0];
-        ctrl_muv[n_ctrl][1] = k_face_uv[mp][1];
-        ctrl_auv[n_ctrl][0] = obs.uvs[ai][0];
-        ctrl_auv[n_ctrl][1] = obs.uvs[ai][1];
-        ++n_ctrl;
-    }
-    if (n_ctrl < 3) return false;
-
-    // For each MediaPipe vertex, find the corresponding ARKit vertex.
-    constexpr int K = 8;
+// ── Screen-space snap to ARKit mesh ─────────────────────────────────────────
+// After IDW interpolation in MediaPipe UV space (which is correct, not
+// mirrored), snap each MediaPipe vertex's estimated screen position to the
+// nearest real ARKit vertex in screen space. This eliminates ARKit UV space
+// entirely (the source of the L/R mirroring bug) and gives real positions
+// without IDW smearing. The ARKit mesh (1220 verts) is 2.6× denser than
+// MediaPipe (468), so the nearest ARKit vertex is almost always within 1-2
+// pixels of the correct location.
+static void snap_to_arkit(const ARKitFaceObs& obs, FaceObs& mp,
+                          const bool* known) {
     for (int i = 0; i < FACE_UV_NPTS; ++i) {
-        // Exact correspondence from the hard map — skip the search.
-        int ai = arkit_index_for_mp(i);
-        if (ai > 0 && ai < ARKIT_NPTS) {
-            s_mp_to_arkit[i] = ai;
-            continue;
-        }
-
-        // IDW-map this MediaPipe UV → ARKit UV using control points in
-        // MediaPipe UV space, then snap to the nearest ARKit vertex in
-        // ARKit UV space. The UV-to-UV mapping is a smooth deformation;
-        // even with sparse control points, the nearest-vertex result is
-        // topologically correct or adjacent because the ARKit mesh (1220
-        // verts) is 2.6× denser than MediaPipe (468).
-        float mu = k_face_uv[i][0], mv = k_face_uv[i][1];
-        float dists[K];
-        int idx[K];
-        for (int k = 0; k < K; ++k) { dists[k] = 1e9f; idx[k] = 0; }
-        for (int j = 0; j < n_ctrl; ++j) {
-            float du = ctrl_muv[j][0] - mu;
-            float dv = ctrl_muv[j][1] - mv;
-            float d = du * du + dv * dv;
-            int worst = 0;
-            for (int k = 1; k < K; ++k) if (dists[k] > dists[worst]) worst = k;
-            if (d < dists[worst]) { dists[worst] = d; idx[worst] = j; }
-        }
-        float wsum = 0.f, au = 0.f, av = 0.f;
-        for (int k = 0; k < K; ++k) {
-            if (dists[k] >= 1e9f) continue;
-            float d = sqrtf(dists[k]);
-            if (d < 1e-6f) {
-                au = ctrl_auv[idx[k]][0];
-                av = ctrl_auv[idx[k]][1];
-                wsum = 1.f;
-                break;
-            }
-            float w = 1.f / (d * d);
-            wsum += w;
-            au += w * ctrl_auv[idx[k]][0];
-            av += w * ctrl_auv[idx[k]][1];
-        }
-        if (wsum > 0.f) { au /= wsum; av /= wsum; }
-
-        // Nearest ARKit vertex in ARKit UV space.
+        if (known[i]) continue;  // already a real ARKit position
+        float px = mp.pts[i][0], py = mp.pts[i][1];
         float best = 1e30f;
-        int best_ai = 0;
+        int best_ai = -1;
         for (int j = 0; j < ARKIT_NPTS; ++j) {
-            float du = obs.uvs[j][0] - au;
-            float dv = obs.uvs[j][1] - av;
-            float d = du * du + dv * dv;
+            float dx = obs.pts[j][0] - px;
+            float dy = obs.pts[j][1] - py;
+            float d = dx * dx + dy * dy;
             if (d < best) { best = d; best_ai = j; }
         }
-        s_mp_to_arkit[i] = best_ai;
+        if (best_ai >= 0) {
+            mp.pts[i][0] = obs.pts[best_ai][0];
+            mp.pts[i][1] = obs.pts[best_ai][1];
+        }
     }
-    s_mp_to_arkit_built = true;
-
-    for (int i = 0; i < FACE_UV_NPTS; ++i) {
-        int ai = s_mp_to_arkit[i];
-        out[i][0] = obs.pts[ai][0];
-        out[i][1] = obs.pts[ai][1];
-    }
-    return true;
 }
 
 // Build a MediaPipe-format FaceRenderPlan from an ARKit observation.
 // Maps ARKit mesh landmarks → MediaPipe indices, computes runtime landmarks
 // (chin, cheeks, jaw, nose wings, face sides, brows) from the live mesh, then
-// calls face_filter_build_plan_look. The plan's mesh_pts are filled for the
-// beauty/warp passes (which use key landmarks), but the texture pass should
-// use arkit_face_mp_positions to get real ARKit screen positions for the
-// MediaPipe mesh (exact UVs for makeup PNGs, no IDW position interpolation).
+// calls face_filter_build_plan_look. The plan's mesh_pts are filled with
+// real ARKit screen positions: ~72 hard-mapped + runtime landmarks get
+// exact positions, the rest are IDW-estimated then snapped to the nearest
+// ARKit vertex in screen space. This gives both exact UVs (MediaPipe mesh)
+// and real positions (no IDW smearing) without involving ARKit UV space.
 bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
                                        const ARKitFaceObs& obs, int w, int h,
                                        FaceRenderPlan& out) {
@@ -562,6 +485,9 @@ bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
     // Without this, unmapped points stay at {0,0} and triangles smear to
     // the top-left corner of the frame.
     interpolate_missing_landmarks(mp_obs, known);
+    // Snap IDW-estimated positions to the nearest real ARKit vertex in
+    // screen space — eliminates IDW smearing without touching ARKit UV space.
+    snap_to_arkit(obs, mp_obs, known);
 
     return face_filter_build_plan_look(L, amount, mp_obs, w, h, out);
 }
