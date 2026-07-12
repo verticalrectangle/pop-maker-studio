@@ -222,8 +222,8 @@ static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp,
             if (sL > bestL) { bestL = sL; iL = i; }
             if (sR > bestR) { bestR = sR; iR = i; }
         }
-        if (iL >= 0) set_mp_from(mp, known, 234, obs, iL);
-        if (iR >= 0) set_mp_from(mp, known, 454, obs, iR);
+        if (iL >= 0) set_mp_from(mp, known, 454, obs, iL);  // person L → MP 454 (image-right)
+        if (iR >= 0) set_mp_from(mp, known, 234, obs, iR);  // person R → MP 234 (image-left)
     }
 
     float faceCx = (eyeMidX + mp.pts[152][0]) * 0.5f;
@@ -244,7 +244,7 @@ static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp,
             float score = latProj * sgn;
             if (score > best) { best = score; bi = i; }
         }
-        if (bi >= 0) set_mp_from(mp, known, (side == 0) ? 50 : 280, obs, bi);
+        if (bi >= 0) set_mp_from(mp, known, (side == 0) ? 280 : 50, obs, bi);  // person L→280, R→50
     }
 
     // Nose wings: lateral to nose tip, similar height.
@@ -271,7 +271,7 @@ static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp,
                 return lat * ((side == 0) ? leftSgn : -leftSgn) > 0.f;
             });
         }
-        if (bi >= 0) set_mp_from(mp, known, (side == 0) ? 98 : 327, obs, bi);
+        if (bi >= 0) set_mp_from(mp, known, (side == 0) ? 327 : 98, obs, bi);  // person L→327, R→98
     }
 
     // Jaw sides + ear→chin chains.
@@ -287,13 +287,13 @@ static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp,
             float score = fabsf(latProj);
             if (score > best) { best = score; bi = i; }
         }
-        int jawMp = (side == 0) ? 172 : 397;
+        int jawMp = (side == 0) ? 397 : 172;  // person L→397, R→172
         if (bi >= 0) set_mp_from(mp, known, jawMp, obs, bi);
 
         float jawX = mp.pts[jawMp][0], jawY = mp.pts[jawMp][1];
         float chinX = mp.pts[152][0], chinY = mp.pts[152][1];
-        static const int kJawL[5] = {132, 172, 136, 149, 176};
-        static const int kJawR[5] = {361, 397, 365, 378, 400};
+        static const int kJawL[5] = {361, 397, 365, 378, 400};  // person L → image-right indices
+        static const int kJawR[5] = {132, 172, 136, 149, 176};  // person R → image-left indices
         const int* chain = (side == 0) ? kJawL : kJawR;
         for (int j = 0; j < 5; ++j) {
             float t = (float)j / 4.f;
@@ -305,11 +305,13 @@ static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp,
     }
 
     // Brows: 5 points per side above the upper lid, outer→inner.
-    // MediaPipe L: 70,63,105,66,107  R: 300,293,334,296,336
-    static const int kBrowL[5] = {70, 63, 105, 66, 107};
-    static const int kBrowR[5] = {300, 293, 334, 296, 336};
-    static const int kLidL[7] = {33, 161, 160, 159, 158, 157, 133};
-    static const int kLidR[7] = {263, 388, 387, 386, 385, 384, 362};
+    // After L/R swap: kLidL indices (33,161,...) hold person's RIGHT eye
+    // positions, kLidR (263,388,...) hold person's LEFT. Side 0 = person L,
+    // so must use kLidR for lid positions and kBrowR for brow MP indices.
+    static const int kBrowL[5] = {300, 293, 334, 296, 336};  // person L → image-right
+    static const int kBrowR[5] = {70, 63, 105, 66, 107};     // person R → image-left
+    static const int kLidL[7] = {263, 388, 387, 386, 385, 384, 362};  // person L (image-right)
+    static const int kLidR[7] = {33, 161, 160, 159, 158, 157, 133};   // person R (image-left)
     for (int side = 0; side < 2; ++side) {
         const int* lid = (side == 0) ? kLidL : kLidR;
         const int* brow = (side == 0) ? kBrowL : kBrowR;
