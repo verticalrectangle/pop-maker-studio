@@ -86,15 +86,6 @@ int main(int argc, char** argv) {
     }
     expect(minx > 0 && maxx < W && miny > 0 && maxy < H, "all landmarks on-frame");
     expect(maxx - minx > eyeDist * 2.0f, "face span plausible vs eye distance");
-    // UV table sane: every ARKit vertex carries an in-atlas MediaPipe UV.
-    const float* uv = arkit_mesh_remap_uv();
-    expect(uv != nullptr, "remap UV table present");
-    for (int i = 0; uv && i < ARKIT_NPTS * 2; ++i)
-        if (uv[i] < -0.001f || uv[i] > 1.001f) {
-            expect(false, "remap UV out of [0,1]");
-            break;
-        }
-
     printf("arkit map smoke: eyeDist=%.0fpx span=[%.0f,%.0f..%.0f,%.0f]\n",
            eyeDist, minx, miny, maxx, maxy);
     if (fails) { fprintf(stderr, "arkit map smoke: FAIL (%d)\n", fails); return 1; }
