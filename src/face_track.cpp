@@ -1,4 +1,8 @@
 #include "face_track.h"
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #include "paths.h"
 #include "video.h"
 #include <onnxruntime_cxx_api.h>
@@ -41,12 +45,21 @@ static bool ensure_sessions() {
     if (g_init_tried) return false;
     g_init_tried = true;
     if (!face_track_available()) return false;
+    auto try_load = [](Ort::SessionOptions& opts) {
+        g_det = std::make_unique<Ort::Session>(
+            ort_env(), (face_models_dir() + "/yunet.onnx").c_str(), opts);
+        g_lmk = std::make_unique<Ort::Session>(
+            ort_env(), (face_models_dir() + "/face_landmarks_v2.onnx").c_str(), opts);
+        g_bls = std::make_unique<Ort::Session>(
+            ort_env(), (face_models_dir() + "/face_blendshapes.onnx").c_str(), opts);
+    };
     try {
         Ort::SessionOptions o;
         o.SetIntraOpNumThreads(4);
-        // CoreML EP accelerates inference on Apple Silicon / iOS Neural Engine.
-        // Fall back to CPU automatically for unsupported ops.
-        #if defined(__APPLE__)
+        // CoreML EP is only meaningful on iOS; macOS desktop Homebrew ORT
+        // may register the provider but fail to build a session, so we
+        // only attempt it on iOS and fall back to CPU on any failure.
+        #if defined(__APPLE__) && TARGET_OS_IPHONE
         try {
             o.AppendExecutionProvider("CoreML", {
                 {"ModelFormat", "MLProgram"},
@@ -56,17 +69,21 @@ static bool ensure_sessions() {
             // CoreML EP unavailable on this build; continue with CPU.
         }
         #endif
-        g_det = std::make_unique<Ort::Session>(
-            ort_env(), (face_models_dir() + "/yunet.onnx").c_str(), o);
-        g_lmk = std::make_unique<Ort::Session>(
-            ort_env(), (face_models_dir() + "/face_landmarks_v2.onnx").c_str(), o);
-        g_bls = std::make_unique<Ort::Session>(
-            ort_env(), (face_models_dir() + "/face_blendshapes.onnx").c_str(), o);
+        try_load(o);
         return true;
     } catch (...) {
         g_det.reset(); g_lmk.reset(); g_bls.reset();
-        g_init_tried = false;
-        return false;
+        // CPU fallback without any execution provider.
+        try {
+            Ort::SessionOptions o2;
+            o2.SetIntraOpNumThreads(4);
+            try_load(o2);
+            return true;
+        } catch (...) {
+            g_det.reset(); g_lmk.reset(); g_bls.reset();
+            g_init_tried = false;
+            return false;
+        }
     }
 }
 
