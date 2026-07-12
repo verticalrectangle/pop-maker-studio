@@ -35,12 +35,13 @@ static const int ARKIT_FACE_L    = 0;     // person's left face side  // runtime
 static const int ARKIT_FACE_R    = 0;     // person's right face side // runtime
 static const int ARKIT_CHEEK_L   = 0;     // person's left cheek      // runtime
 static const int ARKIT_CHEEK_R   = 0;     // person's right cheek     // runtime
-static const int ARKIT_EYE_OUT_L = 1090;  // person's left outer eye corner
+static const int ARKIT_EYE_OUT_L = 1101;  // person's left outer eye corner
 static const int ARKIT_EYE_OUT_R = 1069;  // person's right outer eye corner
 
 // Person's left upper-lid chain, outer→inner.
 // FaceLandmarks.com eyeTopRight = [1090..1101] (viewer's right = person's left).
-static const int ARKIT_LID_L[7]  = {1090, 1092, 1094, 1096, 1098, 1100, 1101};
+// Mesh topology BFS confirms 1101 is far from nose (outer), 1090 is near nose (inner).
+static const int ARKIT_LID_L[7]  = {1101, 1100, 1098, 1096, 1094, 1092, 1090};
 // Person's right upper-lid chain, outer→inner.
 // FaceLandmarks.com eyeTopLeft = [1069..1080] (viewer's left = person's right).
 static const int ARKIT_LID_R[7]  = {1069, 1071, 1073, 1075, 1077, 1079, 1080};
