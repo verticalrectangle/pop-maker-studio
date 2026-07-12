@@ -821,7 +821,8 @@ uniform vec2 u_lippoly[12];  // outer-lip ring in px — the mask FOLLOWS the mo
 uniform vec2 u_lippoly_in[12];  // inner-lip ring in px — aperture, never painted
 uniform vec4 u_nose;     // nose bridge xy (px), nose blush amt, freckles amt
 uniform float u_brow_r;
-uniform vec4 u_lash;     // amount, wing, liner, _
+uniform vec4 u_lash;     // amount, wing, liner, shadow
+uniform vec4 u_shadowc;  // eyeshadow pigment rgb, _
 uniform vec4 u_chin_px;  // chin x, y (px), crease-smooth amount, _
 uniform vec2 u_blink;    // per-eye blink 0..1 — lid landmarks lag a blink,
                          // so eye makeup fades out for those frames instead
@@ -1031,11 +1032,11 @@ void main() {
         // lip (the gate-everywhere version painted upper lips only).
         float deep  = inside * smoothstep(feather, feather * 2.2, dmin);
         float lippy = max(smoothstep(0.03, 0.12, col.r - col.g), deep);
-        float t = u_makeup.y * lm2 * grad * lippy;
+        float t = clamp(u_makeup.y * lm2 * grad * lippy * 0.85, 0.0, 1.0);
         // Colorize toward the lip color, keeping the lip's own shading — a
         // dark goth plum and a hot Barbie pink both read as lipstick.
         vec3 lip_target = u_lipc.rgb * (0.30 + 1.05 * lum(col));
-        col = mix(col, clamp(lip_target, 0.0, 1.0), t * 0.85);
+        col = mix(col, clamp(lip_target, 0.0, 1.0), t);
     }
 
     // ── Cyber layer (all skin-masked; runs after makeup) ──────────────────
@@ -1059,7 +1060,7 @@ void main() {
     // lid polyline, lashes are individual tapered strokes fanning outward with
     // curl + jitter so they contour and flow, wing curves along brow bone
     // with tip taper + alpha fade. Values scale with lash/liner/lash_wing.
-    if (u_lash.x + u_lash.y + u_lash.z > 0.001) {
+    if (u_lash.x + u_lash.y + u_lash.z + u_lash.w > 0.001) {
         vec3 ink = vec3(0.04, 0.03, 0.04);
         for (int side = 0; side < 2; ++side) {
             float bfade = 1.0 - 0.9 * smoothstep(0.25, 0.55,
@@ -1068,6 +1069,7 @@ void main() {
             float dmin2 = 1e9; float tbest = 0.0;
             vec2 seg_a = vec2(0.0); vec2 seg_b = vec2(0.0);
             vec2 seg_dir = vec2(0.0);
+            vec2 near_pt = vec2(0.0);
             for (int i = 0; i < 6; ++i) {
                 vec2 a3 = side == 0 ? u_lidL[i]     : u_lidR[i];
                 vec2 b3 = side == 0 ? u_lidL[i + 1] : u_lidR[i + 1];
@@ -1076,7 +1078,7 @@ void main() {
                 float dd = length(p - (a3 + e3 * ts));
                 if (dd < dmin2) {
                     dmin2 = dd; tbest = (float(i) + ts) / 6.0;
-                    seg_a = a3; seg_b = b3;
+                    seg_a = a3; seg_b = b3; near_pt = a3 + e3 * ts;
                     seg_dir = e3 / max(length(e3), 1e-4);
                 }
             }
@@ -1087,9 +1089,26 @@ void main() {
                     lid_norm = -lid_norm;
             }
             float taper = 1.0 - tbest * 0.6;
+            float outer_factor = 1.0 - tbest;
+            // Eyeshadow: pigment band riding the live lid polyline (see the
+            // Metal twin for rationale). Drawn first so liner/lash ink sits
+            // on top; no blink fade — shadow lives on the lid skin.
+            if (u_lash.w > 0.001) {
+                float sh   = u_lash.w;
+                float hgt  = dot(p - near_pt, lid_norm);
+                vec2  eyc  = side == 0 ? u_eyes.xy : u_eyes.zw;
+                float band = er * (0.42 + 0.30 * min(sh, 2.0))
+                           * (0.80 + 0.35 * outer_factor);
+                float m = smoothstep(-er * 0.10, er * 0.12, hgt)
+                        * (1.0 - smoothstep(band * 0.50, band, hgt))
+                        * smoothstep(er * (1.55 + 0.35 * outer_factor),
+                                     er * 0.95, distance(p, eyc));
+                vec3 pig = u_shadowc.rgb * (0.30 + 0.85 * lum(col));
+                col = mix(col, pig, clamp(m * sh * 0.66, 0.0, 0.85));
+            }
             // Crisp liner on the lid polyline.
             if (u_lash.z > 0.001) {
-                float lt = er * 0.045 * taper;
+                float lt = er * 0.045 * taper * (0.70 + 0.55 * min(u_lash.z, 2.0));
                 float line = 1.0 - smoothstep(lt * 0.5, lt, dmin2);
                 float above_clamp = smoothstep(-er * 0.08, er * 0.04, dot(p - outc, lid_norm));
                 col = mix(col, ink, line * above_clamp * u_lash.z * 0.98 * bfade);
@@ -1134,7 +1153,7 @@ void main() {
                         float cs = cos(ang_jit), sn = sin(ang_jit);
                         vec2 jaz = vec2(flair.x * cs - flair.y * sn, flair.x * sn + flair.y * cs);
                         float hl_jit = hash_f(float(hi * 11 + side) + 0.77);
-                        float hl = er * (0.14 + u_lash.x * 0.22) * (0.8 + ht * 0.3)
+                        float hl = er * (0.14 + min(u_lash.x, 1.15) * 0.22) * (0.8 + ht * 0.3)
                                  * (0.60 + hl_jit * 0.80);
                         vec2 h_mid = lid_at_t + jaz * hl * 0.55;
                         vec2 h_tip = h_mid + jaz * hl * 0.45 + ln_n * hl * 0.18;
@@ -1150,7 +1169,7 @@ void main() {
                             if (d2 < d1) al_tot = 0.5 + a2 * 0.5;
                         }
                         float hw = mix(er * 0.022, er * 0.004, al_tot);
-                        hw *= (0.70 + u_lash.x * 0.45);
+                        hw *= (0.70 + min(u_lash.x, 1.1) * 0.45);
                         float hair = 1.0 - smoothstep(hw * 0.5, hw, d_hair);
                         float tip_f = 1.0 - smoothstep(0.55, 1.0, al_tot);
                         lash_total = max(lash_total, hair * tip_f);
@@ -1431,7 +1450,8 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform2fv(u("u_lippoly"), 12, &p.lip_poly[0][0]);
     glUniform2fv(u("u_lippoly_in"), 12, &p.lip_poly_in[0][0]);
     glUniform4f(u("u_nose"), p.nose_x, p.nose_y, p.nose_blush, p.freckles);
-    glUniform4f(u("u_lash"), p.lash, p.lash_wing, p.liner, 0.f);
+    glUniform4f(u("u_lash"), p.lash, p.lash_wing, p.liner, p.shadow);
+    glUniform4f(u("u_shadowc"), p.shadow_col[0], p.shadow_col[1], p.shadow_col[2], 0.f);
     glUniform2f(u("u_blink"), p.blink_l, p.blink_r);
     glUniform4f(u("u_chin_px"), p.chin_x, p.chin_y, p.chin_smooth, 0.f);
     glUniform4f(u("u_eyeout"), p.eyeoutL_x, p.eyeoutL_y, p.eyeoutR_x, p.eyeoutR_y);

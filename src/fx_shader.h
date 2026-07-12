@@ -39,6 +39,8 @@ struct FaceBeautyParams {
     float lash = 0.f;       // 0..1 soft lash band on the upper lid
     float liner = 0.f;      // 0..1 crisp eyeliner line at the lash line
     float lash_wing = 0.f;  // 0..1 winged tip from the outer corner
+    float shadow = 0.f;     // 0..2 eyeshadow band above the lash line
+    float shadow_col[3] = {};
     float eyeoutL_x = 0, eyeoutL_y = 0, eyeoutR_x = 0, eyeoutR_y = 0; // outer corners (px)
     float lidL[7][2] = {}, lidR[7][2] = {};  // upper-lid chains, outer→inner (px)
     float nose_blush = 0.f; // 0..1 e-girl across-the-nose blush

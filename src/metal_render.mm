@@ -421,6 +421,7 @@ struct FaceBeautyUni {
     float nose[4]; float lash[4]; float chin[4]; float eyeout[4];
     float lidL[14]; float lidR[14];
     float brow_r; float pad0; float blink[2]; float iris[4];
+    float shadowc[4];
 };
 static float f_lum(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
 static float f_seg(float2 p, float2 a, float2 b) {
@@ -587,9 +588,9 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
         float grad = 1.0 - 0.55 * u.makeup[2] * smoothstep(0.25, 1.0, length(float2(la, lb)));
         float deep  = inside * smoothstep(feather, feather * 2.2, dmin);
         float lippy = max(smoothstep(0.03, 0.12, col.r - col.g), deep);
-        float t = u.makeup[1] * lm2 * grad * lippy;
+        float t = clamp(u.makeup[1] * lm2 * grad * lippy * 0.85, 0.0, 1.0);
         float3 lip_target = float3(u.lipc[0], u.lipc[1], u.lipc[2]) * (0.30 + 1.05 * f_lum(col));
-        col = mix(col, clamp(lip_target, 0.0, 1.0), t * 0.85);
+        col = mix(col, clamp(lip_target, 0.0, 1.0), t);
     }
     if (u.cyber[0] + u.cyber[1] + u.cyber[2] + u.cyber[3] > 0.001) {   // cyber layer
         float lm3 = f_lum(col);
@@ -613,7 +614,7 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
     //     lashes are individual tapered strokes fanning outward with curl,
     //     wing curves along the lid direction at the outer corner with tip
     //     fade. All values scale with the lash/liner/lash_wing controls.
-    if (u.lash[0] + u.lash[1] + u.lash[2] > 0.001) {
+    if (u.lash[0] + u.lash[1] + u.lash[2] + u.lash[3] > 0.001) {
         float3 ink = float3(0.04, 0.03, 0.04);
         for (int side = 0; side < 2; ++side) {
             float bfade = 1.0 - 0.9 * smoothstep(0.25, 0.55,
@@ -624,6 +625,7 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
             float dmin2 = 1e9; float tbest = 0.0;
             float2 seg_a = float2(0.0); float2 seg_b = float2(0.0);
             float2 seg_dir = float2(0.0);
+            float2 near_pt = float2(0.0);
             for (int i = 0; i < 6; ++i) {
                 float2 a3 = side == 0 ? float2(u.lidL[i*2],     u.lidL[i*2+1])
                                       : float2(u.lidR[i*2],     u.lidR[i*2+1]);
@@ -634,7 +636,7 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
                 float dd = length(p - (a3 + e3 * ts));
                 if (dd < dmin2) {
                     dmin2 = dd; tbest = (float(i) + ts) / 6.0;
-                    seg_a = a3; seg_b = b3;
+                    seg_a = a3; seg_b = b3; near_pt = a3 + e3 * ts;
                     float seg_len = max(length(e3), 1e-4);
                     seg_dir = e3 / seg_len;
                 }
@@ -647,10 +649,29 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
             }
             float outer_factor = 1.0 - tbest;
             float taper = 1.0 - tbest * 0.6;
+            // ── eyeshadow: pigment band riding the live lid polyline,
+            //    feathered from the lash line up toward the crease, wider
+            //    and taller at the outer corner. Multiplicative pigment
+            //    (keeps skin shading) — the additive "glow" never read as
+            //    makeup.
+            if (u.lash[3] > 0.001) {
+                float sh   = u.lash[3];
+                float hgt  = dot(p - near_pt, lid_norm);
+                float2 eyc = side == 0 ? eyeL : eyeR;
+                float band = er * (0.42 + 0.30 * min(sh, 2.0))
+                           * (0.80 + 0.35 * outer_factor);
+                float m = smoothstep(-er * 0.10, er * 0.12, hgt)
+                        * (1.0 - smoothstep(band * 0.50, band, hgt))
+                        * smoothstep(er * (1.55 + 0.35 * outer_factor),
+                                     er * 0.95, distance(p, eyc));
+                float3 shc = float3(u.shadowc[0], u.shadowc[1], u.shadowc[2]);
+                float3 pig = shc * (0.30 + 0.85 * f_lum(col));
+                col = mix(col, pig, clamp(m * sh * 0.66, 0.0, 0.85));
+            }
             // ── crisp eyeliner: sits exactly on the lid polyline,
             //    width tapered so it's sharp at inner corner, defined at outer.
             if (u.lash[2] > 0.001) {
-                float lt = er * 0.045 * taper;
+                float lt = er * 0.045 * taper * (0.70 + 0.55 * min(u.lash[2], 2.0));
                 float line = 1.0 - smoothstep(lt * 0.5, lt, dmin2);
                 float above_clamp = smoothstep(-er * 0.08, er * 0.04, dot(p - outc, lid_norm));
                 float liner = line * above_clamp;
@@ -703,7 +724,7 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
                                             flair_dir.x * sn + flair_dir.y * cs);
                         // Length: outer longer, varies per hair.
                         float hl_jitter = f_hash(float(hi * 11 + side) + 0.77);
-                        float hl = er * (0.14 + u.lash[0] * 0.22) * (0.8 + ht * 0.3)
+                        float hl = er * (0.14 + min(u.lash[0], 1.15) * 0.22) * (0.8 + ht * 0.3)
                                  * (0.60 + hl_jitter * 0.80);
                         // Curved: base → mid → tip with upward curl.
                         float2 h_mid = lid_at_t + jaz * hl * 0.55;
@@ -720,7 +741,7 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
                             if (d2 < d1) along_tot = 0.5 + a2 * 0.5;
                         }
                         float hw = mix(er * 0.022, er * 0.004, along_tot);
-                        hw *= (0.70 + u.lash[0] * 0.45);
+                        hw *= (0.70 + min(u.lash[0], 1.1) * 0.45);
                         float hair = 1.0 - smoothstep(hw * 0.5, hw, d_hair);
                         float tip_fade = 1.0 - smoothstep(0.55, 1.0, along_tot);
                         lash_total = max(lash_total, hair * tip_fade);
@@ -1061,6 +1082,7 @@ struct FaceBeautyUniCPU {
     float nose[4]; float lash[4]; float chin[4]; float eyeout[4];
     float lidL[14]; float lidR[14];
     float brow_r; float pad0; float blink[2]; float iris[4];
+    float shadowc[4];
 };
 struct FaceMkUniCPU { float dim[2]; float opacity, adapt;
                       float eyes[4]; float blink[2]; float eye_r, pad0; };
@@ -1120,6 +1142,9 @@ static FaceBeautyUniCPU face_beauty_uniforms(const FaceBeautyParams& p, int w, i
     }
     u.nose[0] = p.nose_x; u.nose[1] = p.nose_y; u.nose[2] = p.nose_blush; u.nose[3] = p.freckles;
     u.lash[0] = p.lash; u.lash[1] = p.lash_wing; u.lash[2] = p.liner;
+    u.lash[3] = p.shadow;
+    u.shadowc[0] = p.shadow_col[0]; u.shadowc[1] = p.shadow_col[1];
+    u.shadowc[2] = p.shadow_col[2]; u.shadowc[3] = 0.f;
     u.chin[0] = p.chin_x; u.chin[1] = p.chin_y; u.chin[2] = p.chin_smooth;
     u.eyeout[0] = p.eyeoutL_x; u.eyeout[1] = p.eyeoutL_y;
     u.eyeout[2] = p.eyeoutR_x; u.eyeout[3] = p.eyeoutR_y;

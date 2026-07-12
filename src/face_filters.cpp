@@ -131,13 +131,15 @@ bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.blush_col, 0.75f, 0.55f, 0.70f);
             set3(L.lip_col,   0.28f, 0.05f, 0.14f);
             L.desat = 0.28f;
-                        L.lash = 0.80f; L.liner = 0.85f; L.lash_wing = 0.60f;
+                        L.lash = 1.00f; L.liner = 1.00f; L.lash_wing = 0.70f;
+            L.shadow = 1.00f; set3(L.shadow_col, 0.15f, 0.07f, 0.15f);
             return true;
         case FaceFilter::Barbie:     // maximum pink everything
             L = {0.78f, 0.42f, 0.10f, 0.42f, 0.60f, 0.55f,  0.14f, 0.08f, 0.12f, 0.16f, 0.08f};
             set3(L.blush_col, 1.f, 0.45f, 0.75f);
             set3(L.lip_col,   1.f, 0.25f, 0.60f);
                         L.lash = 0.70f; L.liner = 0.50f; L.lash_wing = 0.40f;
+            L.shadow = 0.55f; set3(L.shadow_col, 0.90f, 0.40f, 0.60f);
             return true;
         case FaceFilter::Bronze:     // golden-hour bronze glow
             L = {0.60f, 0.30f, 0.55f, 0.30f, 0.38f, 0.30f,  0.08f, 0.06f, 0.08f, 0.10f, 0.04f};
@@ -231,6 +233,7 @@ bool beauty_look_for(int filter_id, BeautyLook& L) {
             set3(L.blush_col, 1.f, 0.55f, 0.55f);
             set3(L.lip_col,   0.80f, 0.10f, 0.16f);
             L.lash = 0.90f; L.lash_wing = 0.95f; L.lip_grad = 0.20f; L.liner = 1.0f;
+            L.shadow = 0.40f; set3(L.shadow_col, 0.34f, 0.20f, 0.15f);
             return true;
         case FaceFilter::PeachyGlow: // juicy peach blush everywhere, gloss
             L = {0.62f, 0.34f, 0.30f, 0.32f, 0.65f, 0.42f,  0.10f, 0.05f, 0.08f, 0.10f, 0.08f};
@@ -684,6 +687,8 @@ bool face_filter_build_plan_look(const BeautyLook& L, float amount,
         bp.lash       = L.lash       * amount;
         bp.liner      = L.liner      * amount;
         bp.lash_wing  = L.lash_wing  * amount;  // scales with intensity
+        bp.shadow     = L.shadow     * amount;
+        for (int i = 0; i < 3; ++i) bp.shadow_col[i] = L.shadow_col[i];
         bp.eyeoutL_x = PX(obs.pts[33][0]);  bp.eyeoutL_y = PY(obs.pts[33][1]);
         bp.eyeoutR_x = PX(obs.pts[263][0]); bp.eyeoutR_y = PY(obs.pts[263][1]);
         // Upper-lid chains, outer→inner — the lash/liner ride these.

@@ -55,6 +55,8 @@ struct BeautyLook {
     float chin_tuck = 0.f, jaw_shade = 0.f;    // (tuck retired: warped the neck)
     float chin_smooth = 0.f;                    // double-chin crease erase
     float lash = 0.f, liner = 0.f, lash_wing = 0.f;   // lashes, eyeliner, wing
+    float shadow = 0.f;                                // eyeshadow band on the lid
+    float shadow_col[3] = {0.35f, 0.22f, 0.30f};       // pigment (soft plum default)
     const char* makeup_tex = nullptr;  // UV-mapped makeup PNG (models/face/)
     float makeup_adapt = 1.f;          // lighting adaptation amount
     float blush_raise = 0.40f;  // 0 = mid-cheek (contour), 1 = under-eye

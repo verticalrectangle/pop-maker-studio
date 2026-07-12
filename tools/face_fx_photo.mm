@@ -197,11 +197,15 @@ int main(int argc, char** argv) {
         write_png(prefix + "_plain.png", plain);
 
         // Landmark overlay: eye complexes green, irises cyan, rest red.
+        // FaceObs.pts are in the tracker's (possibly GPU-downscaled) frame —
+        // rescale via frame_w/h to photo pixels, as the renderer does.
         if (obs.contains("pts")) {
             Img lm = plain;
+            float sx = (float)W / std::max(obs.value("frame_w", W), 1);
+            float sy = (float)H / std::max(obs.value("frame_h", H), 1);
             auto& pts = obs["pts"];
             for (int i = 0; i < (int)pts.size(); ++i) {
-                float x = pts[i][0], y = pts[i][1];
+                float x = (float)pts[i][0] * sx, y = (float)pts[i][1] * sy;
                 bool iris = i >= 468;
                 static const int eye_idx[] = {33,7,163,144,145,153,154,155,133,246,161,160,
                     159,158,157,173,263,249,390,373,374,380,381,382,362,466,388,387,386,385,
@@ -222,6 +226,19 @@ int main(int argc, char** argv) {
         pms_submit_camera_frame(g_e, pb, 0, 10.1);
         Img out = render_frame("look");
         write_png(prefix + "_look.png", out);
+
+        // Second observation dump AFTER the render frames: the first lock
+        // can be a bad rotation-ladder fit that later frames correct; the
+        // delta between the two dumps is the live flicker a user would see.
+        json obs2 = cmd("face_debug", {{"pts", true}});
+        std::string obs2_path = prefix + "_obs2.json";
+        if (FILE* f2 = fopen(obs2_path.c_str(), "w")) {
+            std::string d2 = obs2.dump(1);
+            fwrite(d2.data(), 1, d2.size(), f2);
+            fclose(f2);
+            printf("wrote %s (score=%.2f)\n", obs2_path.c_str(),
+                   obs2.value("score", 0.0));
+        }
 
         cmd("set_live_fx", {{"fx", json::array()}});
         cmd("face_track_enable", {{"on", false}});
