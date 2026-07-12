@@ -638,6 +638,11 @@ void proxy_cancel() {
 }
 
 void proxy_start(const std::string& video_path) {
+    // Synthetic timeline clips and media deleted outside the app have no
+    // decodable source. Do not launch ffmpeg workers for them; callers may
+    // still submit their own layer frames (as the Metal renderer tests do).
+    std::error_code source_error;
+    if (video_path.empty() || !fs::is_regular_file(video_path, source_error)) return;
     if (is_image_ext(video_path)) {
         // Images: just generate a still, no MJPEG needed
         std::string still = proxy_still_path(video_path);
