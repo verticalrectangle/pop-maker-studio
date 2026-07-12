@@ -86,6 +86,10 @@ struct FaceRenderPlan {
     float makeup_opacity = 0.f;
     float makeup_adapt   = 1.f;
     float mesh_pts[FT_NPTS][2];         // texture-space px (when makeup_tex)
+    // ARKit mesh render flag: when true, the render backend uses obs.pts
+    // directly as pts_override with k_arkit_tris and the cached UV remap
+    // (s_arkit_mp_uv in arkit_face.cpp). No per-plan copy needed.
+    bool  has_arkit_mesh = false;
     FaceWarpBump bumps[MAX_FACE_BUMPS];
     int   n_bumps = 0;
 };

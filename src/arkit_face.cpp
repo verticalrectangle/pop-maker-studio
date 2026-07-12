@@ -447,14 +447,91 @@ static void snap_to_arkit(const ARKitFaceObs& obs, FaceObs& mp,
     }
 }
 
+// ── ARKit → MediaPipe UV remap ──────────────────────────────────────────────
+// For each of 1220 ARKit vertices, find the containing MediaPipe triangle in
+// screen space and interpolate k_face_uv via barycentric weights. This maps
+// the existing makeup PNGs (authored in MediaPipe UV space) onto the ARKit
+// mesh, giving 1220 real positions + correct UVs — no IDW, no snap, no L/R
+// swap issues. The UV mapping is constant per topology, so cache after first
+// successful build.
+static bool s_remap_cached = false;
+static float s_arkit_mp_uv[ARKIT_NPTS][2];
+
+static void arkit_mesh_remap_uvs(const ARKitFaceObs& obs,
+                                 const FaceObs& mp) {
+    if (s_remap_cached) return;
+
+    // Pre-compute per-triangle bounding boxes for quick rejection.
+    struct BBox { float minx, miny, maxx, maxy; };
+    BBox tri_bb[FACE_UV_NTRI];
+    for (int t = 0; t < FACE_UV_NTRI; ++t) {
+        int i0 = k_face_tris[t][0], i1 = k_face_tris[t][1], i2 = k_face_tris[t][2];
+        float ax = mp.pts[i0][0], ay = mp.pts[i0][1];
+        float bx = mp.pts[i1][0], by = mp.pts[i1][1];
+        float cx = mp.pts[i2][0], cy = mp.pts[i2][1];
+        tri_bb[t].minx = fminf(fminf(ax, bx), cx);
+        tri_bb[t].miny = fminf(fminf(ay, by), cy);
+        tri_bb[t].maxx = fmaxf(fmaxf(ax, bx), cx);
+        tri_bb[t].maxy = fmaxf(fmaxf(ay, by), cy);
+    }
+
+    // For each ARKit vertex, find the containing MediaPipe triangle in screen
+    // space (barycentric all-positive). BBox pre-check eliminates ~90% of
+    // tests. Fall back to nearest-vertex UV for points outside all triangles.
+    for (int ai = 0; ai < ARKIT_NPTS; ++ai) {
+        float px = obs.pts[ai][0], py = obs.pts[ai][1];
+        float best_d = 1e30f;
+        int best_mp = 0;
+        bool found = false;
+
+        for (int t = 0; t < FACE_UV_NTRI && !found; ++t) {
+            // Bounding-box rejection
+            if (px < tri_bb[t].minx || px > tri_bb[t].maxx ||
+                py < tri_bb[t].miny || py > tri_bb[t].maxy) continue;
+
+            int i0 = k_face_tris[t][0], i1 = k_face_tris[t][1], i2 = k_face_tris[t][2];
+            float ax = mp.pts[i0][0], ay = mp.pts[i0][1];
+            float bx = mp.pts[i1][0], by = mp.pts[i1][1];
+            float cx = mp.pts[i2][0], cy = mp.pts[i2][1];
+
+            float denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+            if (fabsf(denom) < 1e-6f) continue;
+            float inv = 1.f / denom;
+            float w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) * inv;
+            float w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) * inv;
+            float w2 = 1.f - w0 - w1;
+
+            if (w0 >= -0.01f && w1 >= -0.01f && w2 >= -0.01f) {
+                s_arkit_mp_uv[ai][0] = w0 * k_face_uv[i0][0] + w1 * k_face_uv[i1][0] + w2 * k_face_uv[i2][0];
+                s_arkit_mp_uv[ai][1] = w0 * k_face_uv[i0][1] + w1 * k_face_uv[i1][1] + w2 * k_face_uv[i2][1];
+                found = true;
+            }
+        }
+
+        if (!found) {
+            for (int mi = 0; mi < FACE_UV_NPTS; ++mi) {
+                float dx = mp.pts[mi][0] - px, dy = mp.pts[mi][1] - py;
+                float d = dx * dx + dy * dy;
+                if (d < best_d) { best_d = d; best_mp = mi; }
+            }
+            s_arkit_mp_uv[ai][0] = k_face_uv[best_mp][0];
+            s_arkit_mp_uv[ai][1] = k_face_uv[best_mp][1];
+        }
+    }
+    s_remap_cached = true;
+}
+
+const float* arkit_mesh_remap_uv() {
+    return s_remap_cached ? &s_arkit_mp_uv[0][0] : nullptr;
+}
+
 // Build a MediaPipe-format FaceRenderPlan from an ARKit observation.
 // Maps ARKit mesh landmarks → MediaPipe indices, computes runtime landmarks
 // (chin, cheeks, jaw, nose wings, face sides, brows) from the live mesh, then
-// calls face_filter_build_plan_look. The plan's mesh_pts are filled with
-// real ARKit screen positions: ~72 hard-mapped + runtime landmarks get
-// exact positions, the rest are IDW-estimated then snapped to the nearest
-// ARKit vertex in screen space. This gives both exact UVs (MediaPipe mesh)
-// and real positions (no IDW smearing) without involving ARKit UV space.
+// calls face_filter_build_plan_look. The beauty + warp passes use the 468-pt
+// MediaPipe landmarks; the textured makeup pass uses the ARKit mesh directly
+// (1220 real positions + remapped UVs + 2304 real triangles) when the plan
+// has a makeup texture — flagged by has_arkit_mesh.
 bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
                                        const ARKitFaceObs& obs, int w, int h,
                                        FaceRenderPlan& out) {
@@ -491,5 +568,13 @@ bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
     // screen space — eliminates IDW smearing without touching ARKit UV space.
     snap_to_arkit(obs, mp_obs, known);
 
-    return face_filter_build_plan_look(L, amount, mp_obs, w, h, out);
+    // Build the ARKit→MediaPipe UV remap (cached after first frame).
+    // Uses the 468 MediaPipe screen positions to find containing triangles
+    // for each ARKit vertex, then interpolates k_face_uv barycentrically.
+    arkit_mesh_remap_uvs(obs, mp_obs);
+
+    bool ok = face_filter_build_plan_look(L, amount, mp_obs, w, h, out);
+    if (ok && out.makeup_tex && s_remap_cached)
+        out.has_arkit_mesh = true;
+    return ok;
 }

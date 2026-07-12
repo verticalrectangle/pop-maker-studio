@@ -1535,14 +1535,26 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     FaceRenderPlan plan;
                     if (!face_filter_build_plan_from_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
                         continue;
-                    // MediaPipe mesh topology (exact UVs for makeup PNGs).
-                    // plan.mesh_pts already has real ARKit screen positions:
-                    // ~72 hard-mapped + runtime landmarks get exact positions,
-                    // the rest are IDW-estimated then snapped to the nearest
-                    // ARKit vertex in screen space (snap_to_arkit). No UV
-                    // remap needed — ARKit UV space is never involved.
-                    apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
-                               FACE_UV_NPTS, FACE_UV_NTRI);
+                    if (plan.has_arkit_mesh) {
+                        // ARKit mesh path: 1220 real positions + remapped UVs
+                        // + 2304 real triangles. Scale obs.pts from observation
+                        // space to texture space (sw×sh), same as PX/PY does
+                        // for the MediaPipe path.
+                        const ARKitFaceObs& ao = arkit_faces[fi];
+                        float sx = (ao.w > 0) ? (float)sw / (float)ao.w : 1.f;
+                        float sy = (ao.h > 0) ? (float)sh / (float)ao.h : 1.f;
+                        static float scaled_pts[ARKIT_NPTS * 2];
+                        for (int k = 0; k < ARKIT_NPTS; ++k) {
+                            scaled_pts[k * 2 + 0] = ao.pts[k][0] * sx;
+                            scaled_pts[k * 2 + 1] = ao.pts[k][1] * sy;
+                        }
+                        const float* remap = arkit_mesh_remap_uv();
+                        apply_plan(plan, remap, &k_arkit_tris[0][0],
+                                   ARKIT_NPTS, ARKIT_NTRI, scaled_pts);
+                    } else {
+                        apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
+                                   FACE_UV_NPTS, FACE_UV_NTRI);
+                    }
                 }
             } else {
                 for (int fi = 0; fi < n_faces; ++fi) {

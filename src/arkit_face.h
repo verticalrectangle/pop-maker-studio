@@ -35,3 +35,7 @@ bool arkit_face_available();
 // Clear the ARKit slot.
 void arkit_face_clear();
 
+// Get the cached ARKit→MediaPipe UV remap table (1220 entries). Returns null
+// until the first successful call to face_filter_build_plan_from_arkit, after
+// which it is constant for the ARKit topology lifetime.
+const float* arkit_mesh_remap_uv();
