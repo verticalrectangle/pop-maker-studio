@@ -271,12 +271,19 @@ def main():
     # in both meshes, so pinning it (arc-length correspondence from the
     # corner) is semantically exact.
     #
-    # The EYE rings are deliberately NOT pinned: ARKit's eye cutouts are cut
-    # well outside the palpebral opening (canonical hole 29x10mm vs the MP
-    # contour 26x6.7mm, lower edge 5.4mm below the MP lower lash line — and
-    # on-device the hole edge visibly sits below the real lash line).
-    # Pinning MP's lid contour to the hole edge painted the under-eye makeup
-    # band on the upper cheek, skipping the eyebag zone entirely.
+    # The EYE rings are pinned to CORRECTED targets, not to the hole edge:
+    # ARKit's eye cutouts are cut well outside the palpebral opening (and
+    # on-device the hole's lower edge visibly sits ~5mm below the real lash
+    # line), so pinning MP's lid contour to the hole edge painted the
+    # under-eye makeup band on the upper cheek (rounds 2-3). But leaving the
+    # eyes UNCONSTRAINED (round 4) let the lip-only TPS drag the whole
+    # eye/brow complex several mm from the QA'd similarity-fit placement.
+    # Fix: pin each MP lid ring to ITSELF rigidly shifted so the eye complex
+    # is centered on its hole in x and the lower lash line sits LASH_GAP
+    # above the hole's lower edge in y — lateral truth from ARKit geometry,
+    # vertical truth from the user-verified on-device lash offset. This
+    # freezes the eye region against warp drift without asserting that the
+    # hole edge is the lash line.
     ak_rings = boundary_rings(ak_tris, 1220)
     print(f"arkit boundary rings: {sorted(len(r) for r in ak_rings)}")
     MP_LIPS_IN = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308,
@@ -320,6 +327,34 @@ def main():
             dst[k] = apts[j] * (1 - f) + apts[j + 1] * f
         src_ctrl.append(mpts)
         dst_ctrl.append(dst)
+    # Eye stabilization controls (see block comment above). LASH_GAP is the
+    # user-verified on-device distance from the hole's lower edge up to the
+    # real lower lash line.
+    LASH_GAP = 5.2
+    MP_EYE_R = [33, 246, 161, 160, 159, 158, 157, 173, 133,
+                155, 154, 153, 145, 144, 163, 7]
+    MP_EYE_L = [263, 466, 388, 387, 386, 385, 384, 398, 362,
+                382, 381, 380, 374, 373, 390, 249]
+    for mring, ak_t, lash in ((MP_EYE_R, (1101, 1090), 145),
+                              (MP_EYE_L, (1069, 1080), 374)):
+        ring = ring_near(ak_rings, ak_v, ak_v[list(ak_t)].mean(0))
+        hole = ak_v[ring]
+        shift = np.array([hole[:, 0].mean() - mp_w[mring][:, 0].mean(),
+                          (hole[:, 1].min() + LASH_GAP) - mp_w[lash][1],
+                          0.0])
+        src_ctrl.append(mp_w[mring])
+        dst_ctrl.append(mp_w[mring] + shift)
+        print(f"  eye ring shift (dx,dy)=({shift[0]:+.2f},{shift[1]:+.2f})mm")
+    # Identity controls on the MP face oval: the TPS affine tail otherwise
+    # extrapolates the lip/eye refinements outward and pushed the jaw/ear
+    # silhouette 12-23mm down (rounds 2-4) — contour/blush edges live there.
+    # Pinning the oval to its similarity-fit position keeps the warp local.
+    # (10 is excluded: it is already an anchor with an ARKit target.)
+    MP_OVAL = [338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+               397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150,
+               136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+    src_ctrl.append(mp_w[MP_OVAL])
+    dst_ctrl.append(mp_w[MP_OVAL])
     src_ctrl = np.vstack(src_ctrl)
     dst_ctrl = np.vstack(dst_ctrl)
     mp_w = tps_warp(src_ctrl, dst_ctrl, mp_w)
@@ -363,23 +398,69 @@ def main():
                 return hole
         return None
 
-    def hole_pseudo_tri(p, hole):
-        """Two adjacent ring verts on the landmark's side of the hole plus a
-        vert one row outward — a wide, stable triangle whose plane tracks the
-        local skin, so the unclamped solve stays symmetric and moderate."""
+    def hole_pseudo_tri(p, hole, low):
+        """Two adjacent ring verts on the landmark's anatomical side of the
+        hole plus a vert one row outward — a wide, stable triangle whose
+        plane tracks the local skin, so the unclamped solve stays symmetric
+        and moderate. `low` is decided by ANATOMY (which lid complex the MP
+        landmark belongs to), never by geometry: the true lower lash line
+        sits just ABOVE the hole's vertical midpoint, so a y-midpoint test
+        attaches lower-lid landmarks to the blinking upper arc (the round-4
+        regression — under-eye makeup jumped ~1.4x every blink)."""
         ring, poly, cen, ymid = hole
-        low = p[1] <= ymid
-        arc = [v for v in ring if (ak_v[v][1] <= ymid) == low]
-        v0 = min(arc, key=lambda v: ((ak_v[v] - p) ** 2).sum())
-        v1 = min((v for v in arc if v != v0),
-                 key=lambda v: ((ak_v[v] - ak_v[v0]) ** 2).sum())
-        mid = (ak_v[v0] + ak_v[v1]) * 0.5
-        outd = mid - cen
-        outd /= max(np.linalg.norm(outd), 1e-9)
-        tgt = mid + outd * 5.0
+        # the arc is the single contiguous run of ring verts (in ring path
+        # order) on the requested side; x-sorting is degenerate at the
+        # corners where verts stack nearly vertically
+        n = len(ring)
+        mask = [(ak_v[v][1] <= ymid) == low for v in ring]
+        start = next(k for k in range(n) if mask[k] and not mask[k - 1])
+        arc = []
+        k = start
+        while mask[k % n] and len(arc) < n:
+            arc.append(ring[k % n])
+            k += 1
+        # v0,v1 bracket p along the arc's corner-to-corner axis with a
+        # minimum lateral span — nearest-segment / x-sorted picks degenerate
+        # nearly-vertical vert pairs where the arc bends up at the corners
+        u = ak_v[arc[-1]][:2] - ak_v[arc[0]][:2]
+        u /= max(np.linalg.norm(u), 1e-9)
+        us = np.array([ak_v[v][:2] @ u for v in arc])
+        order = np.argsort(us)
+        us, arc = us[order], [arc[k] for k in order]
+        j1 = int(np.clip(np.searchsorted(us, p[:2] @ u), 1, len(arc) - 1))
+        j0 = j1 - 1
+        while us[j1] - us[j0] < 3.0 and (j0 > 0 or j1 < len(arc) - 1):
+            if j0 > 0:
+                j0 -= 1
+            else:
+                j1 += 1
+        v0, v1 = arc[j0], arc[j1]
+        # Third vert straight below (lower arc) / above (upper arc) on solid
+        # skin. The extrapolation gain is gap/depth (gap = p's height above
+        # the bracket chord, depth = chord to v2), so the search depth
+        # adapts to the gap to keep |w2| <= ~0.85; a vertical offset also
+        # keeps the lateral part of the solve interpolating between v0/v1.
+        chord_y = (ak_v[v0][1] + ak_v[v1][1]) * 0.5
+        gap = (p[1] - chord_y) if low else (chord_y - p[1])
+        depth = max(4.0, 1.3 * abs(gap) + 2.0)
+        tgt = np.array([p[0], chord_y - depth if low else chord_y + depth])
         v2 = min((v for v in range(len(ak_v)) if v not in ring_all),
-                 key=lambda v: ((ak_v[v] - tgt) ** 2).sum())
+                 key=lambda v: ((ak_v[v][:2] - tgt) ** 2).sum())
         return v0, v1, v2
+
+    # Anatomical lid complexes (MP indices): everything that may fall inside
+    # ARKit's oversized eye holes. Lower-lid rows must NEVER reference
+    # blinking upper-lid geometry.
+    MP_LOWER_COMPLEX = frozenset(
+        [7, 163, 144, 145, 153, 154, 155,          # R lower lash line
+         25, 110, 24, 23, 22, 26, 112,             # R first under-eye row
+         249, 390, 373, 374, 380, 381, 382,        # L lower lash line
+         255, 339, 254, 253, 252, 256, 341])       # L first under-eye row
+    MP_UPPER_COMPLEX = frozenset(
+        [246, 161, 160, 159, 158, 157, 173,        # R upper lash line
+         247, 30, 29, 27, 28, 56, 190,             # R above-lash row
+         466, 388, 387, 386, 385, 384, 398,        # L upper lash line
+         467, 260, 259, 257, 258, 286, 414])       # L above-lash row
 
     def bary2d(p, a, b, c):
         """Weights (sum=1) reproducing p's xy exactly from vert xy — the
@@ -412,19 +493,20 @@ def main():
     targets[473] = targets[474] = targets[475] = targets[476] = targets[477] \
         = mp_w[IRIS_L_RING].mean(0)
     # Iris centers get a stable pseudo-triangle — the two hole corners plus
-    # the upper arc's top vertex (the bary table may reference ANY vertex
+    # the LOWER arc's bottom vertex (the bary table may reference ANY vertex
     # triple, not just mesh triangles). Solved exactly to the eye-center
-    # target; only ~1/5 of the weight rides the blinking upper lid.
+    # target from verts that do not move on blink: the round-4 choice of the
+    # upper arc's top vertex made the iris ride blinks at 0.83x gain.
     def iris_tri(hole_idx):
         ring, poly, cen, ymid = eye_holes[hole_idx]
-        upper = [v for v in ring if ak_v[v][1] > ymid]
-        return max(upper, key=lambda v: ak_v[v][1])
+        lower = [v for v in ring if ak_v[v][1] <= ymid]
+        return min(lower, key=lambda v: ak_v[v][1])
     IRIS_TRI = {}
     for ids, (c0, c1), hi in (((468, 469, 470, 471, 472), (1101, 1090), 0),
                               ((473, 474, 475, 476, 477), (1069, 1080), 1)):
-        top = iris_tri(hi)
+        bot = iris_tri(hi)
         for i in ids:
-            IRIS_TRI[i] = (c0, c1, top)
+            IRIS_TRI[i] = (c0, c1, bot)
     rows = []
     n_extrap = 0
     for i, p in enumerate(targets):
@@ -435,11 +517,25 @@ def main():
             continue
         hole = in_hole(p)
         if hole is not None:
-            i0, i1, i2 = hole_pseudo_tri(p, hole)
+            if i in MP_LOWER_COMPLEX:
+                low = True
+            elif i in MP_UPPER_COMPLEX:
+                low = False
+            else:
+                low = p[1] <= hole[3]
+                print(f"  WARN mp {i}: in-hole but in neither lid complex; "
+                      f"geometric arc fallback (low={low})")
+            i0, i1, i2 = hole_pseudo_tri(p, hole, low)
             w0, w1, w2 = bary2d(p, ak_v[i0], ak_v[i1], ak_v[i2])
-            assert max(abs(w0), abs(w1), abs(w2)) < 8.0, \
+            assert max(abs(w0), abs(w1), abs(w2)) < 2.0, \
                 f"mp {i}: unstable extrapolation " \
                 f"w=({w0:.2f},{w1:.2f},{w2:.2f})"
+            if low:
+                # blink safety: nothing in a lower-complex row may sit on
+                # (or above) the blinking upper lid
+                ymid = hole[3]
+                assert max(ak_v[i0][1], ak_v[i1][1], ak_v[i2][1]) \
+                    <= ymid + 1.0, f"mp {i}: lower-lid row rides upper lid"
             rows.append((i0, i1, i2, w0, w1, w2))
             n_extrap += 1
             continue

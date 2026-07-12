@@ -150,13 +150,13 @@ ElemAnim compute_elem_anim(AnimStyle style, float local_t, float clip_dur,
             break;
         }
         case AnimStyle::ScratchRaw: {
-            // Same alpha + jitter as ScratchFilm — the rendering path in
-            // render_text_block differs (stencil-masked scratches-as-letterform).
-            float intro = fade_in > 0.f ? ease_eval(EASE_OUT_CUBIC, local_t / fade_in) : 1.f;
-            int frame_i = (int)(local_t * 24.f);
-            a.alpha = intro * exit_mul;
-            a.dx = (hash01(i, frame_i) - 0.5f) * line_h * 0.02f;
-            a.dy = (hash01(i, frame_i + 7) - 0.5f) * line_h * 0.02f;
+            // Per-letter staggered pop: each letter snaps on at its stagger
+            // time. No position jitter — the scratch rendering itself (rough
+            // variable strokes re-randomized at 24fps) is the animation.
+            if (et < 0.f) { a.alpha = 0.f; break; }
+            // Very brief pop-in (0.06s) so letters arrive punchy, not floaty
+            float pop = fminf(1.f, et / 0.06f);
+            a.alpha = pop * exit_mul;
             break;
         }
         default: {

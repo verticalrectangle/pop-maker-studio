@@ -92,6 +92,51 @@ int main(int argc, char** argv) {
     float asym = fabsf((mp[374][1] - mp[145][1]))
                + fabsf(mp[374][0] + mp[145][0] - (float)W);
     expect(asym < 6.f, "lower-lid landmarks L/R symmetric");
+    // Weight sanity: unclamped barycentric extrapolation multiplies live
+    // tracking noise/deformation. Round 4 shipped weights up to 2.8 and eye
+    // makeup jittered and rode blinks on-device.
+    float wmax = 0.f;
+    for (int i = 0; i < FT_NPTS; ++i) {
+        const ArkitMpBary& b = k_mp_from_arkit[i];
+        wmax = fmaxf(wmax, fmaxf(fabsf(b.w0), fmaxf(fabsf(b.w1), fabsf(b.w2))));
+    }
+    expect(wmax < 2.0f, "all barycentric weights bounded (<2.0)");
+
+    // Blink simulation: shift upper-lid verts down 7mm (28px) inside each
+    // eye's corner span; lower-lid/under-eye/iris landmarks must hold still
+    // while the upper lash follows the lid. Round 4 attached the lower lash
+    // to the blinking upper arc (9.7mm jump per 7mm blink) and the static
+    // neutral-pose checks above were blind to it.
+    {
+        ARKitFaceObs blink = obs;
+        const int corners[2][2] = {{33, 133}, {362, 263}};
+        for (int e = 0; e < 2; ++e) {
+            float x0 = fminf(mp[corners[e][0]][0], mp[corners[e][1]][0]) - 12.f;
+            float x1 = fmaxf(mp[corners[e][0]][0], mp[corners[e][1]][0]) + 12.f;
+            float cy = 0.5f * (mp[corners[e][0]][1] + mp[corners[e][1]][1]);
+            for (int i = 0; i < ARKIT_NPTS; ++i) {
+                float x = obs.pts[i][0], y = obs.pts[i][1];
+                if (x >= x0 && x <= x1 && y >= cy - 40.f && y < cy)
+                    blink.pts[i][1] += 28.f * (1.f - (cy - y) / 40.f);
+            }
+        }
+        auto ev = [&](int i, int axis) {
+            const ArkitMpBary& b = k_mp_from_arkit[i];
+            return b.w0 * blink.pts[b.i0][axis] + b.w1 * blink.pts[b.i1][axis]
+                 + b.w2 * blink.pts[b.i2][axis];
+        };
+        const int still[] = {145, 374, 230, 450, 468, 473};  // lower lash, under-eye, iris
+        for (int k = 0; k < 6; ++k) {
+            int i = still[k];
+            float dy = fabsf(ev(i, 1) - mp[i][1]);
+            char msg[64];
+            snprintf(msg, sizeof msg, "mp %d blink-stable (moved %.1fpx)", i, dy);
+            expect(dy < 3.f, msg);
+        }
+        expect(ev(159, 1) - mp[159][1] > 10.f && ev(386, 1) - mp[386][1] > 10.f,
+               "upper lash follows the blinking lid");
+    }
+
     // Everything on-frame and face-sized.
     float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
     for (int i = 0; i < FT_NPTS; ++i) {

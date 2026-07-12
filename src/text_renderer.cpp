@@ -92,6 +92,143 @@ static inline ImU32 lerp_rgb_keepa(ImU32 c1rgb, ImU32 c2rgb, float t, unsigned a
     return IM_COL32(r, g, b, a);
 }
 
+// ── ScratchRaw: render a glyph as hand-scratched lines ──────────────────────
+// Samples the font atlas to determine glyph coverage, then draws parallel
+// hatch lines (vertical by default, horizontal for wide glyphs) only where
+// the glyph has alpha. At each coverage transition (edge), draws a short
+// perpendicular scratch mark to emphasize the outline. All strokes use
+// rough, variable parameters (thickness, jitter, occasional gaps) that
+// re-randomize per frame at 24fps for the "boiling" hand-scratched feel.
+static float glyph_coverage_at(ImTextureData* tex, int x, int y, int bpp) {
+    if (x < 0 || y < 0 || x >= tex->Width || y >= tex->Height) return 0.f;
+    unsigned char* px = (unsigned char*)tex->GetPixelsAt(x, y);
+    return (bpp == 1) ? (float)*px / 255.f : (float)px[3] / 255.f;
+}
+
+static void draw_scratch_glyph(ImDrawList* dl, ImFont* font, float es,
+                                float ex, float ey, const char* utf8,
+                                float alpha, ImU32 base_rgb, int gi, int frame_i) {
+    // Decode first UTF-8 codepoint
+    unsigned char c0 = (unsigned char)utf8[0];
+    ImWchar cp;
+    if (c0 < 0x80) cp = c0;
+    else if ((c0 & 0xE0) == 0xC0)
+        cp = ((ImWchar)(c0 & 0x1F) << 6) | ((ImWchar)(unsigned char)utf8[1] & 0x3F);
+    else if ((c0 & 0xF0) == 0xE0)
+        cp = ((ImWchar)(c0 & 0x0F) << 12) | ((ImWchar)(unsigned char)utf8[1] & 0x3F) << 6
+             | ((ImWchar)(unsigned char)utf8[2] & 0x3F);
+    else cp = c0;
+
+    ImFontBaked* baked = font->GetFontBaked(es);
+    if (!baked) return;
+    ImFontGlyph* glyph = baked->FindGlyph(cp);
+    if (!glyph || !glyph->Visible) return;
+
+    ImTextureData* tex = font->OwnerAtlas->TexData;
+    if (!tex || !tex->Pixels) return;
+    int bpp = tex->BytesPerPixel;
+    int texW = tex->Width, texH = tex->Height;
+
+    // Glyph rect in atlas pixels
+    int gx0 = (int)(glyph->U0 * texW), gy0 = (int)(glyph->V0 * texH);
+    int gx1 = (int)(glyph->U1 * texW), gy1 = (int)(glyph->V1 * texH);
+    int gw = gx1 - gx0, gh = gy1 - gy0;
+    if (gw <= 2 || gh <= 2) return;
+
+    // Glyph render rect on canvas
+    float scale = es / baked->Size;
+    float rx0 = ex + glyph->X0 * scale;
+    float ry0 = ey + glyph->Y0 * scale;
+    float rw = (glyph->X1 - glyph->X0) * scale;
+    float rh = (glyph->Y1 - glyph->Y0) * scale;
+    float sx = rw / (float)gw, sy = rh / (float)gh;
+
+    // Adaptive direction: vertical by default, horizontal for wide glyphs
+    bool horizontal = (float)gw > (float)gh * 1.3f;
+
+    const float thresh = 0.2f;
+    const int spacing = 2;       // atlas px between hatch lines
+    ImU32 sc = (base_rgb & 0x00FFFFFF) | ((unsigned)(alpha * 255) << 24);
+
+    // ── Interior hatch + outline emphasis ────────────────────────────────
+    // Walk parallel lines through the glyph. For each line, find covered
+    // segments and draw them with rough strokes. At each transition
+    // (coverage starts/ends), draw a short perpendicular scratch mark to
+    // emphasize the outline.
+    if (horizontal) {
+        for (int y = 0; y < gh; y += spacing) {
+            int segStart = -1;
+            for (int x = 0; x <= gw; ++x) {
+                float c = (x < gw) ? glyph_coverage_at(tex, gx0 + x, gy0 + y, bpp) : 0.f;
+                if (c > thresh) {
+                    if (segStart < 0) {
+                        segStart = x;
+                        // Outline mark at start of segment (top/bottom edge)
+                        int ei = y / spacing;
+                        float mk = 2.f + hash01(gi * 71 + ei, frame_i + 7) * 3.f;
+                        float mt = 1.f + hash01(gi * 97 + ei, frame_i + 31) * 1.5f;
+                        dl->AddLine({rx0 + x * sx, ry0 + y * sy - mk * sy},
+                                    {rx0 + x * sx, ry0 + y * sy + mk * sy}, sc, mt);
+                    }
+                } else {
+                    if (segStart >= 0) {
+                        int si = y / spacing;
+                        // Occasional gap — skip ~8% of segments
+                        if (hash01(gi * 17 + si, frame_i) > 0.08f) {
+                            float thick = 1.5f + hash01(gi * 31 + si, frame_i + 13) * 2.5f;
+                            float jy = (hash01(gi * 43 + si, frame_i + 27) - 0.5f) * 2.f;
+                            dl->AddLine({rx0 + segStart * sx, ry0 + y * sy + jy},
+                                        {rx0 + (x - 1) * sx, ry0 + y * sy + jy}, sc, thick);
+                        }
+                        // Outline mark at end of segment
+                        int ei = y / spacing;
+                        float mk = 2.f + hash01(gi * 83 + ei, frame_i + 19) * 3.f;
+                        float mt = 1.f + hash01(gi * 113 + ei, frame_i + 43) * 1.5f;
+                        dl->AddLine({rx0 + (x - 1) * sx, ry0 + y * sy - mk * sy},
+                                    {rx0 + (x - 1) * sx, ry0 + y * sy + mk * sy}, sc, mt);
+                        segStart = -1;
+                    }
+                }
+            }
+        }
+    } else {
+        for (int x = 0; x < gw; x += spacing) {
+            int segStart = -1;
+            for (int y = 0; y <= gh; ++y) {
+                float c = (y < gh) ? glyph_coverage_at(tex, gx0 + x, gy0 + y, bpp) : 0.f;
+                if (c > thresh) {
+                    if (segStart < 0) {
+                        segStart = y;
+                        // Outline mark at start of segment (left/right edge)
+                        int ei = x / spacing;
+                        float mk = 2.f + hash01(gi * 71 + ei, frame_i + 7) * 3.f;
+                        float mt = 1.f + hash01(gi * 97 + ei, frame_i + 31) * 1.5f;
+                        dl->AddLine({rx0 + x * sx - mk * sx, ry0 + y * sy},
+                                    {rx0 + x * sx + mk * sx, ry0 + y * sy}, sc, mt);
+                    }
+                } else {
+                    if (segStart >= 0) {
+                        int si = x / spacing;
+                        if (hash01(gi * 17 + si, frame_i) > 0.08f) {
+                            float thick = 1.5f + hash01(gi * 31 + si, frame_i + 13) * 2.5f;
+                            float jx = (hash01(gi * 43 + si, frame_i + 27) - 0.5f) * 2.f;
+                            dl->AddLine({rx0 + x * sx + jx, ry0 + segStart * sy},
+                                        {rx0 + x * sx + jx, ry0 + (y - 1) * sy}, sc, thick);
+                        }
+                        // Outline mark at end of segment
+                        int ei = x / spacing;
+                        float mk = 2.f + hash01(gi * 83 + ei, frame_i + 19) * 3.f;
+                        float mt = 1.f + hash01(gi * 113 + ei, frame_i + 43) * 1.5f;
+                        dl->AddLine({rx0 + (x - 1) * sx - mk * sx, ry0 + (y - 1) * sy},
+                                    {rx0 + (x - 1) * sx + mk * sx, ry0 + (y - 1) * sy}, sc, mt);
+                        segStart = -1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines) {
     if (lines.empty()) return;
 
@@ -280,6 +417,14 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
             if (clip->sub_color_override) {
                 float ca = clip->sub_color[3] * a;
                 col = (base_rgb & 0x00FFFFFF) | ((unsigned)(ca * 255) << 24);
+            }
+            // ── ScratchRaw: letters ARE scratches — render glyph as
+            // hand-scratched hatch lines, no normal text fill ─────────────
+            if (ctx.eff_style == AnimStyle::ScratchRaw) {
+                int frame_i = (int)(local_t * 24.f);
+                draw_scratch_glyph(dl, font, es, ex, ey, s.c_str(),
+                                   a, base_rgb, gi, frame_i);
+                return;
             }
             if (ts.shadow_enabled)
                 dl->AddText(font, es, {ex + ts.shadow_ox, ey + ts.shadow_oy},
