@@ -1485,7 +1485,14 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                         mu.opacity = plan.makeup_opacity; mu.adapt = plan.makeup_adapt;
                         mu.eyes[0] = plan.beauty.eyeL_x; mu.eyes[1] = plan.beauty.eyeL_y;
                         mu.eyes[2] = plan.beauty.eyeR_x; mu.eyes[3] = plan.beauty.eyeR_y;
-                        mu.blink[0] = plan.beauty.blink_l; mu.blink[1] = plan.beauty.blink_r;
+                        // Blink fade is a MediaPipe-era hack (lid landmarks
+                        // lag a blink, so makeup floated over closed eyes).
+                        // The ARKit mesh tracks lids latency-free — fading
+                        // here would erase eyeshadow on every blink.
+                        if (!plan.has_arkit_mesh) {
+                            mu.blink[0] = plan.beauty.blink_l;
+                            mu.blink[1] = plan.beauty.blink_r;
+                        }
                         mu.eye_r = plan.beauty.eye_r;
                         MTLRenderPassDescriptor* rp2 = [MTLRenderPassDescriptor new];
                         rp2.colorAttachments[0].texture     = target;

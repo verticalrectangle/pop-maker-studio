@@ -140,6 +140,92 @@ def nearest_surface(p, verts, tris):
     return best
 
 
+def boundary_rings(tris, nverts):
+    """Closed boundary loops (each a vertex-index list) of a triangle mesh."""
+    from collections import defaultdict
+    count = defaultdict(int)
+    for a, b, c in tris:
+        for e in ((a, b), (b, c), (c, a)):
+            count[tuple(sorted(e))] += 1
+    adj = defaultdict(list)
+    for (a, b), n in count.items():
+        if n == 1:
+            adj[a].append(b)
+            adj[b].append(a)
+    seen, rings = set(), []
+    for start in list(adj):
+        if start in seen:
+            continue
+        ring, cur, prev = [start], start, -1
+        seen.add(start)
+        while True:
+            nxt = [n for n in adj[cur] if n != prev]
+            if not nxt or nxt[0] == start:
+                break
+            prev, cur = cur, nxt[0]
+            ring.append(cur)
+            seen.add(cur)
+        if len(ring) >= 4:
+            rings.append(ring)
+    return rings
+
+
+def ring_near(rings, verts, target):
+    """Ring whose centroid is nearest to target (excluding the outer ring,
+    which is by far the longest)."""
+    inner = sorted(rings, key=len)[:-1]
+    return min(inner, key=lambda r: ((verts[r].mean(0) - target) ** 2).sum())
+
+
+def ring_resample(ring_pts, ts):
+    """Sample a closed polyline at normalized arc-length positions ts."""
+    seg = np.sqrt(((np.roll(ring_pts, -1, 0) - ring_pts) ** 2).sum(1))
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    total = cum[-1]
+    out = np.empty((len(ts), 3))
+    for k, t in enumerate(ts):
+        d = (t % 1.0) * total
+        i = np.searchsorted(cum, d, side="right") - 1
+        i = min(i, len(ring_pts) - 1)
+        f = (d - cum[i]) / max(seg[i], 1e-9)
+        out[k] = ring_pts[i] * (1 - f) + ring_pts[(i + 1) % len(ring_pts)] * f
+    return out
+
+
+def orient_ring(ring, verts, start_target):
+    """Rotate the ring to start nearest start_target and orient it CCW as
+    seen from +z (both meshes face +z)."""
+    pts = verts[ring]
+    i0 = int(((pts - start_target) ** 2).sum(1).argmin())
+    ring = ring[i0:] + ring[:i0]
+    pts = verts[ring]
+    area = 0.0
+    for i in range(len(ring)):
+        a, b = pts[i], pts[(i + 1) % len(ring)]
+        area += a[0] * b[1] - b[0] * a[1]
+    if area < 0:
+        ring = [ring[0]] + ring[1:][::-1]
+    return ring
+
+
+def tps_warp(src_ctrl, dst_ctrl, pts, reg=1e-3):
+    """3D thin-plate (biharmonic |r| kernel) warp fitted on control pairs."""
+    n = len(src_ctrl)
+    K = np.sqrt(((src_ctrl[:, None] - src_ctrl[None]) ** 2).sum(-1))
+    K += np.eye(n) * reg
+    P = np.hstack([np.ones((n, 1)), src_ctrl])
+    A = np.zeros((n + 4, n + 4))
+    A[:n, :n] = K
+    A[:n, n:] = P
+    A[n:, :n] = P.T
+    rhs = np.zeros((n + 4, 3))
+    rhs[:n] = dst_ctrl
+    sol = np.linalg.solve(A, rhs)
+    w, a = sol[:n], sol[n:]
+    U = np.sqrt(((pts[:, None] - src_ctrl[None]) ** 2).sum(-1))
+    return U @ w + np.hstack([np.ones((len(pts), 1)), pts]) @ a
+
+
 def main():
     ak_v = parse_obj(os.path.join(here, "arkit_face_canonical.obj"))
     mp_v = parse_obj(os.path.join(here, "canonical_face_model.obj"))
@@ -176,6 +262,48 @@ def main():
     assert rms < 6.0, f"anchor RMS too high ({rms:.2f}mm) — bad correspondence"
 
     mp_w = s * (R @ mp_v.T).T + t          # MediaPipe verts in ARKit space
+
+    # ── Non-rigid refinement: pin boundary rings ────────────────────────────
+    # The two canonical heads are different face shapes; a global similarity
+    # leaves mm-scale residuals that visibly misplace eyeliner/shadow. Pin the
+    # eye-hole and inner-lip boundary rings to each other (arc-length
+    # correspondence from the outer corner) and TPS-warp the MediaPipe mesh —
+    # lid contours then align essentially exactly.
+    # ARKit rings come from mesh topology (the mesh has real eye/mouth holes);
+    # the MediaPipe triangulation is hole-free, so its rings are the canonical
+    # FACEMESH contour index loops.
+    ak_rings = boundary_rings(ak_tris, 1220)
+    print(f"arkit boundary rings: {sorted(len(r) for r in ak_rings)}")
+    MP_EYE_R = [33, 246, 161, 160, 159, 158, 157, 173, 133,
+                155, 154, 153, 145, 144, 163, 7]
+    MP_EYE_L = [263, 466, 388, 387, 386, 385, 384, 398, 362,
+                382, 381, 380, 374, 373, 390, 249]
+    MP_LIPS_IN = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308,
+                  324, 318, 402, 317, 14, 87, 178, 88, 95]
+    pairs = [  # (mp ring, ak centroid target idxs, mp corner, ak corner)
+        (MP_EYE_R, (1101, 1090), 33, 1101),    # person's right eye
+        (MP_EYE_L, (1069, 1080), 263, 1069),   # person's left eye
+        (MP_LIPS_IN, (249, 684), 78, 249),     # inner lips
+    ]
+    src_ctrl = [mp_w[mi]]
+    dst_ctrl = [ak_v[ai]]
+    for mring, ak_t, mp_c, ak_c in pairs:
+        aring = ring_near(ak_rings, ak_v, ak_v[list(ak_t)].mean(0))
+        mring = orient_ring(list(mring), mp_w, mp_w[mp_c])
+        aring = orient_ring(aring, ak_v, ak_v[ak_c])
+        mpts = mp_w[mring]
+        seg = np.sqrt(((np.roll(mpts, -1, 0) - mpts) ** 2).sum(1))
+        ts = np.concatenate([[0.0], np.cumsum(seg)[:-1]]) / seg.sum()
+        src_ctrl.append(mpts)
+        dst_ctrl.append(ring_resample(ak_v[aring], ts))
+    src_ctrl = np.vstack(src_ctrl)
+    dst_ctrl = np.vstack(dst_ctrl)
+    mp_w = tps_warp(src_ctrl, dst_ctrl, mp_w)
+    rms2 = np.sqrt(((mp_w[mi] - ak_v[ai]) ** 2).sum(1).mean())
+    ring_rms = np.sqrt(((tps_warp(src_ctrl, dst_ctrl, src_ctrl)
+                         - dst_ctrl) ** 2).sum(1).mean())
+    print(f"post-TPS anchor RMS: {rms2:.2f}mm, control RMS: {ring_rms:.3f}mm")
+    assert rms2 < rms and ring_rms < 0.5
 
     # Table 1: MediaPipe-atlas UV per ARKit vertex (nearest MP surface point).
     ak_uv = np.zeros((1220, 2))
