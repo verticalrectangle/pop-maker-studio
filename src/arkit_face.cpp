@@ -1,6 +1,7 @@
 #include "arkit_face.h"
 #include "face_filters.h"
 #include "generated/arkit_landmark_map.h"
+#include "generated/face_uv_mesh.h"
 #include <cstring>
 #include <mutex>
 
@@ -278,14 +279,95 @@ static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp) {
         }
     }
 }
+// Fill unmapped MediaPipe landmarks by inverse-distance weighting from known
+// landmarks in canonical UV space. We have ~66 known correspondences (canonical
+// UV → live 2D). For each of the ~400 unmapped points, find the K closest known
+// landmarks and weight their live positions by 1/distance. Unlike barycentric
+// interpolation, IDW never extrapolates — it stays within the convex hull of
+// known points, avoiding the wild overshoots that occur when the 3 closest
+// points form a thin triangle that doesn't contain the target.
+static void interpolate_missing_landmarks(FaceObs& mp) {
+    // Collect known landmarks: indices where pts is non-zero.
+    float known_uv[FT_NPTS][2];
+    float known_px[FT_NPTS][2];
+    int n_known = 0;
+    for (int i = 0; i < FACE_UV_NPTS; ++i) {
+        if (mp.pts[i][0] != 0.f || mp.pts[i][1] != 0.f) {
+            known_uv[n_known][0] = k_face_uv[i][0];
+            known_uv[n_known][1] = k_face_uv[i][1];
+            known_px[n_known][0] = mp.pts[i][0];
+            known_px[n_known][1] = mp.pts[i][1];
+            ++n_known;
+        }
+    }
+    if (n_known < 3) return;  // not enough anchors to interpolate
 
-// Build an ARKit-aware render plan by translating the ARKit mesh into the
-// MediaPipe coordinate system that face_filter_build_plan_look expects, then
-// copying the full 1220-pt mesh + textureCoordinates into the ARKit plan.
-bool face_filter_build_plan_arkit(const BeautyLook& L, float amount,
-                                  const ARKitFaceObs& obs, int w, int h,
-                                  ARKitFaceRenderPlan& out) {
-    out = ARKitFaceRenderPlan{};
+    // Use the K nearest known landmarks for IDW. K=8 gives smooth results
+    // without being dominated by a single neighbor.
+    constexpr int K = 8;
+    float w[K];
+    int idx[K];
+
+    for (int i = 0; i < FACE_UV_NPTS; ++i) {
+        if (mp.pts[i][0] != 0.f || mp.pts[i][1] != 0.f) continue;  // already known
+        float u = k_face_uv[i][0], v = k_face_uv[i][1];
+
+        // Find the K closest known landmarks in canonical UV space.
+        // Simple selection: keep a running threshold (K is small).
+        float dists[K];
+        for (int k = 0; k < K; ++k) { dists[k] = 1e9f; idx[k] = 0; }
+        for (int j = 0; j < n_known; ++j) {
+            float du = known_uv[j][0] - u, dv = known_uv[j][1] - v;
+            float d = du * du + dv * dv;
+            // Insert into the K-nearest list (replace the worst).
+            int worst = 0;
+            for (int k = 1; k < K; ++k) if (dists[k] > dists[worst]) worst = k;
+            if (d < dists[worst]) { dists[worst] = d; idx[worst] = j; }
+        }
+
+        // Inverse-distance weighting (Shepard's method, power=2).
+        float wsum = 0.f;
+        float px = 0.f, py = 0.f;
+        for (int k = 0; k < K; ++k) {
+            if (dists[k] >= 1e9f) continue;
+            float d = sqrtf(dists[k]);
+            if (d < 1e-6f) {
+                // Exact match — use the known point directly.
+                px = known_px[idx[k]][0];
+                py = known_px[idx[k]][1];
+                wsum = 1.f;
+                break;
+            }
+            w[k] = 1.f / (d * d);
+            wsum += w[k];
+        }
+        if (wsum > 0.f) {
+            if (wsum == 1.f && px != 0.f) {
+                // Exact match already set.
+            } else {
+                px = 0.f; py = 0.f;
+                for (int k = 0; k < K; ++k) {
+                    if (dists[k] >= 1e9f) continue;
+                    float wk = (wsum > 0.f) ? w[k] / wsum : 0.f;
+                    px += wk * known_px[idx[k]][0];
+                    py += wk * known_px[idx[k]][1];
+                }
+            }
+        }
+        mp.pts[i][0] = px;
+        mp.pts[i][1] = py;
+    }
+}
+
+// Build a MediaPipe-format FaceRenderPlan from an ARKit observation.
+// Maps ARKit mesh landmarks → MediaPipe indices, computes runtime landmarks
+// (chin, cheeks, jaw, nose wings, face sides) from the live mesh, then calls
+// face_filter_build_plan_look. The returned plan uses the MediaPipe mesh
+// (468 pts) + MediaPipe canonical UVs for the texture pass — makeup PNGs are
+// authored for MediaPipe UV space, NOT ARKit UV space.
+bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
+                                       const ARKitFaceObs& obs, int w, int h,
+                                       FaceRenderPlan& out) {
     if (w <= 0 || h <= 0 || !obs.valid) return false;
 
     FaceObs mp_obs{};
@@ -306,38 +388,10 @@ bool face_filter_build_plan_arkit(const BeautyLook& L, float amount,
     // Fill in landmarks that are stubbed (index 0) in the landmark map by
     // searching the live mesh geometry.
     compute_mesh_landmarks(obs, mp_obs);
+    // Fill remaining unmapped landmarks by barycentric interpolation from
+    // known landmarks in canonical UV space. Without this, unmapped points
+    // stay at {0,0} and mesh triangles stretch to the top-left corner.
+    interpolate_missing_landmarks(mp_obs);
 
-    FaceRenderPlan mp_plan;
-    if (!face_filter_build_plan_look(L, amount, mp_obs, w, h, mp_plan) || !mp_plan.valid)
-        return false;
-
-    out.valid = true;
-    out.has_beauty = mp_plan.has_beauty;
-    out.beauty = mp_plan.beauty;
-    out.makeup_tex = mp_plan.makeup_tex;
-    out.makeup_opacity = mp_plan.makeup_opacity;
-    out.makeup_adapt = mp_plan.makeup_adapt;
-    out.n_bumps = mp_plan.n_bumps;
-    for (int i = 0; i < out.n_bumps && i < MAX_FACE_BUMPS; ++i) out.bumps[i] = mp_plan.bumps[i];
-
-    float sx_ = (obs.w > 0) ? (float)w / (float)obs.w : 1.f;
-    float sy_ = (obs.h > 0) ? (float)h / (float)obs.h : 1.f;
-    for (int i = 0; i < ARKIT_NPTS; ++i) {
-        out.mesh_pts[i][0] = obs.pts[i][0] * sx_;
-        out.mesh_pts[i][1] = obs.pts[i][1] * sy_;
-        out.uvs[i][0] = 1.0f - obs.uvs[i][0];  // flip U: ARKit canonical texture is camera-perspective (person's R at low U), but makeup PNGs are painted for MediaPipe UV space (person's L at low U)
-        out.uvs[i][1] = obs.uvs[i][1];          // V matches: both ARKit and MediaPipe use V=0 at top (Metal convention)
-    }
-    // Detect whether we have real UVs (not all zero). ARKit's
-    // textureCoordinates are constant and nonzero; if the Swift layer didn't
-    // pass them, all UVs are {0,0} and the mesh pass must be skipped to avoid
-    // the grey-flicker artifact (every vertex samples the same texel).
-    out.has_uvs = false;
-    for (int i = 0; i < ARKIT_NPTS; ++i) {
-        if (obs.uvs[i][0] != 0.f || obs.uvs[i][1] != 0.f) {
-            out.has_uvs = true;
-            break;
-        }
-    }
-    return true;
+    return face_filter_build_plan_look(L, amount, mp_obs, w, h, out);
 }

@@ -89,24 +89,14 @@ struct FaceRenderPlan {
     FaceWarpBump bumps[MAX_FACE_BUMPS];
     int   n_bumps = 0;
 };
-// ARKit render plan — same fields as FaceRenderPlan, but with the 1220-pt
-// ARKit mesh and the ARKit UV/canonical topology.
-struct ARKitFaceRenderPlan {
-    bool  valid = false;
-    bool  has_beauty = false;
-    FaceBeautyParams beauty;
-    const char* makeup_tex = nullptr;   // models/face PNG, null = none
-    float makeup_opacity = 0.f;
-    float makeup_adapt   = 1.f;
-    float mesh_pts[ARKIT_NPTS][2];      // ARKit vertex 2D positions
-    float uvs[ARKIT_NPTS][2];           // ARKit textureCoordinates
-    bool  has_uvs = false;              // false → skip mesh pass (no UV data)
-    FaceWarpBump bumps[MAX_FACE_BUMPS];
-    int   n_bumps = 0;
-};
-bool face_filter_build_plan_arkit(const BeautyLook& L, float amount,
-                                  const ARKitFaceObs& obs, int w, int h,
-                                  ARKitFaceRenderPlan& out);
+// Build a MediaPipe-format FaceRenderPlan from an ARKit observation.
+// Maps ARKit mesh landmarks → MediaPipe indices, computes runtime landmarks,
+// then calls face_filter_build_plan_look. The makeup texture pass uses the
+// MediaPipe mesh (468 pts) + MediaPipe canonical UVs (k_face_uv), NOT the
+// ARKit mesh — makeup PNGs are authored for MediaPipe UV space.
+bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
+                                       const ARKitFaceObs& obs, int w, int h,
+                                       FaceRenderPlan& out);
 bool face_filter_build_plan(int filter_id, float amount, const FaceObs& obs,
                             int w, int h, FaceRenderPlan& out);
 // Plan for a parametric look (Makeup Studio path — bypasses the enum).
