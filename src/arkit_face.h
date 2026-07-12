@@ -33,3 +33,10 @@ bool arkit_face_available();
 
 // Clear the ARKit slot.
 void arkit_face_clear();
+
+// Staleness guard: pms_submit_camera_frame notes each frame's host time and
+// arkit_face_submit stamps the current one. arkit_face_take returns 0 when
+// the newest camera frame is >0.15s past the last ARKit submission — a
+// stalled anchor stream (fast motion, tracking loss) must never keep
+// painting frozen landmarks onto fresh video.
+void arkit_face_note_camera_time(double host_time);

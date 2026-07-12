@@ -8,15 +8,23 @@ struct ARKitFaceSlot {
     ARKitFaceObs faces[ARKIT_MAX_FACES];
     int n_faces = 0;
     bool fresh = false;
+    double cam_t = 0.0;      // newest camera frame host time
+    double submit_t = 0.0;   // camera time at last ARKit submission
 };
 
 static ARKitFaceSlot g_arkit_slot;
+
+void arkit_face_note_camera_time(double host_time) {
+    std::lock_guard<std::mutex> lk(g_arkit_slot.mtx);
+    g_arkit_slot.cam_t = host_time;
+}
 
 void arkit_face_submit(const ARKitFaceObs* obs, int n_faces) {
     std::lock_guard<std::mutex> lk(g_arkit_slot.mtx);
     g_arkit_slot.fresh = false;
     g_arkit_slot.n_faces = 0;
     if (!obs || n_faces <= 0) return;
+    g_arkit_slot.submit_t = g_arkit_slot.cam_t;
     int n = n_faces;
     if (n > ARKIT_MAX_FACES) n = ARKIT_MAX_FACES;
     for (int i = 0; i < n; ++i) {
@@ -31,6 +39,7 @@ int arkit_face_take(ARKitFaceObs* out, int max_n) {
     if (!out || max_n <= 0) return 0;
     std::lock_guard<std::mutex> lk(g_arkit_slot.mtx);
     if (g_arkit_slot.n_faces <= 0) return 0;
+    if (g_arkit_slot.cam_t - g_arkit_slot.submit_t > 0.15) return 0;  // stale
     int n = g_arkit_slot.n_faces;
     if (n > max_n) n = max_n;
     for (int i = 0; i < n; ++i) out[i] = g_arkit_slot.faces[i];

@@ -110,6 +110,7 @@ void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer, int rotation, d
     // the engine's in plain C++ TUs). Upright frames only.
     if (cv_pixel_buffer && rotation == 0)
         metal_render_face_feed(cv_pixel_buffer, host_time);
+    arkit_face_note_camera_time(host_time);
 #else
     (void)cv_pixel_buffer; (void)rotation; (void)host_time;
 #endif
