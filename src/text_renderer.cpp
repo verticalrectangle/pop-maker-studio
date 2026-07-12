@@ -95,9 +95,11 @@ static inline ImU32 lerp_rgb_keepa(ImU32 c1rgb, ImU32 c2rgb, float t, unsigned a
 // ── ScratchRaw: render a glyph as hand-scratched hatch lines ──────────────────────
 // Samples the font atlas to determine glyph coverage, then draws parallel
 // hatch lines (vertical by default, horizontal for wide glyphs) only where
-// the glyph has alpha. Strokes use rough, variable parameters (thickness,
-// jitter, occasional gaps) that re-randomize per frame at 24fps for the
-// "boiling" hand-scratched feel. Sparse spacing keeps letters legible.
+// the glyph has alpha. Additionally scatters 6-10 low-alpha scratch lines
+// in an area slightly larger than the glyph bounding box — these overshoot
+// the letter edges into surrounding space, adding raw "film scratch debris"
+// energy without crowding the letterform. All strokes re-randomize per
+// frame at 24fps for the "boiling" hand-scratched feel.
 static float glyph_coverage_at(ImTextureData* tex, int x, int y, int bpp) {
     if (x < 0 || y < 0 || x >= tex->Width || y >= tex->Height) return 0.f;
     unsigned char* px = (unsigned char*)tex->GetPixelsAt(x, y);
@@ -146,13 +148,13 @@ static void draw_scratch_glyph(ImDrawList* dl, ImFont* font, float es,
     bool horizontal = (float)gw > (float)gh * 1.3f;
 
     const float thresh = 0.2f;
-    const int spacing = 5;       // atlas px between hatch lines (sparse for legibility)
+    const int spacing = 3;       // atlas px between hatch lines
     ImU32 sc = (base_rgb & 0x00FFFFFF) | ((unsigned)(alpha * 255) << 24);
 
     // ── Interior hatch ───────────────────────────────────────────────────
     // Walk parallel lines through the glyph. For each line, find covered
-    // segments and draw them with rough strokes. Sparse spacing + thin
-    // lines keep letters readable; jitter + gaps add the hand-scratched feel.
+    // segments and draw them with rough strokes. 3px spacing fills the
+    // letter shape enough to read; jitter + gaps add the hand-scratched feel.
     if (horizontal) {
         for (int y = 0; y < gh; y += spacing) {
             int segStart = -1;
@@ -195,6 +197,26 @@ static void draw_scratch_glyph(ImDrawList* dl, ImFont* font, float es,
                 }
             }
         }
+    }
+
+    // ── Scattered low-alpha debris scratches ─────────────────────────────
+    // 6-10 short faint lines in an area slightly larger than the glyph
+    // bounding box. These overshoot the letter edges into surrounding space,
+    // adding raw "film scratch debris" energy. Re-randomized every frame.
+    float pad = fmaxf(rw, rh) * 0.15f;   // overshoot area
+    int n_debris = 6 + (int)(hash01(gi, frame_i + 99) * 5.f);
+    for (int di = 0; di < n_debris; ++di) {
+        float dx = (hash01(gi * 61 + di, frame_i + 3) - 0.5f) * (rw + pad * 2.f);
+        float dy = (hash01(gi * 67 + di, frame_i + 11) - 0.5f) * (rh + pad * 2.f);
+        float cx = rx0 + rw * 0.5f + dx;
+        float cy = ry0 + rh * 0.5f + dy;
+        float ang = (hash01(gi * 73 + di, frame_i + 23) - 0.5f) * 1.2f;
+        float len = fmaxf(rw, rh) * (0.1f + hash01(gi * 79 + di, frame_i + 37) * 0.25f);
+        float da = (0.2f + hash01(gi * 83 + di, frame_i + 41) * 0.2f) * alpha;
+        ImU32 dc = (base_rgb & 0x00FFFFFF) | ((unsigned)(da * 255) << 24);
+        float thick = 0.5f + hash01(gi * 89 + di, frame_i + 53) * 1.f;
+        dl->AddLine({cx, cy},
+                    {cx + cosf(ang) * len, cy + sinf(ang) * len}, dc, thick);
     }
 }
 
