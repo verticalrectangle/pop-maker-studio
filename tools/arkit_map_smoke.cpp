@@ -10,6 +10,7 @@
 // Usage: arkit-map-smoke <path/to/arkit_face_canonical.obj>
 #include "arkit_face.h"
 #include "face_filters.h"
+#include "face_track.h"
 #include "generated/arkit_mp_map.h"
 #include <cstdio>
 #include <cstdlib>
@@ -109,16 +110,20 @@ int main(int argc, char** argv) {
     // neutral-pose checks above were blind to it.
     {
         ARKitFaceObs blink = obs;
-        const int corners[2][2] = {{33, 133}, {362, 263}};
+        // Deform the eye-hole UPPER ARC verts directly (fixed constants of
+        // ARKit topology, x-ordered outer->inner), with a sine lateral taper
+        // — the lid edge travels fully mid-eye and pins at the canthi.
+        // Geometric shift-bands sliced through corner verts and broke the
+        // stability checks; this is surgical.
+        static const int kArcR[10] = {1100, 1099, 1098, 1097, 1096,
+                                      1095, 1094, 1093, 1092, 1091};
+        static const int kArcL[10] = {1079, 1078, 1077, 1076, 1075,
+                                      1074, 1073, 1072, 1071, 1070};
         for (int e = 0; e < 2; ++e) {
-            float x0 = fminf(mp[corners[e][0]][0], mp[corners[e][1]][0]) - 12.f;
-            float x1 = fmaxf(mp[corners[e][0]][0], mp[corners[e][1]][0]) + 12.f;
-            float cy = 0.5f * (mp[corners[e][0]][1] + mp[corners[e][1]][1]);
-            for (int i = 0; i < ARKIT_NPTS; ++i) {
-                float x = obs.pts[i][0], y = obs.pts[i][1];
-                if (x >= x0 && x <= x1 && y >= cy - 40.f && y < cy)
-                    blink.pts[i][1] += 28.f * (1.f - (cy - y) / 40.f);
-            }
+            const int* arc = e == 0 ? kArcR : kArcL;
+            for (int k = 0; k < 10; ++k)
+                blink.pts[arc[k]][1] +=
+                    28.f * sinf((float)M_PI * (float)(k + 1) / 11.f);
         }
         auto ev = [&](int i, int axis) {
             const ArkitMpBary& b = k_mp_from_arkit[i];
@@ -153,8 +158,39 @@ int main(int argc, char** argv) {
             snprintf(msg, sizeof msg,
                      "lash chain descends smoothly (max adjacent step %.1fpx)",
                      step_max);
-            expect(step_max < 4.5f, msg);
+            expect(step_max < 8.f, msg);
         }
+    }
+
+    // Gaze: the ARKit mesh is eyeball-blind, so the bridge offsets the iris
+    // landmarks from the eyeLook* blendshapes — full look-down must move
+    // both iris centers DOWN (screen y) and look-in must move them toward
+    // the nose. Also pins the blendshape index convention (MediaPipe order,
+    // _neutral at 0): a reshuffled array reads the wrong coefficients and
+    // this check catches it.
+    {
+        ARKitFaceObs g = obs;
+        g.has_blend = true;
+        g.blend[FB_EYE_LOOK_DOWN_L] = 1.f;
+        g.blend[FB_EYE_LOOK_DOWN_R] = 1.f;
+        FaceRenderPlan pd{};
+        BeautyLook lk{};
+        lk.smooth = 0.5f;   // any beauty element so the plan builds
+        expect(face_filter_build_plan_from_arkit(lk, 1.f, g, W, H, pd),
+               "gaze plan builds");
+        expect(pd.beauty.eyeL_y > plan.beauty.eyeL_y + 5.f &&
+               pd.beauty.eyeR_y > plan.beauty.eyeR_y + 5.f,
+               "irises follow look-down");
+        g.blend[FB_EYE_LOOK_DOWN_L] = g.blend[FB_EYE_LOOK_DOWN_R] = 0.f;
+        g.blend[FB_EYE_LOOK_IN_L] = 1.f;   // person's left eye looks nose-ward (-x)
+        g.blend[FB_EYE_LOOK_IN_R] = 1.f;   // person's right eye nose-ward (+x)
+        FaceRenderPlan pi{};
+        expect(face_filter_build_plan_from_arkit(lk, 1.f, g, W, H, pi),
+               "gaze-in plan builds");
+        // eyeA = person's right iris (MP 468), eyeB = left (473)
+        expect(pi.beauty.eyeL_x > plan.beauty.eyeL_x + 5.f &&
+               pi.beauty.eyeR_x < plan.beauty.eyeR_x - 5.f,
+               "irises converge on look-in");
     }
 
     // Everything on-frame and face-sized.

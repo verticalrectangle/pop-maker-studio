@@ -461,6 +461,16 @@ def main():
          247, 30, 29, 27, 28, 56, 190,             # R above-lash row
          466, 388, 387, 386, 385, 384, 398,        # L upper lash line
          467, 260, 259, 257, 258, 286, 414])       # L above-lash row
+    # The upper lash LINE rides the hole's upper arc EXACTLY (pure lateral
+    # interpolation, no third vertex): on a live face ARKit's eye-hole top
+    # edge IS the visible lash line, and any static blend with lid-fold skin
+    # both floats the liner above the lashes at rest (the canonical meshes'
+    # 2.1mm gap is a model artifact, user-verified wrong on-device) and
+    # under-tracks blinks (fold skin moves less than the lid edge — the
+    # chain followed only ~77% of a closure).
+    MP_UPPER_LASH = frozenset(
+        [246, 161, 160, 159, 158, 157, 173,
+         466, 388, 387, 386, 385, 384, 398])
 
     def bary2d(p, a, b, c):
         """Weights (sum=1) reproducing p's xy exactly from vert xy — the
@@ -534,6 +544,14 @@ def main():
                   f"geometric arc fallback (low={low})")
         if low is not None:
             i0, i1, i2 = hole_pseudo_tri(p, hole, low)
+            if i in MP_UPPER_LASH:
+                # On-arc: lateral parameter between the bracket pair only.
+                u = ak_v[i1][:2] - ak_v[i0][:2]
+                t = float(np.clip((p[:2] - ak_v[i0][:2]) @ u
+                                  / max(u @ u, 1e-9), 0.0, 1.0))
+                rows.append((i0, i1, i2, 1.0 - t, t, 0.0))
+                n_extrap += 1
+                continue
             w0, w1, w2 = bary2d(p, ak_v[i0], ak_v[i1], ak_v[i2])
             assert max(abs(w0), abs(w1), abs(w2)) < 2.0, \
                 f"mp {i}: unstable extrapolation " \

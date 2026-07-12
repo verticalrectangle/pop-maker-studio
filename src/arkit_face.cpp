@@ -88,6 +88,41 @@ bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
                          + b.w2 * obs.pts[b.i2][1];
     }
 
+    // Gaze: the ARKit mesh does not move with the eyeball, so the bridged
+    // iris landmarks are a static socket center — iris-anchored effects
+    // painted lid skin instead of the iris and ignored gaze entirely. The
+    // eyeLook* blendshapes carry gaze; offset the 10 iris landmarks toward
+    // the corner/lid the eye is actually looking at. ("Left"/"Right" name
+    // the PERSON's eye; person's left = +x in the unmirrored buffer, screen
+    // y grows downward.)
+    if (mp_obs.has_blend) {
+        struct EyeMap { int iris0; int c_in, c_out, lid_up, lid_dn;
+                        int in_bl, out_bl, up_bl, dn_bl; float in_sign; };
+        static const EyeMap eyes[2] = {
+            // person's RIGHT eye (MP 468): inner corner 133 (+x side of it)
+            {468, 133, 33, 159, 145, FB_EYE_LOOK_IN_R, FB_EYE_LOOK_OUT_R,
+             FB_EYE_LOOK_UP_R, FB_EYE_LOOK_DOWN_R, +1.f},
+            // person's LEFT eye (MP 473): inner corner 362 (-x side of it)
+            {473, 362, 263, 386, 374, FB_EYE_LOOK_IN_L, FB_EYE_LOOK_OUT_L,
+             FB_EYE_LOOK_UP_L, FB_EYE_LOOK_DOWN_L, -1.f},
+        };
+        for (const EyeMap& e : eyes) {
+            float cx = mp_obs.pts[e.iris0][0], cy = mp_obs.pts[e.iris0][1];
+            float half_w = 0.5f * fabsf(mp_obs.pts[e.c_in][0]
+                                        - mp_obs.pts[e.c_out][0]);
+            float up_span = cy - mp_obs.pts[e.lid_up][1];   // screen y down
+            float dn_span = mp_obs.pts[e.lid_dn][1] - cy;
+            float dx = (mp_obs.blend[e.in_bl] * e.in_sign
+                        - mp_obs.blend[e.out_bl] * e.in_sign) * 0.60f * half_w;
+            float dy = mp_obs.blend[e.dn_bl] * 0.90f * dn_span
+                     - mp_obs.blend[e.up_bl] * 0.90f * up_span;
+            for (int k = 0; k < 5; ++k) {
+                mp_obs.pts[e.iris0 + k][0] += dx;
+                mp_obs.pts[e.iris0 + k][1] += dy;
+            }
+        }
+    }
+
     bool ok = face_filter_build_plan_look(L, amount, mp_obs, w, h, out);
     if (ok && out.makeup_tex)
         out.has_arkit_mesh = true;

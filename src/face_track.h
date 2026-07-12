@@ -27,6 +27,10 @@ static constexpr int FT_NBLEND = 52;   // ARKit-style blendshape coefficients
 enum : int {
     FB_BROW_INNER_UP = 3,
     FB_EYE_BLINK_L = 9,  FB_EYE_BLINK_R = 10,
+    FB_EYE_LOOK_DOWN_L = 11, FB_EYE_LOOK_DOWN_R = 12,
+    FB_EYE_LOOK_IN_L   = 13, FB_EYE_LOOK_IN_R   = 14,
+    FB_EYE_LOOK_OUT_L  = 15, FB_EYE_LOOK_OUT_R  = 16,
+    FB_EYE_LOOK_UP_L   = 17, FB_EYE_LOOK_UP_R   = 18,
     FB_EYE_WIDE_L  = 21, FB_EYE_WIDE_R  = 22,
     FB_JAW_OPEN    = 25,
     FB_MOUTH_SMILE_L = 44, FB_MOUTH_SMILE_R = 45,
