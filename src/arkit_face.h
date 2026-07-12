@@ -20,10 +20,12 @@ struct ARKitFaceObs {
 // Submit a fresh ARKit face observation (up to ARKIT_MAX_FACES faces).
 // n_faces=0 clears the slot. Thread-safe.
 void arkit_face_submit(const ARKitFaceObs* obs, int n_faces);
-
-// Take the latest ARKit observations. If fresh, copies them to `out` (up to
-// max_n), marks the slot consumed, and returns the count written. If stale,
-// returns 0. Thread-safe.
+// Take the latest ARKit observations. Returns the cached faces (up to max_n)
+// whenever n_faces > 0, regardless of freshness — ARKit delivers face anchors
+// asynchronously on its own delegate queue, and the render loop polls every
+// frame, so gating on a consumed "fresh" flag caused frames with no makeup
+// between deliveries (flicker). Face loss is signaled by arkit_face_submit
+// with null/0, which clears n_faces. Thread-safe.
 int arkit_face_take(ARKitFaceObs* out, int max_n);
 
 // True if fresh ARKit data is available and has not yet been consumed.
@@ -31,3 +33,11 @@ bool arkit_face_available();
 
 // Clear the ARKit slot.
 void arkit_face_clear();
+
+// Build (if needed) and copy out the ARKit→MediaPipe UV remapping: for each
+// of the 1220 ARKit vertices, the MediaPipe UV to use when sampling a
+// MediaPipe-UV-space makeup texture. Cached on first successful call — ARKit
+// textureCoordinates are constant per topology, so the mapping is stable.
+// Returns false if ARKit UVs are not yet available (all zeros), meaning the
+// caller should fall back to the MediaPipe mesh (k_face_uv / k_face_tris).
+bool arkit_face_uv_remap(const ARKitFaceObs& obs, float out[ARKIT_NPTS][2]);

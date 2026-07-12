@@ -33,11 +33,10 @@ void arkit_face_submit(const ARKitFaceObs* obs, int n_faces) {
 int arkit_face_take(ARKitFaceObs* out, int max_n) {
     if (!out || max_n <= 0) return 0;
     std::lock_guard<std::mutex> lk(g_arkit_slot.mtx);
-    if (!g_arkit_slot.fresh || g_arkit_slot.n_faces <= 0) return 0;
+    if (g_arkit_slot.n_faces <= 0) return 0;
     int n = g_arkit_slot.n_faces;
     if (n > max_n) n = max_n;
     for (int i = 0; i < n; ++i) out[i] = g_arkit_slot.faces[i];
-    g_arkit_slot.fresh = false;
     return n;
 }
 
@@ -409,12 +408,93 @@ static void interpolate_missing_landmarks(FaceObs& mp, const bool* known) {
     }
 }
 
+// ── ARKit→MediaPipe UV remapping ───────────────────────────────────────────
+// Cached mapping: for each of the 1220 ARKit vertices, the MediaPipe UV to
+// use when sampling a MediaPipe-UV-space makeup texture. Built once from the
+// ~46 hard-mapped landmark pairs (arkit_index_for_mp) as IDW control points
+// in ARKit UV space. ARKit textureCoordinates are constant per topology, so
+// the mapping is stable across frames and faces.
+//
+// This lets the texture pass render the ARKit mesh directly (1220 real
+// positions, 2304 tris) instead of the MediaPipe mesh (468 verts, 85% IDW-
+// interpolated positions) — eliminating the mesh distortion that smeared
+// makeup on forehead, temples, and jaw.
+static float s_arkit_uv_remap[ARKIT_NPTS][2] = {};
+static bool s_arkit_uv_remap_built = false;
+
+bool arkit_face_uv_remap(const ARKitFaceObs& obs, float out[ARKIT_NPTS][2]) {
+    if (s_arkit_uv_remap_built) {
+        std::memcpy(out, s_arkit_uv_remap, sizeof(s_arkit_uv_remap));
+        return true;
+    }
+
+    // Collect known (ARKit UV → MediaPipe UV) pairs from arkit_index_for_mp.
+    float known_auv[FT_NPTS][2];
+    float known_muv[FT_NPTS][2];
+    int n_known = 0;
+    for (int mp = 0; mp < FACE_UV_NPTS; ++mp) {
+        int ai = arkit_index_for_mp(mp);
+        if (ai <= 0 || ai >= ARKIT_NPTS) continue;
+        // Skip stubbed UVs (not yet submitted from device).
+        if (obs.uvs[ai][0] == 0.f && obs.uvs[ai][1] == 0.f) continue;
+        known_auv[n_known][0] = obs.uvs[ai][0];
+        known_auv[n_known][1] = obs.uvs[ai][1];
+        known_muv[n_known][0] = k_face_uv[mp][0];
+        known_muv[n_known][1] = k_face_uv[mp][1];
+        ++n_known;
+    }
+    if (n_known < 3) return false;
+
+    // IDW: for each ARKit vertex, interpolate MediaPipe UV from known pairs
+    // in ARKit UV space. UV interpolation errors are far less visually
+    // disruptive than the position interpolation they replace.
+    constexpr int K = 8;
+    for (int i = 0; i < ARKIT_NPTS; ++i) {
+        float au = obs.uvs[i][0], av = obs.uvs[i][1];
+        float dists[K];
+        int idx[K];
+        for (int k = 0; k < K; ++k) { dists[k] = 1e9f; idx[k] = 0; }
+        for (int j = 0; j < n_known; ++j) {
+            float du = known_auv[j][0] - au;
+            float dv = known_auv[j][1] - av;
+            float d = du * du + dv * dv;
+            int worst = 0;
+            for (int k = 1; k < K; ++k) if (dists[k] > dists[worst]) worst = k;
+            if (d < dists[worst]) { dists[worst] = d; idx[worst] = j; }
+        }
+        float wsum = 0.f, u = 0.f, v = 0.f;
+        bool exact = false;
+        for (int k = 0; k < K; ++k) {
+            if (dists[k] >= 1e9f) continue;
+            float d = sqrtf(dists[k]);
+            if (d < 1e-6f) {
+                u = known_muv[idx[k]][0];
+                v = known_muv[idx[k]][1];
+                exact = true;
+                break;
+            }
+            float w = 1.f / (d * d);
+            wsum += w;
+            u += w * known_muv[idx[k]][0];
+            v += w * known_muv[idx[k]][1];
+        }
+        if (!exact && wsum > 0.f) { u /= wsum; v /= wsum; }
+        s_arkit_uv_remap[i][0] = u;
+        s_arkit_uv_remap[i][1] = v;
+    }
+    s_arkit_uv_remap_built = true;
+    std::memcpy(out, s_arkit_uv_remap, sizeof(s_arkit_uv_remap));
+    return true;
+}
+
 // Build a MediaPipe-format FaceRenderPlan from an ARKit observation.
 // Maps ARKit mesh landmarks → MediaPipe indices, computes runtime landmarks
 // (chin, cheeks, jaw, nose wings, face sides, brows) from the live mesh, then
-// calls face_filter_build_plan_look. The returned plan uses the MediaPipe mesh
-// (468 pts) + MediaPipe canonical UVs for the texture pass — makeup PNGs are
-// authored for MediaPipe UV space, NOT ARKit UV space.
+// calls face_filter_build_plan_look. The plan's mesh_pts are filled for the
+// beauty/warp passes (which use key landmarks), but the texture pass should
+// render the ARKit mesh directly via arkit_face_uv_remap — makeup PNGs are
+// authored for MediaPipe UV space, and the remap converts ARKit UVs to
+// MediaPipe UVs so the 1220-vert ARKit mesh can sample them correctly.
 bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
                                        const ARKitFaceObs& obs, int w, int h,
                                        FaceRenderPlan& out) {

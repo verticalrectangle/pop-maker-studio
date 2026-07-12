@@ -1411,8 +1411,12 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
             { auto p = fx.params.find("face_amount"); if (p != fx.params.end()) famt = p->second; }
             int applied_faces = 0;
             // Generic render application for either MediaPipe or ARKit topology.
+            // pts_override: when non-null, uses these positions (flat [npts][2])
+            // for the mesh pass instead of plan.mesh_pts — used by the ARKit
+            // path to render the 1220-vert ARKit mesh directly (all real
+            // positions) instead of the 468-vert MediaPipe mesh (85% IDW).
             auto apply_plan = [&](auto& plan, const float* uv, const unsigned short* tris,
-                                  int npts, int ntri) {
+                                  int npts, int ntri, const float* pts_override = nullptr) {
                 // 1. beauty (skin + procedural makeup) — fullscreen.
                 if (plan.has_beauty) {
                     MTLRenderPassDescriptor* rp1 = [MTLRenderPassDescriptor new];
@@ -1429,7 +1433,8 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     cur = ping[dst]; dst ^= 1;
                 }
                 // 2. UV-mapped makeup texture over the tracked mesh.
-                //    Skipped when uv is null (ARKit path with no textureCoordinates).
+                //    ARKit path passes remapped MediaPipe UVs; MediaPipe path
+                //    passes canonical UVs. Skipped when plan has no makeup_tex.
                 id<MTLTexture> mk = (uv && plan.makeup_tex) ? face_makeup_texture(plan.makeup_tex) : nil;
                 if (mk) {
                     id<MTLTexture> target = ping[dst];
@@ -1441,10 +1446,10 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                        destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
                     [bl endEncoding];
                     static float vtx[ARKIT_NPTS * 4];
+                    const float* px = pts_override ? pts_override : &plan.mesh_pts[0][0];
                     for (int k = 0; k < npts; ++k) {
-                        int idx = k;
-                        vtx[k*4+0] = plan.mesh_pts[idx][0];
-                        vtx[k*4+1] = plan.mesh_pts[idx][1];
+                        vtx[k*4+0] = px[k*2+0];
+                        vtx[k*4+1] = px[k*2+1];
                         vtx[k*4+2] = uv[k*2+0];
                         vtx[k*4+3] = uv[k*2+1];
                     }
@@ -1453,10 +1458,10 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     int n_live = 0, n_pos = 0;
                     for (int t2 = 0; t2 < ntri; ++t2) {
                         const unsigned short* tr = tris + t2 * 3;
-                        float ax = plan.mesh_pts[tr[1]][0] - plan.mesh_pts[tr[0]][0];
-                        float ay = plan.mesh_pts[tr[1]][1] - plan.mesh_pts[tr[0]][1];
-                        float bx2 = plan.mesh_pts[tr[2]][0] - plan.mesh_pts[tr[0]][0];
-                        float by2 = plan.mesh_pts[tr[2]][1] - plan.mesh_pts[tr[0]][1];
+                        float ax = px[tr[1]*2+0] - px[tr[0]*2+0];
+                        float ay = px[tr[1]*2+1] - px[tr[0]*2+1];
+                        float bx2 = px[tr[2]*2+0] - px[tr[0]*2+0];
+                        float by2 = px[tr[2]*2+1] - px[tr[0]*2+1];
                         sa[t2] = ax * by2 - ay * bx2;
                         if (sa[t2] > 0.f) ++n_pos;
                     }
@@ -1530,9 +1535,20 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     FaceRenderPlan plan;
                     if (!face_filter_build_plan_from_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
                         continue;
-                    // Use MediaPipe mesh + canonical UVs for the texture pass.
-                    // Makeup PNGs are authored for MediaPipe UV space, not ARKit.
-                    apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0], FACE_UV_NPTS, FACE_UV_NTRI);
+                    // Render the ARKit mesh directly (1220 real positions, 2304
+                    // tris) with ARKit UVs remapped to MediaPipe UV space, so
+                    // makeup PNGs sample correctly. Falls back to the MediaPipe
+                    // mesh (468 verts, 85% IDW-interpolated positions) when ARKit
+                    // UVs are not yet available.
+                    float arkit_mpuv[ARKIT_NPTS][2];
+                    if (arkit_face_uv_remap(arkit_faces[fi], arkit_mpuv)) {
+                        apply_plan(plan, &arkit_mpuv[0][0], &k_arkit_tris[0][0],
+                                   ARKIT_NPTS, ARKIT_NTRI,
+                                   &arkit_faces[fi].pts[0][0]);
+                    } else {
+                        apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
+                                   FACE_UV_NPTS, FACE_UV_NTRI);
+                    }
                 }
             } else {
                 for (int fi = 0; fi < n_faces; ++fi) {
