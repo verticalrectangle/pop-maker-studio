@@ -109,6 +109,14 @@ fragment float4 blend_f(FSOut in [[stage_in]], texture2d<float> pre [[texture(0)
     return mix(pre.sample(s, in.v_uv), post.sample(s, in.v_uv), u.amt);
 }
 
+// Camera frames are opaque. Third-party and generated FX are allowed to carry
+// alpha for timeline compositing, but their filtered camera result must not
+// become a translucent MTKView layer.
+fragment float4 opaque_f(FSOut in [[stage_in]], texture2d<float> src [[texture(0)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    return float4(src.sample(s, in.v_uv).rgb, 1.0);
+}
+
 // (4) scene layer quad — the desktop scene_add_layer port. Pixel-space
 // transform (center / half-extents / rotation), UV window (crop + flips baked
 // into u0..v1 by the CPU), buffer-orientation quarter turns, opacity.
@@ -814,6 +822,7 @@ static id<MTLComputePipelineState> g_downscale_pso = nil; // stride-2 BGRA→RGB
 static id<MTLBuffer>             g_downscale_buf = nil;  // face-feed output
 static id<MTLRenderPipelineState> g_bg_pso  = nil;   // background aurora
 static id<MTLRenderPipelineState> g_quad_pso = nil;  // textured blit
+static id<MTLRenderPipelineState> g_opaque_pso = nil; // normalized filtered-camera alpha
 static id<MTLTexture>             g_content = nil;    // current frame (BGRA8)
 static int                        g_cw = 0, g_ch = 0;
 static std::mutex                 g_content_mu;
@@ -1696,7 +1705,20 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
         set_status(i, "applied");
         if (result) result->applied++;
     }
-    return cur;
+    // set_live_fx is a camera-only adapter. Its output lands in an opaque
+    // MTKView, so normalize alpha once for the whole chain rather than forcing
+    // every generated shader to duplicate the policy.
+    if (!g_opaque_pso) return cur;
+    MTLRenderPassDescriptor* rpO = [MTLRenderPassDescriptor new];
+    rpO.colorAttachments[0].texture     = ping[dst];
+    rpO.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
+    rpO.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> eo = [cb renderCommandEncoderWithDescriptor:rpO];
+    [eo setRenderPipelineState:g_opaque_pso];
+    [eo setFragmentTexture:cur atIndex:0];
+    [eo drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [eo endEncoding];
+    return ping[dst];
 }
 
 // Parse the ordered FX stack pushed by set_live_fx (JSON array of {fx_type,params}).
@@ -1872,6 +1894,12 @@ void metal_render_init(void* mtl_device) {
     bl.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
     g_fx_blend_pso = [g_dev newRenderPipelineStateWithDescriptor:bl error:&err];
     if (!g_fx_blend_pso) NSLog(@"[metal_render] blend pipeline: %@", err);
+    MTLRenderPipelineDescriptor* op = [MTLRenderPipelineDescriptor new];
+    op.vertexFunction   = g_fs_v;
+    op.fragmentFunction = [lib newFunctionWithName:@"opaque_f"];
+    op.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    g_opaque_pso = [g_dev newRenderPipelineStateWithDescriptor:op error:&err];
+    if (!g_opaque_pso) NSLog(@"[metal_render] opaque pipeline: %@", err);
 
     MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
     sd.minFilter = MTLSamplerMinMagFilterLinear; sd.magFilter = MTLSamplerMinMagFilterLinear;
