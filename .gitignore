@@ -13,3 +13,5 @@ projects/
 compile_commands.json
 build-linux/
 build-ios/
+.DS_Store
+build-mac/
