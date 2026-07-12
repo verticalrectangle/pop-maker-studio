@@ -149,6 +149,16 @@ ElemAnim compute_elem_anim(AnimStyle style, float local_t, float clip_dur,
             a.dy = (hash01(i, frame_i + 7) - 0.5f) * line_h * 0.02f;
             break;
         }
+        case AnimStyle::ScratchRaw: {
+            // Same alpha + jitter as ScratchFilm — the rendering path in
+            // render_text_block differs (stencil-masked scratches-as-letterform).
+            float intro = fade_in > 0.f ? ease_eval(EASE_OUT_CUBIC, local_t / fade_in) : 1.f;
+            int frame_i = (int)(local_t * 24.f);
+            a.alpha = intro * exit_mul;
+            a.dx = (hash01(i, frame_i) - 0.5f) * line_h * 0.02f;
+            a.dy = (hash01(i, frame_i + 7) - 0.5f) * line_h * 0.02f;
+            break;
+        }
         default: {
             // Intro-ramp styles applied per element: hidden until the element's
             // staggered turn, then it runs the normal block motion; exit fades

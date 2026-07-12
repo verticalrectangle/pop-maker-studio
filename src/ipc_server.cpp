@@ -345,6 +345,7 @@ static AnimStyle parse_anim_style(const std::string& s) {
     if (s == "explode")    return AnimStyle::Explode;
     if (s == "gravity")    return AnimStyle::Gravity;
     if (s == "scratch")    return AnimStyle::ScratchFilm;
+    if (s == "scratch-raw") return AnimStyle::ScratchRaw;
     return AnimStyle::None;
 }
 
@@ -462,6 +463,7 @@ static std::string anim_style_str(AnimStyle s) {
         case AnimStyle::Explode:     return "explode";
         case AnimStyle::Gravity:     return "gravity";
         case AnimStyle::ScratchFilm: return "scratch";
+        case AnimStyle::ScratchRaw:  return "scratch-raw";
         default:                     return "unknown";
     }
 }

@@ -429,6 +429,7 @@ int main() {
         // All styles must round-trip (pre-existing bug: Wave 2 styles
         // serialized as "unknown" before the anim_style_str fix).
         const char* styles[] = {"wave", "jitter", "explode", "gravity", "scratch",
+                                "scratch-raw",
                                 "fade", "glitch", "typewriter", "bounce", "scale",
                                 "slide", "stack", "block", "none"};
         for (const char* s : styles) {
@@ -439,7 +440,7 @@ int main() {
             expect(g == s, "clip_style '" + std::string(s) +
                            "' round-trip failed, got '" + g + "'");
         }
-        printf("scratch IPC round-trip: PASS (all 14 styles serialize correctly)\n");
+        printf("scratch IPC round-trip: PASS (all 15 styles serialize correctly)\n");
     }
 
     // ── save → summary/recents → load into a SECOND engine ───────────────────

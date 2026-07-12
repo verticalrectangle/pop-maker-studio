@@ -48,7 +48,8 @@ enum class AnimStyle {
     Jitter,     // continuous per-letter vibration
     Explode,    // elements fly in from random offsets (intro)
     Gravity,    // elements drop from above and bounce to the baseline (intro)
-    ScratchFilm // per-frame scratch marks carved through each letter
+    ScratchFilm, // per-frame scratch marks carved through each letter
+    ScratchRaw   // letters ARE scratches — stencil-masked per-frame scratch lines
 };
 
 // ── Background removal status ─────────────────────────────────────────────────

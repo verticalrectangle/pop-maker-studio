@@ -161,7 +161,9 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
     // Per-element (per-word / per-letter) kinetic mode: each word or glyph runs
     // its own staggered motion. Requires an actual animation style and rules out
     // karaoke (which owns the per-word path) and the Block background style.
-    bool per_elem = (clip->anim_unit != 0 || ctx.eff_style == AnimStyle::ScratchFilm) &&
+    bool per_elem = (clip->anim_unit != 0 ||
+                     ctx.eff_style == AnimStyle::ScratchFilm ||
+                     ctx.eff_style == AnimStyle::ScratchRaw) &&
                     !has_karaoke &&
                     ctx.eff_style != AnimStyle::None &&
                     ctx.eff_style != AnimStyle::Block;
@@ -278,6 +280,88 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
             if (clip->sub_color_override) {
                 float ca = clip->sub_color[3] * a;
                 col = (base_rgb & 0x00FFFFFF) | ((unsigned)(ca * 255) << 24);
+            }
+            // ── Scratch-raw: letters ARE scratches (stencil-masked) ──────────
+            // Iterate each glyph, sample the font atlas to find covered pixels,
+            // and draw white scratch lines only where the glyph has alpha —
+            // the letterform emerges from per-frame scratch marks.
+            if (ctx.eff_style == AnimStyle::ScratchRaw) {
+                int frame_i = (int)(local_t * 24.f);
+                ImFontAtlas* atlas = font->OwnerAtlas;
+                ImTextureData* td = atlas ? atlas->TexData : nullptr;
+                if (!td || !td->Pixels) return;
+                int aw = td->Width, ah = td->Height, bpp = td->BytesPerPixel;
+                unsigned char* tpix = (unsigned char*)td->Pixels;
+                ImFontBaked* baked = font->GetFontBaked(es);
+                if (!baked) return;
+                float scale = (baked->Size > 0.f) ? es / baked->Size : 1.f;
+                ImU32 scolor = (base_rgb & 0x00FFFFFF) | ((unsigned)(a * 255) << 24);
+
+                float cx = ex, cy = ey;
+                const char* p = s.c_str();
+                while (*p) {
+                    int n = utf8_len((unsigned char)*p);
+                    unsigned int cp = 0;
+                    if     (n == 1) cp = (unsigned char)p[0];
+                    else if (n == 2) cp = ((unsigned char)p[0] & 0x1F) << 6  | ((unsigned char)p[1] & 0x3F);
+                    else if (n == 3) cp = ((unsigned char)p[0] & 0x0F) << 12 | ((unsigned char)p[1] & 0x3F) << 6  | ((unsigned char)p[2] & 0x3F);
+                    else if (n == 4) cp = ((unsigned char)p[0] & 0x07) << 18 | ((unsigned char)p[1] & 0x3F) << 12 | ((unsigned char)p[2] & 0x3F) << 6 | ((unsigned char)p[3] & 0x3F);
+
+                    if (cp == ' ') {
+                        ImFontGlyph* sg = baked->FindGlyph((ImWchar)' ');
+                        if (sg) cx += sg->AdvanceX * scale;
+                        p += n; continue;
+                    }
+                    ImFontGlyph* gl = baked->FindGlyph((ImWchar)cp);
+                    if (!gl || !gl->Visible) {
+                        if (gl) cx += gl->AdvanceX * scale;
+                        p += n; continue;
+                    }
+                    float gx0 = cx + gl->X0 * scale, gy0 = cy + gl->Y0 * scale;
+                    float gx1 = cx + gl->X1 * scale, gy1 = cy + gl->Y1 * scale;
+                    float gw = gx1 - gx0, gh = gy1 - gy0;
+                    if (gw > 0.5f && gh > 0.5f) {
+                        int ns = 4 + (int)(hash01(gi, frame_i + 99) * 5.f);
+                        for (int si = 0; si < ns; ++si) {
+                            float sy0 = hash01(gi * 17 + si, frame_i)       * gh;
+                            float sx0 = hash01(gi * 31 + si, frame_i + 13)  * gw;
+                            float ang = (hash01(gi * 43 + si, frame_i + 27) - 0.5f) * 0.8f;
+                            float len = gw * (0.4f + hash01(gi * 53 + si, frame_i + 41) * 0.8f);
+                            float dx2 = cosf(ang) * len, dy2 = sinf(ang) * len;
+                            // Sample along the line; draw only covered segments
+                            const int NSAMP = 20;
+                            bool prev_cov = false;
+                            float seg_sx = 0, seg_sy = 0;
+                            for (int j = 0; j <= NSAMP; ++j) {
+                                float t = (float)j / NSAMP;
+                                float px = sx0 + dx2 * t, py = sy0 + dy2 * t;
+                                float u = gl->U0 + (px / gw) * (gl->U1 - gl->U0);
+                                float v = gl->V0 + (py / gh) * (gl->V1 - gl->V0);
+                                int tx = (int)(u * aw), ty = (int)(v * ah);
+                                bool cov = false;
+                                if (tx >= 0 && tx < aw && ty >= 0 && ty < ah) {
+                                    unsigned char val = (bpp == 1) ? tpix[ty * aw + tx]
+                                                                   : tpix[(ty * aw + tx) * bpp + 3];
+                                    cov = val > 64;
+                                }
+                                if (cov && !prev_cov) { seg_sx = gx0 + px; seg_sy = gy0 + py; }
+                                else if (!cov && prev_cov) {
+                                    float ex2 = gx0 + sx0 + dx2 * ((float)(j - 1) / NSAMP);
+                                    float ey2 = gy0 + sy0 + dy2 * ((float)(j - 1) / NSAMP);
+                                    dl->AddLine({seg_sx, seg_sy}, {ex2, ey2}, scolor, 1.5f);
+                                }
+                                prev_cov = cov;
+                            }
+                            if (prev_cov) {
+                                dl->AddLine({seg_sx, seg_sy},
+                                            {gx0 + sx0 + dx2, gy0 + sy0 + dy2}, scolor, 1.5f);
+                            }
+                        }
+                    }
+                    cx += gl->AdvanceX * scale;
+                    p += n;
+                }
+                return;   // skip solid text + ScratchFilm overlay
             }
             if (ts.shadow_enabled)
                 dl->AddText(font, es, {ex + ts.shadow_ox, ey + ts.shadow_oy},
