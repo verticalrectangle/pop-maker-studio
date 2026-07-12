@@ -239,6 +239,12 @@ if(APPLE)
         "-framework Metal" "-framework CoreVideo" "-framework IOSurface"
         "-framework QuartzCore" "-framework Foundation")
     target_include_directories(face-fx-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
+
+    add_executable(face-fx-photo tools/face_fx_photo.mm)
+    target_link_libraries(face-fx-photo PRIVATE pms-engine
+        "-framework Metal" "-framework CoreVideo" "-framework IOSurface"
+        "-framework QuartzCore" "-framework Foundation")
+    target_include_directories(face-fx-photo PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 endif()
 
 

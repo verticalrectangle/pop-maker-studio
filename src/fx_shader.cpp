@@ -818,6 +818,7 @@ uniform vec4 u_cyber;    // skin_tint, desat, chrome, scanlines
 uniform vec4 u_tintc;    // skin tint color rgb, _
 uniform vec4 u_mouthax;  // lip ellipse semi-width, semi-height (px), _, _
 uniform vec2 u_lippoly[12];  // outer-lip ring in px — the mask FOLLOWS the mouth
+uniform vec2 u_lippoly_in[12];  // inner-lip ring in px — aperture, never painted
 uniform vec4 u_nose;     // nose bridge xy (px), nose blush amt, freckles amt
 uniform float u_brow_r;
 uniform vec4 u_lash;     // amount, wing, liner, _
@@ -1002,6 +1003,24 @@ void main() {
         // as "smudged". The mask is zero outside the ring, full inside past
         // a short feather.
         float lm2 = inside * smoothstep(0.0, feather * 0.8, dmin);
+        // Mouth aperture exclusion: inside the INNER-lip ring is teeth /
+        // mouth interior on an open mouth — never lipstick. (The old
+        // redness gate's `deep` override painted teeth at full strength.)
+        int cr_in = 0;
+        float dmin_in = 1e9;
+        for (int i = 0; i < 12; ++i) {
+            vec2 a4 = u_lippoly_in[i];
+            vec2 b4 = u_lippoly_in[i == 11 ? 0 : i + 1];
+            if ((a4.y > p.y) != (b4.y > p.y)) {
+                float xin4 = a4.x + (p.y - a4.y) * (b4.x - a4.x) / (b4.y - a4.y);
+                if (p.x < xin4) cr_in++;
+            }
+            vec2 e4 = b4 - a4;
+            float ts4 = clamp(dot(p - a4, e4) / max(dot(e4, e4), 1e-4), 0.0, 1.0);
+            dmin_in = min(dmin_in, length(p - (a4 + e4 * ts4)));
+        }
+        lm2 *= 1.0 - float((cr_in & 1) == 1)
+                     * smoothstep(0.0, max(feather * 0.5, 1.0), dmin_in);
         // Bitten-lip gradient via the center ellipse.
         vec2 md = p - u_feat.yz;
         float la = dot(md, rightv) / max(u_mouthax.x, 1.0);
@@ -1410,6 +1429,7 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_tintc"), p.tint_col[0], p.tint_col[1], p.tint_col[2], 0.f);
     glUniform4f(u("u_mouthax"), p.mouth_sw, p.mouth_sh, 0.f, 0.f);
     glUniform2fv(u("u_lippoly"), 12, &p.lip_poly[0][0]);
+    glUniform2fv(u("u_lippoly_in"), 12, &p.lip_poly_in[0][0]);
     glUniform4f(u("u_nose"), p.nose_x, p.nose_y, p.nose_blush, p.freckles);
     glUniform4f(u("u_lash"), p.lash, p.lash_wing, p.liner, 0.f);
     glUniform2f(u("u_blink"), p.blink_l, p.blink_r);

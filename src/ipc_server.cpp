@@ -2382,6 +2382,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         j["worker_cycle_ms"] = g_dbg_cycle_us.load() / 1000.0;
         j["landmark_ms"]     = g_dbg_lmk_us.load() / 1000.0;
         j["read_age_ms"]     = g_dbg_read_age_us.load() / 1000.0;
+        // Opt-in landmark dump (478 xy pairs in frame pixels) for alignment
+        // QA overlays and the face-fx-photo harness.
+        if (params.value("pts", false) && n > 0) {
+            json pts = json::array();
+            for (int i = 0; i < FT_NPTS; ++i)
+                pts.push_back({faces[0].pts[i][0], faces[0].pts[i][1]});
+            j["pts"] = std::move(pts);
+        }
         return j;
     }
 

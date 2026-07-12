@@ -63,6 +63,8 @@ struct FaceBeautyParams {
     float mouth_x = 0, mouth_y = 0, mouth_r = 0;
     float mouth_sw = 1, mouth_sh = 1;   // lip ellipse semi-axes (px), face basis
     float lip_poly[12][2] = {};         // outer-lip ring (px) — follows the smile
+    float lip_poly_in[12][2] = {};      // inner-lip ring (px) — mouth aperture,
+                                        // excluded so an open mouth never paints teeth
     float brow_r  = 0;                  // exclusion above the eyes
 };
 uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,

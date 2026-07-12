@@ -417,6 +417,7 @@ struct FaceBeautyUni {
     float cheeks[4]; float blushc[4]; float lipc[4]; float eyeglow[4];
     float cyber[4]; float tintc[4]; float mouthax[4];
     float lippoly[24];
+    float lippoly_in[24];
     float nose[4]; float lash[4]; float chin[4]; float eyeout[4];
     float lidL[14]; float lidR[14];
     float brow_r; float pad0; float blink[2]; float iris[4];
@@ -564,6 +565,22 @@ fragment float4 face_beauty_f(FSOut in [[stage_in]], constant FaceBeautyUni& u [
         float inside  = float((crossings & 1) == 1);
         float feather = max(u.mouthax[1] * 0.30, 1.5);
         float lm2 = inside * smoothstep(0.0, feather * 0.8, dmin);
+        // Mouth aperture exclusion: inside the INNER-lip ring is teeth /
+        // mouth interior on an open mouth — never lipstick.
+        int cr_in = 0;
+        float dmin_in = 1e9;
+        for (int i = 0; i < 12; ++i) {
+            float2 a4 = float2(u.lippoly_in[i*2], u.lippoly_in[i*2+1]);
+            int j4 = (i == 11) ? 0 : i + 1;
+            float2 b4 = float2(u.lippoly_in[j4*2], u.lippoly_in[j4*2+1]);
+            if ((a4.y > p.y) != (b4.y > p.y)) {
+                float xin4 = a4.x + (p.y - a4.y) * (b4.x - a4.x) / (b4.y - a4.y);
+                if (p.x < xin4) cr_in++;
+            }
+            dmin_in = min(dmin_in, f_seg(p, a4, b4));
+        }
+        lm2 *= 1.0 - float((cr_in & 1) == 1)
+                     * smoothstep(0.0, max(feather * 0.5, 1.0), dmin_in);
         float2 md = p - mouth;
         float la = dot(md, rightv) / max(u.mouthax[0], 1.0);
         float lb = dot(md, upv)    / max(u.mouthax[1], 1.0);
@@ -1040,6 +1057,7 @@ struct FaceBeautyUniCPU {
     float cheeks[4]; float blushc[4]; float lipc[4]; float eyeglow[4];
     float cyber[4]; float tintc[4]; float mouthax[4];
     float lippoly[24];
+    float lippoly_in[24];
     float nose[4]; float lash[4]; float chin[4]; float eyeout[4];
     float lidL[14]; float lidR[14];
     float brow_r; float pad0; float blink[2]; float iris[4];
@@ -1097,6 +1115,8 @@ static FaceBeautyUniCPU face_beauty_uniforms(const FaceBeautyParams& p, int w, i
     for (int i = 0; i < 12; ++i) {
         u.lippoly[i*2]   = p.lip_poly[i][0];
         u.lippoly[i*2+1] = p.lip_poly[i][1];
+        u.lippoly_in[i*2]   = p.lip_poly_in[i][0];
+        u.lippoly_in[i*2+1] = p.lip_poly_in[i][1];
     }
     u.nose[0] = p.nose_x; u.nose[1] = p.nose_y; u.nose[2] = p.nose_blush; u.nose[3] = p.freckles;
     u.lash[0] = p.lash; u.lash[1] = p.lash_wing; u.lash[2] = p.liner;

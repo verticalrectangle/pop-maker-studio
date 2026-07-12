@@ -734,9 +734,16 @@ bool face_filter_build_plan_look(const BeautyLook& L, float amount,
             bp.mouth_sh = sqrtf(lx*lx + ly*ly) * 0.72f * sr_;
             static const int kLipRing[12] = {61, 40, 37, 0, 267, 270, 291,
                                              321, 314, 17, 84, 91};
+            // Inner ring = the mouth aperture. Closed mouth: the polygon is
+            // nearly degenerate and excludes ~nothing. Open mouth: it covers
+            // the teeth so lipstick stays on the vermilion.
+            static const int kLipRingIn[12] = {78, 80, 82, 13, 312, 310, 308,
+                                               324, 402, 14, 87, 95};
             for (int i = 0; i < 12; ++i) {
                 bp.lip_poly[i][0] = PX(obs.pts[kLipRing[i]][0]);
                 bp.lip_poly[i][1] = PY(obs.pts[kLipRing[i]][1]);
+                bp.lip_poly_in[i][0] = PX(obs.pts[kLipRingIn[i]][0]);
+                bp.lip_poly_in[i][1] = PY(obs.pts[kLipRingIn[i]][1]);
             }
         }
         out.has_beauty = true;
