@@ -3,6 +3,7 @@
 // (pms_submit_arkit_face), the render backend (metal_render.mm), and the
 // ARKit-aware render plan builder (face_filters.cpp).
 #include "generated/arkit_face_mesh.h"  // ARKIT_NPTS, ARKIT_NTRI, k_arkit_*
+#include "generated/face_uv_mesh.h"    // FACE_UV_NPTS
 
 static constexpr int ARKIT_NBLEND = 52;
 static constexpr int ARKIT_MAX_FACES = 4;
@@ -34,10 +35,17 @@ bool arkit_face_available();
 // Clear the ARKit slot.
 void arkit_face_clear();
 
-// Build (if needed) and copy out the ARKit→MediaPipe UV remapping: for each
-// of the 1220 ARKit vertices, the MediaPipe UV to use when sampling a
-// MediaPipe-UV-space makeup texture. Cached on first successful call — ARKit
-// textureCoordinates are constant per topology, so the mapping is stable.
-// Returns false if ARKit UVs are not yet available (all zeros), meaning the
-// caller should fall back to the MediaPipe mesh (k_face_uv / k_face_tris).
-bool arkit_face_uv_remap(const ARKitFaceObs& obs, float out[ARKIT_NPTS][2]);
+// Build (if needed) and copy out MediaPipe-mesh screen positions for each of
+// the 468 MediaPipe vertices, looked up from the ARKit mesh via a cached
+// UV-space correspondence. The mapping (MediaPipe index → ARKit vertex index)
+// is built once from the ~46 hard-mapped landmark pairs as IDW control points
+// in MediaPipe UV space: each MediaPipe UV is mapped to an ARKit UV, then
+// snapped to the nearest ARKit vertex in ARKit UV space. ARKit
+// textureCoordinates and MediaPipe canonical UVs are both constant per
+// topology, so the mapping is stable across frames and faces.
+//
+// This gives the MediaPipe mesh (exact UVs for makeup PNGs) real ARKit
+// screen positions (no IDW position interpolation) — both UVs and positions
+// are correct. Returns false if ARKit UVs are not yet available (all zeros),
+// meaning the caller should fall back to IDW-interpolated positions.
+bool arkit_face_mp_positions(const ARKitFaceObs& obs, float out[FACE_UV_NPTS][2]);

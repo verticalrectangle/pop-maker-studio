@@ -1535,16 +1535,18 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     FaceRenderPlan plan;
                     if (!face_filter_build_plan_from_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
                         continue;
-                    // Render the ARKit mesh directly (1220 real positions, 2304
-                    // tris) with ARKit UVs remapped to MediaPipe UV space, so
-                    // makeup PNGs sample correctly. Falls back to the MediaPipe
-                    // mesh (468 verts, 85% IDW-interpolated positions) when ARKit
-                    // UVs are not yet available.
-                    float arkit_mpuv[ARKIT_NPTS][2];
-                    if (arkit_face_uv_remap(arkit_faces[fi], arkit_mpuv)) {
-                        apply_plan(plan, &arkit_mpuv[0][0], &k_arkit_tris[0][0],
-                                   ARKIT_NPTS, ARKIT_NTRI,
-                                   &arkit_faces[fi].pts[0][0]);
+                    // MediaPipe mesh topology (exact UVs for makeup PNGs) with
+                    // real ARKit screen positions looked up via cached UV-space
+                    // nearest-neighbor. This gives both correct UVs (eyeliner
+                    // and thin features sample the right texels) and correct
+                    // positions (no IDW smearing). Falls back to IDW-
+                    // interpolated positions when ARKit UVs are not yet
+                    // available (stubbed zeros before first device submission).
+                    float mp_pos[FACE_UV_NPTS][2];
+                    if (arkit_face_mp_positions(arkit_faces[fi], mp_pos)) {
+                        apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
+                                   FACE_UV_NPTS, FACE_UV_NTRI,
+                                   &mp_pos[0][0]);
                     } else {
                         apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
                                    FACE_UV_NPTS, FACE_UV_NTRI);

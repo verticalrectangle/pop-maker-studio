@@ -408,82 +408,118 @@ static void interpolate_missing_landmarks(FaceObs& mp, const bool* known) {
     }
 }
 
-// ── ARKit→MediaPipe UV remapping ───────────────────────────────────────────
-// Cached mapping: for each of the 1220 ARKit vertices, the MediaPipe UV to
-// use when sampling a MediaPipe-UV-space makeup texture. Built once from the
-// ~46 hard-mapped landmark pairs (arkit_index_for_mp) as IDW control points
-// in ARKit UV space. ARKit textureCoordinates are constant per topology, so
-// the mapping is stable across frames and faces.
+// ── MediaPipe mesh positions from ARKit mesh ────────────────────────────────
+// Cached mapping: for each of the 468 MediaPipe vertices, the ARKit vertex
+// index to use for screen position. Built once from the ~46 hard-mapped
+// landmark pairs (arkit_index_for_mp) as IDW control points in MediaPipe UV
+// space: each MediaPipe UV is mapped to an ARKit UV, then snapped to the
+// nearest ARKit vertex in ARKit UV space. Both ARKit textureCoordinates and
+// MediaPipe canonical UVs are constant per topology, so the mapping is stable
+// across frames and faces.
 //
-// This lets the texture pass render the ARKit mesh directly (1220 real
-// positions, 2304 tris) instead of the MediaPipe mesh (468 verts, 85% IDW-
-// interpolated positions) — eliminating the mesh distortion that smeared
-// makeup on forehead, temples, and jaw.
-static float s_arkit_uv_remap[ARKIT_NPTS][2] = {};
-static bool s_arkit_uv_remap_built = false;
+// This gives the MediaPipe mesh (exact UVs for makeup PNGs) real ARKit screen
+// positions — no IDW position interpolation. Both UVs and positions are
+// correct: the eyeliner is sampled at the right texel (exact UV) and rendered
+// at a real screen location (nearest ARKit vertex, no averaging).
+static int  s_mp_to_arkit[FACE_UV_NPTS] = {};
+static bool s_mp_to_arkit_built = false;
 
-bool arkit_face_uv_remap(const ARKitFaceObs& obs, float out[ARKIT_NPTS][2]) {
-    if (s_arkit_uv_remap_built) {
-        std::memcpy(out, s_arkit_uv_remap, sizeof(s_arkit_uv_remap));
+bool arkit_face_mp_positions(const ARKitFaceObs& obs, float out[FACE_UV_NPTS][2]) {
+    if (s_mp_to_arkit_built) {
+        for (int i = 0; i < FACE_UV_NPTS; ++i) {
+            int ai = s_mp_to_arkit[i];
+            out[i][0] = obs.pts[ai][0];
+            out[i][1] = obs.pts[ai][1];
+        }
         return true;
     }
 
-    // Collect known (ARKit UV → MediaPipe UV) pairs from arkit_index_for_mp.
-    float known_auv[FT_NPTS][2];
-    float known_muv[FT_NPTS][2];
-    int n_known = 0;
+    // Check ARKit UVs are available (not stubbed zeros).
+    bool any_uv = false;
+    for (int i = 0; i < ARKIT_NPTS && !any_uv; ++i)
+        if (obs.uvs[i][0] != 0.f || obs.uvs[i][1] != 0.f) any_uv = true;
+    if (!any_uv) return false;
+
+    // Collect control points: (MediaPipe UV, ARKit UV) pairs from the ~46
+    // hard-mapped landmark correspondences.
+    float ctrl_muv[FT_NPTS][2];
+    float ctrl_auv[FT_NPTS][2];
+    int n_ctrl = 0;
     for (int mp = 0; mp < FACE_UV_NPTS; ++mp) {
         int ai = arkit_index_for_mp(mp);
         if (ai <= 0 || ai >= ARKIT_NPTS) continue;
-        // Skip stubbed UVs (not yet submitted from device).
         if (obs.uvs[ai][0] == 0.f && obs.uvs[ai][1] == 0.f) continue;
-        known_auv[n_known][0] = obs.uvs[ai][0];
-        known_auv[n_known][1] = obs.uvs[ai][1];
-        known_muv[n_known][0] = k_face_uv[mp][0];
-        known_muv[n_known][1] = k_face_uv[mp][1];
-        ++n_known;
+        ctrl_muv[n_ctrl][0] = k_face_uv[mp][0];
+        ctrl_muv[n_ctrl][1] = k_face_uv[mp][1];
+        ctrl_auv[n_ctrl][0] = obs.uvs[ai][0];
+        ctrl_auv[n_ctrl][1] = obs.uvs[ai][1];
+        ++n_ctrl;
     }
-    if (n_known < 3) return false;
+    if (n_ctrl < 3) return false;
 
-    // IDW: for each ARKit vertex, interpolate MediaPipe UV from known pairs
-    // in ARKit UV space. UV interpolation errors are far less visually
-    // disruptive than the position interpolation they replace.
+    // For each MediaPipe vertex, find the corresponding ARKit vertex.
     constexpr int K = 8;
-    for (int i = 0; i < ARKIT_NPTS; ++i) {
-        float au = obs.uvs[i][0], av = obs.uvs[i][1];
+    for (int i = 0; i < FACE_UV_NPTS; ++i) {
+        // Exact correspondence from the hard map — skip the search.
+        int ai = arkit_index_for_mp(i);
+        if (ai > 0 && ai < ARKIT_NPTS) {
+            s_mp_to_arkit[i] = ai;
+            continue;
+        }
+
+        // IDW-map this MediaPipe UV → ARKit UV using control points in
+        // MediaPipe UV space, then snap to the nearest ARKit vertex in
+        // ARKit UV space. The UV-to-UV mapping is a smooth deformation;
+        // even with sparse control points, the nearest-vertex result is
+        // topologically correct or adjacent because the ARKit mesh (1220
+        // verts) is 2.6× denser than MediaPipe (468).
+        float mu = k_face_uv[i][0], mv = k_face_uv[i][1];
         float dists[K];
         int idx[K];
         for (int k = 0; k < K; ++k) { dists[k] = 1e9f; idx[k] = 0; }
-        for (int j = 0; j < n_known; ++j) {
-            float du = known_auv[j][0] - au;
-            float dv = known_auv[j][1] - av;
+        for (int j = 0; j < n_ctrl; ++j) {
+            float du = ctrl_muv[j][0] - mu;
+            float dv = ctrl_muv[j][1] - mv;
             float d = du * du + dv * dv;
             int worst = 0;
             for (int k = 1; k < K; ++k) if (dists[k] > dists[worst]) worst = k;
             if (d < dists[worst]) { dists[worst] = d; idx[worst] = j; }
         }
-        float wsum = 0.f, u = 0.f, v = 0.f;
-        bool exact = false;
+        float wsum = 0.f, au = 0.f, av = 0.f;
         for (int k = 0; k < K; ++k) {
             if (dists[k] >= 1e9f) continue;
             float d = sqrtf(dists[k]);
             if (d < 1e-6f) {
-                u = known_muv[idx[k]][0];
-                v = known_muv[idx[k]][1];
-                exact = true;
+                au = ctrl_auv[idx[k]][0];
+                av = ctrl_auv[idx[k]][1];
+                wsum = 1.f;
                 break;
             }
             float w = 1.f / (d * d);
             wsum += w;
-            u += w * known_muv[idx[k]][0];
-            v += w * known_muv[idx[k]][1];
+            au += w * ctrl_auv[idx[k]][0];
+            av += w * ctrl_auv[idx[k]][1];
         }
-        if (!exact && wsum > 0.f) { u /= wsum; v /= wsum; }
-        s_arkit_uv_remap[i][0] = u;
-        s_arkit_uv_remap[i][1] = v;
+        if (wsum > 0.f) { au /= wsum; av /= wsum; }
+
+        // Nearest ARKit vertex in ARKit UV space.
+        float best = 1e30f;
+        int best_ai = 0;
+        for (int j = 0; j < ARKIT_NPTS; ++j) {
+            float du = obs.uvs[j][0] - au;
+            float dv = obs.uvs[j][1] - av;
+            float d = du * du + dv * dv;
+            if (d < best) { best = d; best_ai = j; }
+        }
+        s_mp_to_arkit[i] = best_ai;
     }
-    s_arkit_uv_remap_built = true;
-    std::memcpy(out, s_arkit_uv_remap, sizeof(s_arkit_uv_remap));
+    s_mp_to_arkit_built = true;
+
+    for (int i = 0; i < FACE_UV_NPTS; ++i) {
+        int ai = s_mp_to_arkit[i];
+        out[i][0] = obs.pts[ai][0];
+        out[i][1] = obs.pts[ai][1];
+    }
     return true;
 }
 
@@ -492,9 +528,8 @@ bool arkit_face_uv_remap(const ARKitFaceObs& obs, float out[ARKIT_NPTS][2]) {
 // (chin, cheeks, jaw, nose wings, face sides, brows) from the live mesh, then
 // calls face_filter_build_plan_look. The plan's mesh_pts are filled for the
 // beauty/warp passes (which use key landmarks), but the texture pass should
-// render the ARKit mesh directly via arkit_face_uv_remap — makeup PNGs are
-// authored for MediaPipe UV space, and the remap converts ARKit UVs to
-// MediaPipe UVs so the 1220-vert ARKit mesh can sample them correctly.
+// use arkit_face_mp_positions to get real ARKit screen positions for the
+// MediaPipe mesh (exact UVs for makeup PNGs, no IDW position interpolation).
 bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
                                        const ARKitFaceObs& obs, int w, int h,
                                        FaceRenderPlan& out) {
