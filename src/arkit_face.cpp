@@ -279,11 +279,13 @@ static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp) {
         }
     }
 }
-// Fill unmapped MediaPipe landmarks by barycentric interpolation from known
+// Fill unmapped MediaPipe landmarks by inverse-distance weighting from known
 // landmarks in canonical UV space. We have ~66 known correspondences (canonical
-// UV → live 2D). For each of the ~400 unmapped points, find the 3 closest known
-// landmarks in canonical UV space and interpolate the live position. This
-// produces a piecewise-affine warp from canonical face space to the live frame.
+// UV → live 2D). For each of the ~400 unmapped points, find the K closest known
+// landmarks and weight their live positions by 1/distance. Unlike barycentric
+// interpolation, IDW never extrapolates — it stays within the convex hull of
+// known points, avoiding the wild overshoots that occur when the 3 closest
+// points form a thin triangle that doesn't contain the target.
 static void interpolate_missing_landmarks(FaceObs& mp) {
     // Collect known landmarks: indices where pts is non-zero.
     float known_uv[FT_NPTS][2];
@@ -300,38 +302,60 @@ static void interpolate_missing_landmarks(FaceObs& mp) {
     }
     if (n_known < 3) return;  // not enough anchors to interpolate
 
+    // Use the K nearest known landmarks for IDW. K=8 gives smooth results
+    // without being dominated by a single neighbor.
+    constexpr int K = 8;
+    float w[K];
+    int idx[K];
+
     for (int i = 0; i < FACE_UV_NPTS; ++i) {
         if (mp.pts[i][0] != 0.f || mp.pts[i][1] != 0.f) continue;  // already known
         float u = k_face_uv[i][0], v = k_face_uv[i][1];
 
-        // Find the 3 closest known landmarks in canonical UV space.
-        float d0 = 1e9f, d1 = 1e9f, d2 = 1e9f;
-        int j0 = 0, j1 = 0, j2 = 0;
+        // Find the K closest known landmarks in canonical UV space.
+        // Simple selection: keep a running threshold (K is small).
+        float dists[K];
+        for (int k = 0; k < K; ++k) { dists[k] = 1e9f; idx[k] = 0; }
         for (int j = 0; j < n_known; ++j) {
             float du = known_uv[j][0] - u, dv = known_uv[j][1] - v;
             float d = du * du + dv * dv;
-            if (d < d0) { d2 = d1; j2 = j1; d1 = d0; j1 = j0; d0 = d; j0 = j; }
-            else if (d < d1) { d2 = d1; j2 = j1; d1 = d; j1 = j; }
-            else if (d < d2) { d2 = d; j2 = j; }
+            // Insert into the K-nearest list (replace the worst).
+            int worst = 0;
+            for (int k = 1; k < K; ++k) if (dists[k] > dists[worst]) worst = k;
+            if (d < dists[worst]) { dists[worst] = d; idx[worst] = j; }
         }
 
-        // Barycentric coordinates of (u,v) in triangle (j0, j1, j2).
-        float ax = known_uv[j1][0] - known_uv[j0][0], ay = known_uv[j1][1] - known_uv[j0][1];
-        float bx = known_uv[j2][0] - known_uv[j0][0], by = known_uv[j2][1] - known_uv[j0][1];
-        float px = u - known_uv[j0][0],            py = v - known_uv[j0][1];
-        float det = ax * by - ay * bx;
-        if (fabsf(det) < 1e-8f) {
-            // Degenerate triangle — fall back to nearest known point.
-            mp.pts[i][0] = known_px[j0][0];
-            mp.pts[i][1] = known_px[j0][1];
-            continue;
+        // Inverse-distance weighting (Shepard's method, power=2).
+        float wsum = 0.f;
+        float px = 0.f, py = 0.f;
+        for (int k = 0; k < K; ++k) {
+            if (dists[k] >= 1e9f) continue;
+            float d = sqrtf(dists[k]);
+            if (d < 1e-6f) {
+                // Exact match — use the known point directly.
+                px = known_px[idx[k]][0];
+                py = known_px[idx[k]][1];
+                wsum = 1.f;
+                break;
+            }
+            w[k] = 1.f / (d * d);
+            wsum += w[k];
         }
-        float w1 = (px * by - py * bx) / det;
-        float w2 = (ax * py - ay * px) / det;
-        float w0 = 1.f - w1 - w2;
-
-        mp.pts[i][0] = w0 * known_px[j0][0] + w1 * known_px[j1][0] + w2 * known_px[j2][0];
-        mp.pts[i][1] = w0 * known_px[j0][1] + w1 * known_px[j1][1] + w2 * known_px[j2][1];
+        if (wsum > 0.f) {
+            if (wsum == 1.f && px != 0.f) {
+                // Exact match already set.
+            } else {
+                px = 0.f; py = 0.f;
+                for (int k = 0; k < K; ++k) {
+                    if (dists[k] >= 1e9f) continue;
+                    float wk = (wsum > 0.f) ? w[k] / wsum : 0.f;
+                    px += wk * known_px[idx[k]][0];
+                    py += wk * known_px[idx[k]][1];
+                }
+            }
+        }
+        mp.pts[i][0] = px;
+        mp.pts[i][1] = py;
     }
 }
 
