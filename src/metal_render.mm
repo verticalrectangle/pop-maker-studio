@@ -2776,7 +2776,12 @@ int metal_render_frame(void* mtl_texture, int w, int h, double t, const AppState
     std::map<std::pair<int,int>, LayerFrame> layers;
     std::vector<CVMetalTextureRef> held;
     { std::lock_guard<std::mutex> lk(g_content_mu);
-      if (g_content && g_cw > 0 && g_ch > 0) { source = g_content; sw = g_cw; sh = g_ch; }
+      if (g_content && g_cw > 0 && g_ch > 0) {
+          source = g_content;
+          sw = g_cw;
+          sh = g_ch;
+          if (g_cvtex) held.push_back((CVMetalTextureRef)CFRetain(g_cvtex));
+      }
       if (g_matte_tex && g_matte_cvtex) {
           matte = g_matte_tex;
           held.push_back((CVMetalTextureRef)CFRetain(g_matte_cvtex));
