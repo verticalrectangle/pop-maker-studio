@@ -8,8 +8,8 @@ Fallback input: a .mat file containing 'TriangleIndices' (3x2304, 1-indexed)
 from a dumped ARSession (e.g. Jeon-apple_facestim_generation). In this case
 UVs are stubbed with zeros and a TODO is emitted.
 
-Also emits src/generated/arkit_landmark_map.h — semantic landmarks are set to 0
-and must be refined on a Mac with the real .obj or live ARFaceAnchor geometry.
+Semantic landmark correspondence now lives in gen_arkit_mp_map.py
+(arkit_mp_map.h), computed from canonical rest-pose meshes.
 """
 import os
 import sys
@@ -93,47 +93,6 @@ def write_mesh_header(npts, uv, tris, out_path):
     print("wrote", out_path)
 
 
-def write_landmark_map_header(out_path):
-    # Semantic landmarks cannot be derived from raw topology without inspection.
-    # The generated header uses placeholders; artists refine them on a Mac.
-    body = """// ARKit semantic landmark -> vertex index mapping.
-//
-// The constants below are stubs and must be refined by inspecting the canonical
-// ARKit face model (FaceMesh.obj) or a live ARFaceAnchor's geometry.vertices.
-// Run this script on a Mac after updating the .obj source, or edit manually.
-#pragma once
-
-static const int ARKIT_IRIS_L    = 0;
-static const int ARKIT_IRIS_R    = 0;
-static const int ARKIT_NOSE_TIP  = 0;
-static const int ARKIT_NOSE_L    = 0;
-static const int ARKIT_NOSE_R    = 0;
-static const int ARKIT_LIP_MID_L = 0;
-static const int ARKIT_LIP_MID_R = 0;
-static const int ARKIT_MOUTH_L   = 0;
-static const int ARKIT_MOUTH_R   = 0;
-static const int ARKIT_CHIN      = 0;
-static const int ARKIT_JAW_L     = 0;
-static const int ARKIT_JAW_R     = 0;
-static const int ARKIT_FOREHEAD  = 0;
-static const int ARKIT_FACE_L    = 0;
-static const int ARKIT_FACE_R    = 0;
-static const int ARKIT_CHEEK_L   = 0;
-static const int ARKIT_CHEEK_R   = 0;
-static const int ARKIT_EYE_OUT_L = 0;
-static const int ARKIT_EYE_OUT_R = 0;
-
-static const int ARKIT_LID_L[7]  = {0, 0, 0, 0, 0, 0, 0};
-static const int ARKIT_LID_R[7]  = {0, 0, 0, 0, 0, 0, 0};
-static const int ARKIT_LIP_RING[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-static const int ARKIT_JAW_CHAIN_L[5] = {0, 0, 0, 0, 0};
-static const int ARKIT_JAW_CHAIN_R[5] = {0, 0, 0, 0, 0};
-"""
-    with open(out_path, "w") as f:
-        f.write(body)
-    print("wrote", out_path)
-
-
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else "/Applications/Xcode.app/Contents/Developer/Library/ARKit/FaceMesh.obj"
     if src.endswith(".mat"):
@@ -142,7 +101,9 @@ def main():
         _, uv, tris = parse_obj(src)
         npts = len(uv)
     write_mesh_header(npts, uv, tris, os.path.join(out_dir, "arkit_face_mesh.h"))
-    write_landmark_map_header(os.path.join(out_dir, "arkit_landmark_map.h"))
+    # arkit_landmark_map.h is gone: the hand-typed semantic table had L/R
+    # inverted and is replaced by the exact offline correspondence from
+    # gen_arkit_mp_map.py (arkit_mp_map.h).
 
 
 if __name__ == "__main__":

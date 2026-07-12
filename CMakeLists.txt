@@ -213,6 +213,14 @@ add_executable(face-smoke tools/face_smoke.cpp)
 target_link_libraries(face-smoke PRIVATE pms-engine)
 target_include_directories(face-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 
+# arkit-map-smoke: regression gate for the static ARKit->MediaPipe
+# correspondence (tools/gen_arkit_mp_map.py). Projects the canonical ARKit
+# mesh into a synthetic frame and asserts anatomical landmark placement.
+# No models needed. Run: arkit-map-smoke tools/arkit_face_canonical.obj
+add_executable(arkit-map-smoke tools/arkit_map_smoke.cpp)
+target_link_libraries(arkit-map-smoke PRIVATE pms-engine)
+target_include_directories(arkit-map-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor ${CMAKE_SOURCE_DIR}/vendor/imgui)
+
 # metal-render-test: numeric offscreen assertions for the Metal scene
 # compositor + FX runner (the iOS render path) on a macOS host GPU. Drives the
 # real C ABI (pms_create/pms_command/pms_submit_layer_frame/pms_render) and

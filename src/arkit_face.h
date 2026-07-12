@@ -3,7 +3,6 @@
 // (pms_submit_arkit_face), the render backend (metal_render.mm), and the
 // ARKit-aware render plan builder (face_filters.cpp).
 #include "generated/arkit_face_mesh.h"  // ARKIT_NPTS, ARKIT_NTRI, k_arkit_*
-#include "generated/face_uv_mesh.h"    // FACE_UV_NPTS
 
 static constexpr int ARKIT_NBLEND = 52;
 static constexpr int ARKIT_MAX_FACES = 4;
@@ -35,7 +34,6 @@ bool arkit_face_available();
 // Clear the ARKit slot.
 void arkit_face_clear();
 
-// Get the cached ARKit→MediaPipe UV remap table (1220 entries). Returns null
-// until the first successful call to face_filter_build_plan_from_arkit, after
-// which it is constant for the ARKit topology lifetime.
+// Static ARKit→MediaPipe UV table (1220 entries, generated offline by
+// tools/gen_arkit_mp_map.py from the canonical rest-pose meshes). Never null.
 const float* arkit_mesh_remap_uv();
