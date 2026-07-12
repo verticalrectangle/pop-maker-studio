@@ -1,9 +1,11 @@
 #include "face_track.h"
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #include "paths.h"
 #include "video.h"
-
 #include <onnxruntime_cxx_api.h>
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -43,20 +45,45 @@ static bool ensure_sessions() {
     if (g_init_tried) return false;
     g_init_tried = true;
     if (!face_track_available()) return false;
+    auto try_load = [](Ort::SessionOptions& opts) {
+        g_det = std::make_unique<Ort::Session>(
+            ort_env(), (face_models_dir() + "/yunet.onnx").c_str(), opts);
+        g_lmk = std::make_unique<Ort::Session>(
+            ort_env(), (face_models_dir() + "/face_landmarks_v2.onnx").c_str(), opts);
+        g_bls = std::make_unique<Ort::Session>(
+            ort_env(), (face_models_dir() + "/face_blendshapes.onnx").c_str(), opts);
+    };
     try {
         Ort::SessionOptions o;
         o.SetIntraOpNumThreads(4);
-        o.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        g_det = std::make_unique<Ort::Session>(
-            ort_env(), (face_models_dir() + "/yunet.onnx").c_str(), o);
-        g_lmk = std::make_unique<Ort::Session>(
-            ort_env(), (face_models_dir() + "/face_landmarks_v2.onnx").c_str(), o);
-        g_bls = std::make_unique<Ort::Session>(
-            ort_env(), (face_models_dir() + "/face_blendshapes.onnx").c_str(), o);
+        // CoreML EP is only meaningful on iOS; macOS desktop Homebrew ORT
+        // may register the provider but fail to build a session, so we
+        // only attempt it on iOS and fall back to CPU on any failure.
+        #if defined(__APPLE__) && TARGET_OS_IPHONE
+        try {
+            o.AppendExecutionProvider("CoreML", {
+                {"ModelFormat", "MLProgram"},
+                {"MLComputeUnits", "ALL"}
+            });
+        } catch (...) {
+            // CoreML EP unavailable on this build; continue with CPU.
+        }
+        #endif
+        try_load(o);
         return true;
     } catch (...) {
         g_det.reset(); g_lmk.reset(); g_bls.reset();
-        return false;
+        // CPU fallback without any execution provider.
+        try {
+            Ort::SessionOptions o2;
+            o2.SetIntraOpNumThreads(4);
+            try_load(o2);
+            return true;
+        } catch (...) {
+            g_det.reset(); g_lmk.reset(); g_bls.reset();
+            g_init_tried = false;
+            return false;
+        }
     }
 }
 
@@ -324,13 +351,15 @@ static bool run_inference(const uint8_t* rgb, int w, int h, FaceObs& out) {
 // ── Worker (live path) ────────────────────────────────────────────────────────
 
 static std::mutex              g_work_mtx;
+static std::mutex              g_worker_lifecycle_mtx;
 static std::condition_variable g_work_cv;
 static std::vector<uint8_t>    g_pending;        // latest submitted frame
 static int                     g_pend_w = 0, g_pend_h = 0;
 static bool                    g_pend_fresh = false;
+static double                  g_pend_host_time = 0.0;
 static std::atomic<bool>       g_worker_quit{false};
 static std::thread             g_worker;
-static bool                    g_worker_started = false;
+static std::atomic<bool>       g_sync_mode{false};
 
 static std::mutex g_latest_mtx;
 // Velocity-adaptive smoothing (One-Euro spirit): each landmark picks its own
@@ -338,7 +367,7 @@ static std::mutex g_latest_mtx;
 // points snap (no trailing makeup during speech or head turns). The old
 // global 0.65 EMA gated on NOSE velocity lagged the mouth by ~3 frames.
 static inline float adaptive_alpha(float speed_px, float frame_w) {
-    float a = 0.35f + (speed_px / frame_w) * 45.f;
+    float a = 0.55f + (speed_px / frame_w) * 45.f;
     return a > 1.f ? 1.f : a;
 }
 std::atomic<int>  g_dbg_flip180{0};      // worker debug state (IPC readout)
@@ -586,8 +615,8 @@ static bool track_step(FaceTrack& t, const std::vector<uint8_t>& frame,
         t.smooth.pts[k][1] += ddy * alpha;
         float vx = (t.smooth.pts[k][0] - px) / (float)dt;
         float vy = (t.smooth.pts[k][1] - py) / (float)dt;
-        t.vel[k][0] += (vx - t.vel[k][0]) * 0.5f;    // velocity EMA
-        t.vel[k][1] += (vy - t.vel[k][1]) * 0.5f;
+        t.vel[k][0] += (vx - t.vel[k][0]) * 0.75f;    // velocity EMA
+        t.vel[k][1] += (vy - t.vel[k][1]) * 0.75f;
     }
     if (obs.has_blend) {
         if (!t.smooth.has_blend) {
@@ -595,7 +624,7 @@ static bool track_step(FaceTrack& t, const std::vector<uint8_t>& frame,
         } else {
             for (int k = 0; k < FT_NBLEND; ++k) {
                 float db = obs.blend[k] - t.smooth.blend[k];
-                float ab = 0.4f + fabsf(db) * 6.f;
+                float ab = 0.6f + fabsf(db) * 6.f;
                 t.smooth.blend[k] += db * (ab > 1.f ? 1.f : ab);
             }
         }
@@ -646,7 +675,7 @@ static void worker_main() {
             std::unique_lock<std::mutex> lk(g_work_mtx);
             g_work_cv.wait(lk, [] { return g_pend_fresh || g_worker_quit.load(); });
             if (g_worker_quit.load()) return;
-            frame = g_pending;          // copy: keep last frame for debug dump
+            frame.swap(g_pending);          // swap: O(1) pointer exchange, no copy
             fw = g_pend_w; fh = g_pend_h;
             g_pend_fresh = false;
         }
@@ -759,18 +788,22 @@ static std::atomic<bool> g_face_feed{false};
 void face_feed_enable(bool on) { g_face_feed.store(on, std::memory_order_relaxed); }
 bool face_feed_enabled()       { return g_face_feed.load(std::memory_order_relaxed); }
 
-void face_track_submit(const uint8_t* rgb, int w, int h) {
+void face_track_submit(const uint8_t* rgb, int w, int h, double host_time) {
     if (!face_track_available() || w <= 0 || h <= 0) return;
-    if (!g_worker_started) {
-        g_worker_started = true;
-        g_worker = std::thread(worker_main);
-        g_worker.detach();
+    bool sync = g_sync_mode.load(std::memory_order_relaxed);
+    if (!sync) {
+        std::lock_guard<std::mutex> lifecycle_lock(g_worker_lifecycle_mtx);
+        if (!g_worker.joinable()) {
+            g_worker_quit.store(false, std::memory_order_relaxed);
+            g_worker = std::thread(worker_main);
+        }
     }
-    std::lock_guard<std::mutex> lk(g_work_mtx);
+    std::lock_guard<std::mutex> work_lock(g_work_mtx);
     g_pending.assign(rgb, rgb + (size_t)w * h * 3);
     g_pend_w = w; g_pend_h = h;
+    g_pend_host_time = host_time;
     g_pend_fresh = true;
-    g_work_cv.notify_one();
+    if (!sync) g_work_cv.notify_one();
 }
 
 // Read-time lag compensation: the worker's smoothed landmarks are
@@ -780,7 +813,7 @@ static void predict_obs(const FaceTrack& t, double now, FaceObs& out) {
     out = t.smooth;
     double age = now - t.t_frame;
     if (age < 0) age = 0;
-    if (age > 0.066) age = 0.066;
+    if (age > 0.033) age = 0.033;
     for (int k = 0; k < FT_NPTS; ++k) {
         out.pts[k][0] += t.vel[k][0] * (float)age;
         out.pts[k][1] += t.vel[k][1] * (float)age;
@@ -809,9 +842,71 @@ bool face_track_run_sync(const uint8_t* rgb, int w, int h, FaceObs& out) {
     return run_inference(rgb, w, h, out);
 }
 
+int face_track_run_sync_live() {
+    if (!face_track_available() || !g_sync_mode.load(std::memory_order_relaxed)) return 0;
+    std::vector<uint8_t> frame;
+    int fw = 0, fh = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_work_mtx);
+        if (!g_pend_fresh || g_pending.empty()) return 0;
+        frame.swap(g_pending);
+        fw = g_pend_w; fh = g_pend_h;
+        g_pend_fresh = false;
+    }
+    double now = steady_now();
+    int max_faces = g_max_faces.load(std::memory_order_relaxed);
+    FaceTrack local[FT_MAX_FACES];
+    {
+        std::lock_guard<std::mutex> lk(g_latest_mtx);
+        for (int i = 0; i < FT_MAX_FACES; ++i) local[i] = g_tracks[i];
+    }
+
+    int active = 0;
+    for (int i = 0; i < FT_MAX_FACES; ++i) {
+        FaceTrack& t = local[i];
+        if (!t.active) continue;
+        if (t.smooth.w != fw || t.smooth.h != fh) { t.active = false; continue; }
+        if (track_step(t, frame, fw, fh, false, now)) {
+            ++active;
+        } else {
+            t.smooth.score *= 0.7f;
+            if (++t.misses > 8 || t.smooth.score < 0.15f) t.active = false;
+        }
+    }
+
+    static int since_detect = 0;
+    if (active == 0 || (active < max_faces && since_detect > 6)) {
+        DetFace dets[FT_MAX_FACES * 2];
+        int nd = detect_faces(frame.data(), fw, fh, dets, max_faces * 2);
+        for (int d = 0; d < nd && active < max_faces; ++d) {
+            for (int i = 0; i < FT_MAX_FACES; ++i) {
+                if (local[i].active) continue;
+                if (track_seed(local[i], frame, fw, fh, false, dets[d], now)) {
+                    ++active;
+                    break;
+                }
+            }
+        }
+        since_detect = 0;
+    }
+    ++since_detect;
+    {
+        std::lock_guard<std::mutex> lk(g_latest_mtx);
+        for (int i = 0; i < FT_MAX_FACES; ++i) g_tracks[i] = local[i];
+    }
+    return active;
+}
+void face_track_set_sync_mode(bool on) {
+    g_sync_mode.store(on, std::memory_order_relaxed);
+}
+bool face_track_sync_enabled() { return g_sync_mode.load(std::memory_order_relaxed); }
+
 void face_track_shutdown() {
-    g_worker_quit.store(true);
+    std::lock_guard<std::mutex> lifecycle_lock(g_worker_lifecycle_mtx);
+    if (!g_worker.joinable()) return;
+    g_worker_quit.store(true, std::memory_order_relaxed);
     g_work_cv.notify_all();
+    g_worker.join();
 }
 
 // ── Offline take pass ─────────────────────────────────────────────────────────
@@ -948,7 +1043,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     std::string tmp = out_path + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
-    uint32_t magic = 0x46534D50, version = 8;   // v8: incumbent-margin roll arbitration   // 'PMSF'
+    uint32_t magic = 0x46534D50, version = 9;   // v9: CoreML EP + sync live mode
     int32_t  rq = rot_q, rw = W, rh = H;
     float    fps = (float)info.fps;
     uint32_t count = (uint32_t)n;

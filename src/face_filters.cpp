@@ -3,6 +3,7 @@
 #include "paths.h"
 #include "gl_compat.h"
 #include "stb_image.h"
+#include "generated/arkit_landmark_map.h"
 #include <cmath>
 #include <string>
 #include <map>
@@ -704,6 +705,8 @@ bool face_filter_build_plan_look(const BeautyLook& L, float amount,
         bp.desat     = L.desat     * amount;
         bp.chrome    = L.chrome    * amount;
         bp.scanlines = L.scanlines * amount;
+        bp.iris_tint = L.iris_tint * amount;
+        memcpy(bp.iris_col, L.iris_col, sizeof(bp.iris_col));
         bp.upx = a.up[0]; bp.upy = a.up[1];
         // Face ellipse: center midway eyes→chin, sized from chin↔forehead
         // (mesh 10) and the cheek span (234/454), with margin for the jawline.

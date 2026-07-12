@@ -106,6 +106,7 @@ set(PMS_ENGINE_SOURCES
     src/face_track.cpp
     src/face_cache.cpp
     src/face_filters.cpp
+    src/arkit_face.cpp
     src/recorder.cpp
     src/video_recorder.cpp
     src/av_sync.cpp
@@ -224,6 +225,12 @@ if(APPLE)
         "-framework QuartzCore" "-framework Foundation")
     target_include_directories(metal-render-test PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
     target_compile_options(metal-render-test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
+    add_executable(face-fx-smoke tools/face_fx_smoke.mm)
+    target_link_libraries(face-fx-smoke PRIVATE pms-engine
+        "-framework Metal" "-framework CoreVideo" "-framework IOSurface"
+        "-framework QuartzCore" "-framework Foundation")
+    target_include_directories(face-fx-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 endif()
 
 

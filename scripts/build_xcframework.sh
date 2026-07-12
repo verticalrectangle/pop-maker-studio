@@ -34,6 +34,11 @@ libtool -static -o build-ios/xcf/libpms-engine-full.a \
     "$TOOLS"/whisper-ios/lib/libggml-blas.a "$TOOLS"/whisper-ios/lib/libggml-metal.a \
     "$TOOLS"/whisper-ios/lib/libggml-base.a 2>/dev/null || true
 cp src/pms_engine.h build-ios/xcf/headers/
+# Sync the iOS Swift bridging header too (so project.yml HEADER_SEARCH_PATHS never drifts).
+PMS_IOS_DIR=$(dirname "$(dirname "$OUT")")
+if [ -d "$PMS_IOS_DIR/Engine/include" ]; then
+    cp src/pms_engine.h "$PMS_IOS_DIR/Engine/include/pms_engine.h"
+fi
 
 rm -rf "$OUT/pms_engine.xcframework"
 mkdir -p "$OUT"

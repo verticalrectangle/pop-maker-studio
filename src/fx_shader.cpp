@@ -813,6 +813,7 @@ uniform vec4 u_cheeks;   // cheekL xy, cheekR xy (px)
 uniform vec4 u_blushc;   // blush color rgb, _
 uniform vec4 u_lipc;     // lip color rgb, _
 uniform vec4 u_eyeglow;  // rgb, amount
+uniform vec4 u_iris;
 uniform vec4 u_cyber;    // skin_tint, desat, chrome, scanlines
 uniform vec4 u_tintc;    // skin tint color rgb, _
 uniform vec4 u_mouthax;  // lip ellipse semi-width, semi-height (px), _, _
@@ -1165,6 +1166,21 @@ void main() {
         float gR = 1.0 - smoothstep(er * 0.3, er * 1.6, distance(p, u_eyes.zw));
         col += u_eyeglow.rgb * (u_eyeglow.a * 0.55 * max(gL, gR));
     }
+    if (u_iris.a > 0.001) {
+        float iL = 1.0 - smoothstep(er * 0.10, er * 0.38, distance(p, u_eyes.xy));
+        float iR = 1.0 - smoothstep(er * 0.10, er * 0.38, distance(p, u_eyes.zw));
+        float iris_mask = max(iL, iR);
+        float bfade_iris = 1.0 - 0.9 * max(
+            smoothstep(0.25, 0.55, u_blink.x),
+            smoothstep(0.25, 0.55, u_blink.y));
+        float lum_i = lum(col);
+        float iris_sel = iris_mask * bfade_iris
+          * (1.0 - smoothstep(0.55, 0.75, lum_i))
+          * smoothstep(0.08, 0.20, lum_i);
+        vec3 target_i = u_iris.rgb;
+        vec3 tinted_i = mix(col, target_i * (lum_i / max(lum(target_i), 0.15)), 0.78);
+        col = mix(col, tinted_i, iris_sel * u_iris.a);
+    }
     frag = vec4(clamp(col, 0.0, 1.0), texture(u_tex, v_uv).a);
 }
 )";
@@ -1388,6 +1404,8 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_blushc"), p.blush_col[0], p.blush_col[1], p.blush_col[2], 0.f);
     glUniform4f(u("u_lipc"), p.lip_col[0], p.lip_col[1], p.lip_col[2], 0.f);
     glUniform4f(u("u_eyeglow"), p.eye_glow_col[0], p.eye_glow_col[1], p.eye_glow_col[2], p.eye_glow);
+    glUniform4f(glGetUniformLocation(g_face_beauty_prog, "u_iris"),
+                p.iris_col[0], p.iris_col[1], p.iris_col[2], p.iris_tint);
     glUniform4f(u("u_cyber"), p.skin_tint, p.desat, p.chrome, p.scanlines);
     glUniform4f(u("u_tintc"), p.tint_col[0], p.tint_col[1], p.tint_col[2], 0.f);
     glUniform4f(u("u_mouthax"), p.mouth_sw, p.mouth_sh, 0.f, 0.f);

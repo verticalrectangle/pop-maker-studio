@@ -5,6 +5,7 @@
 #include "face_track.h"
 #include "fx_shader.h"
 #include <imgui.h>
+#include "arkit_face.h"
 #include <functional>
 
 struct FaceWarpBump {
@@ -60,6 +61,7 @@ struct BeautyLook {
     float eye_glow = 0; float eye_glow_col[3] = {0.2f, 0.9f, 1.f};
     float skin_tint = 0; float tint_col[3] = {0.7f, 0.8f, 1.f};
     float desat = 0, chrome = 0, scanlines = 0;
+    float iris_tint = 0; float iris_col[3] = {0.3f, 0.5f, 0.8f};
 };
 bool beauty_look_for(int filter_id, BeautyLook& L);
 
@@ -87,6 +89,24 @@ struct FaceRenderPlan {
     FaceWarpBump bumps[MAX_FACE_BUMPS];
     int   n_bumps = 0;
 };
+// ARKit render plan — same fields as FaceRenderPlan, but with the 1220-pt
+// ARKit mesh and the ARKit UV/canonical topology.
+struct ARKitFaceRenderPlan {
+    bool  valid = false;
+    bool  has_beauty = false;
+    FaceBeautyParams beauty;
+    const char* makeup_tex = nullptr;   // models/face PNG, null = none
+    float makeup_opacity = 0.f;
+    float makeup_adapt   = 1.f;
+    float mesh_pts[ARKIT_NPTS][2];      // ARKit vertex 2D positions
+    float uvs[ARKIT_NPTS][2];           // ARKit textureCoordinates
+    bool  has_uvs = false;              // false → skip mesh pass (no UV data)
+    FaceWarpBump bumps[MAX_FACE_BUMPS];
+    int   n_bumps = 0;
+};
+bool face_filter_build_plan_arkit(const BeautyLook& L, float amount,
+                                  const ARKitFaceObs& obs, int w, int h,
+                                  ARKitFaceRenderPlan& out);
 bool face_filter_build_plan(int filter_id, float amount, const FaceObs& obs,
                             int w, int h, FaceRenderPlan& out);
 // Plan for a parametric look (Makeup Studio path — bypasses the enum).

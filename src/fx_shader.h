@@ -54,6 +54,7 @@ struct FaceBeautyParams {
     float desat     = 0.f;  // 0..1 desaturate skin
     float chrome    = 0.f;  // 0..1 metallic contrast curve on skin
     float scanlines = 0.f;  // 0..1 holo scanlines on skin
+    float iris_tint = 0.f; float iris_col[3] = {0.3f, 0.5f, 0.8f};
     // mask geometry (pixels)
     float face_cx = 0, face_cy = 0;     // face ellipse center
     float face_rx = 1, face_ry = 1;     // semi-axes along right/up basis

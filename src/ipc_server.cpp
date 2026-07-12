@@ -2348,10 +2348,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
 
     if (method == "face_track_enable") {    // camera side-feed to the face worker
         bool on = params.value("on", true);
+        bool sync = params.value("sync", false);
+        face_track_set_sync_mode(sync);
         face_feed_enable(on);
         if (params.contains("max_faces"))
             face_track_set_max_faces(params.value("max_faces", 2));
-        return json{{"ok", true}, {"on", on},
+        return json{{"ok", true}, {"on", on}, {"sync", sync},
                     {"models_present", face_track_available()}};
     }
 

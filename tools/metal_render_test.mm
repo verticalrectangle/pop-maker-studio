@@ -218,6 +218,14 @@ static int max_region_diff(const Img& a, const Img& b, PxRect r) {
     return d;
 }
 
+static uint8_t min_alpha(const Img& im, PxRect r = kFull) {
+    uint8_t min_a = 255;
+    for (int y = r.y0; y < r.y1; ++y)
+        for (int x = r.x0; x < r.x1; ++x)
+            min_a = std::min(min_a, at(im, x, y)[3]);
+    return min_a;
+}
+
 // Average BGR over a rect.
 static void avg_bgr(const Img& im, PxRect r, double out[3]) {
     double s[3] = {0, 0, 0}; long n = 0;
@@ -736,6 +744,9 @@ static void case_chroma_matte_key(CVPixelBufferRef red, CVPixelBufferRef blue) {
           std::to_string(dl) + ") — matte key not respected");
     check(dr > 0.05, C, "background half (matte=0) shows no ghost (diff frac=" +
           std::to_string(dr) + ") — matte-keyed feedback dead");
+    check(min_alpha(out) == 255, C,
+          "filtered camera output is translucent (minimum alpha=" +
+          std::to_string(min_alpha(out)) + ")");
     pms_submit_camera_frame(g_e, NULL, 0, 0);
     pms_submit_person_matte(g_e, NULL, 0);
     CVPixelBufferRelease(matte);
@@ -869,7 +880,9 @@ int main() {
 
         g_dev = MTLCreateSystemDefaultDevice();
         if (!g_dev) { fprintf(stderr, "metal render test: FAIL [setup] no Metal device\n"); return 2; }
-        g_e = pms_create((__bridge void*)g_dev, "", "/tmp/pms-metal-render-test");
+        const char* asset_root = getenv("PMS_ASSET_ROOT");
+        if (!asset_root) asset_root = "";
+        g_e = pms_create((__bridge void*)g_dev, asset_root, "/tmp/pms-metal-render-test");
         if (!g_e) { fprintf(stderr, "metal render test: FAIL [setup] pms_create failed\n"); return 2; }
 
         json dbg = fx_debug("setup");

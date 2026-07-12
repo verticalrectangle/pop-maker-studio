@@ -53,9 +53,8 @@ std::shared_ptr<CacheData> load_file(const std::string& take_path, int rot_q) {
                fread(&rq, 4, 1, f) == 1 && fread(&fps, 4, 1, f) == 1 &&
                fread(&rw, 4, 1, f) == 1 && fread(&rh, 4, 1, f) == 1 &&
                fread(&count, 4, 1, f) == 1;
-    // v3 = mesh + blendshapes; older caches (106-pt) are silently invalid and
-    // rebuild on the next request.
-    if (!hdr || magic != 0x46534D50 || version != 8 || rq != rot_q ||
+    // v9 = CoreML EP + sync live mode; older caches are rebuilt.
+    if (!hdr || magic != 0x46534D50 || version != 9 || rq != rot_q ||
         count == 0 || count > 1000000 || fps <= 0.f) {
         fclose(f);
         return nullptr;
