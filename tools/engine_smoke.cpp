@@ -416,6 +416,32 @@ int main() {
     expect((int)cmd(e, "get_clips", {{"track_name", "T"}}).size() == 3,
            "abort_batch must roll back the mid-batch add_clip");
 
+    // ── ScratchFilm clip_style round-trip + Wave 2 serialization fix ────────
+    {
+        // The text clip on track 1, clip 0 already exists from the setup above.
+        cmd(e, "set_clip_prop", {{"track", 1}, {"clip", 0},
+                                 {"prop", "clip_style"}, {"value", "scratch"}});
+        json p = cmd(e, "get_project", {{"verbose", true}});
+        std::string got = p["tracks"][1]["clips"][0].value("clip_style", "");
+        expect(got == "scratch",
+               "clip_style should be 'scratch', got '" + got + "'");
+
+        // All styles must round-trip (pre-existing bug: Wave 2 styles
+        // serialized as "unknown" before the anim_style_str fix).
+        const char* styles[] = {"wave", "jitter", "explode", "gravity", "scratch",
+                                "fade", "glitch", "typewriter", "bounce", "scale",
+                                "slide", "stack", "block", "none"};
+        for (const char* s : styles) {
+            cmd(e, "set_clip_prop", {{"track", 1}, {"clip", 0},
+                                     {"prop", "clip_style"}, {"value", s}});
+            json pp = cmd(e, "get_project", {{"verbose", true}});
+            std::string g = pp["tracks"][1]["clips"][0].value("clip_style", "");
+            expect(g == s, "clip_style '" + std::string(s) +
+                           "' round-trip failed, got '" + g + "'");
+        }
+        printf("scratch IPC round-trip: PASS (all 14 styles serialize correctly)\n");
+    }
+
     // ── save → summary/recents → load into a SECOND engine ───────────────────
     std::string pms_path = std::string(k_root) + "/smoke.pms";
     cmd(e, "save_project", {{"path", pms_path}});
