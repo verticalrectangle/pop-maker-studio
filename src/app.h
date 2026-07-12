@@ -47,7 +47,8 @@ enum class AnimStyle {
     WaveText,   // continuous sine ripple across letters
     Jitter,     // continuous per-letter vibration
     Explode,    // elements fly in from random offsets (intro)
-    Gravity     // elements drop from above and bounce to the baseline (intro)
+    Gravity,    // elements drop from above and bounce to the baseline (intro)
+    ScratchFilm // per-frame scratch marks carved through each letter
 };
 
 // ── Background removal status ─────────────────────────────────────────────────

@@ -90,13 +90,6 @@ BlockAnim compute_block_anim(AnimStyle style, float local_t, float clip_dur,
     return a;
 }
 
-// Deterministic per-element pseudo-random in [0,1) — no global RNG so preview
-// and export (and every replay) agree frame-for-frame.
-static inline float hash01(int i, int salt) {
-    unsigned int x = (unsigned int)(i * 2654435761u) ^ (unsigned int)(salt * 40503u);
-    x ^= x >> 13; x *= 0x5bd1e995u; x ^= x >> 15;
-    return (x & 0xFFFFFFu) / (float)0x1000000u;
-}
 
 ElemAnim compute_elem_anim(AnimStyle style, float local_t, float clip_dur,
                            float fade_in, float fade_out, float w, int ease,
@@ -143,6 +136,17 @@ ElemAnim compute_elem_anim(AnimStyle style, float local_t, float clip_dur,
             float p   = ease_eval(EASE_OUT_BOUNCE, et / dur);
             a.dy    = (p - 1.f) * line_h * 3.f;   // starts 3 lines up, bounces to 0
             a.alpha = exit_mul;
+            break;
+        }
+        case AnimStyle::ScratchFilm: {
+            // Letters stay legible; per-frame scratch marks are drawn in
+            // render_text_block. Here we handle alpha (fade in/out) and a
+            // subtle per-frame position jitter for the "boiling" hand-scratched feel.
+            float intro = fade_in > 0.f ? ease_eval(EASE_OUT_CUBIC, local_t / fade_in) : 1.f;
+            int frame_i = (int)(local_t * 24.f);   // 24 fps scratch cadence
+            a.alpha = intro * exit_mul;
+            a.dx = (hash01(i, frame_i) - 0.5f) * line_h * 0.02f;
+            a.dy = (hash01(i, frame_i + 7) - 0.5f) * line_h * 0.02f;
             break;
         }
         default: {

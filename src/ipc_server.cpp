@@ -344,6 +344,7 @@ static AnimStyle parse_anim_style(const std::string& s) {
     if (s == "jitter")     return AnimStyle::Jitter;
     if (s == "explode")    return AnimStyle::Explode;
     if (s == "gravity")    return AnimStyle::Gravity;
+    if (s == "scratch")    return AnimStyle::ScratchFilm;
     return AnimStyle::None;
 }
 
@@ -447,16 +448,21 @@ static bool apply_effect_params(Clip& cl, const json& params,
 
 static std::string anim_style_str(AnimStyle s) {
     switch (s) {
-        case AnimStyle::None:       return "none";
-        case AnimStyle::Fade:       return "fade";
-        case AnimStyle::Glitch:     return "glitch";
-        case AnimStyle::Typewriter: return "typewriter";
-        case AnimStyle::Bounce:     return "bounce";
-        case AnimStyle::Scale:      return "scale";
-        case AnimStyle::Slide:      return "slide";
-        case AnimStyle::Stack:      return "stack";
-        case AnimStyle::Block:      return "block";
-        default:                    return "unknown";
+        case AnimStyle::None:        return "none";
+        case AnimStyle::Fade:        return "fade";
+        case AnimStyle::Glitch:      return "glitch";
+        case AnimStyle::Typewriter:  return "typewriter";
+        case AnimStyle::Bounce:      return "bounce";
+        case AnimStyle::Scale:       return "scale";
+        case AnimStyle::Slide:       return "slide";
+        case AnimStyle::Stack:       return "stack";
+        case AnimStyle::Block:       return "block";
+        case AnimStyle::WaveText:    return "wave";
+        case AnimStyle::Jitter:      return "jitter";
+        case AnimStyle::Explode:     return "explode";
+        case AnimStyle::Gravity:     return "gravity";
+        case AnimStyle::ScratchFilm: return "scratch";
+        default:                     return "unknown";
     }
 }
 

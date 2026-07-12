@@ -19,6 +19,13 @@ enum {
 // Evaluate easing curve `type` at t (clamped to [0,1]).
 float ease_eval(int type, float t);
 
+// Deterministic per-element/per-frame pseudo-random in [0,1). No global RNG
+// so preview and export agree frame-for-frame.
+static inline float hash01(int i, int salt) {
+    unsigned int x = (unsigned int)(i * 2654435761u) ^ (unsigned int)(salt * 40503u);
+    x ^= x >> 13; x *= 0x5bd1e995u; x ^= x >> 15;
+    return (x & 0xFFFFFFu) / (float)0x1000000u;
+}
 struct BlockAnim {
     float alpha = 1.f;
     float dx    = 0.f;

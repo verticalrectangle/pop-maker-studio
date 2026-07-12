@@ -696,6 +696,13 @@ static const TypographyPreset g_typo_presets[] = {
         .pause_gap=0.15f, .max_words=1, .ease=EASE_OUT_BACK,
         .grad_mode=1, .grad_col2={0.85f, 0.12f, 0.05f, 1.f},
         .ts={ .shadow_enabled=false, .glow_enabled=true, .glow_r=10.f, .glow_col={1.f,0.4f,0.1f,0.5f} } },
+    {   .id="scratch", .label="Scratch",
+        .tagline="Scratched-on-film · per-frame carve · raw analog energy",
+        .category="Retro", .font="archivoblack",
+        .grouping=SubtitleMode::Phrase,
+        .font_size=0.12f, .sub_pos=0,
+        .all_caps=true, .style=AnimStyle::ScratchFilm,
+        .tracking=0.02f, .anim_unit=2, .anim_stagger=0.f },
 };
 
 static const int g_n_typo_presets = (int)(sizeof(g_typo_presets) / sizeof(g_typo_presets[0]));

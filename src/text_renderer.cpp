@@ -161,7 +161,8 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
     // Per-element (per-word / per-letter) kinetic mode: each word or glyph runs
     // its own staggered motion. Requires an actual animation style and rules out
     // karaoke (which owns the per-word path) and the Block background style.
-    bool per_elem = clip->anim_unit != 0 && !has_karaoke &&
+    bool per_elem = (clip->anim_unit != 0 || ctx.eff_style == AnimStyle::ScratchFilm) &&
+                    !has_karaoke &&
                     ctx.eff_style != AnimStyle::None &&
                     ctx.eff_style != AnimStyle::Block;
 
@@ -285,6 +286,26 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
                 add_text_ring(dl, font, es, ex, ey, ts.stroke_w,
                               col_f4_alpha(ts.stroke_col, a), s.c_str());
             dl->AddText(font, es, {ex, ey}, col, s.c_str());
+            // ── Scratch-on-film overlay ───────────────────────────────
+            if (ctx.eff_style == AnimStyle::ScratchFilm) {
+                int frame_i = (int)(local_t * 24.f);
+                float gw = ws;          // letter glyph width
+                float gh = es * 1.2f;   // letter glyph height (approx)
+                dl->PushClipRect({ex, ey}, {ex + gw, ey + gh}, true);
+                int n_scratch = 3 + (int)(hash01(gi, frame_i + 99) * 4.f);
+                for (int si = 0; si < n_scratch; ++si) {
+                    float sy  = hash01(gi * 17 + si, frame_i) * gh;
+                    float sx0 = hash01(gi * 31 + si, frame_i + 13) * gw;
+                    float ang = (hash01(gi * 43 + si, frame_i + 27) - 0.5f) * 0.6f;
+                    float len = gw * (0.3f + hash01(gi * 53 + si, frame_i + 41) * 0.7f);
+                    float dx2 = cosf(ang) * len;
+                    float dy2 = sinf(ang) * len;
+                    ImU32 sc = IM_COL32(0, 0, 0, (unsigned)(200.f * a));
+                    dl->AddLine({ex + sx0, ey + sy},
+                                {ex + sx0 + dx2, ey + sy + dy2}, sc, 1.5f);
+                }
+                dl->PopClipRect();
+            }
         };
 
         int gi = 0;
