@@ -704,12 +704,12 @@ static const TypographyPreset g_typo_presets[] = {
         .all_caps=true, .style=AnimStyle::ScratchFilm,
         .tracking=0.02f, .anim_unit=2, .anim_stagger=0.f },
     {   .id="scratch-raw", .label="Scratch Raw",
-        .tagline="Letters MADE of scratches · stencil-masked · raw analog",
-        .category="Retro", .font="archivoblack",
+        .tagline="Scratchy font · per-frame boil · raw analog energy",
+        .category="Retro", .font="scratchl",
         .grouping=SubtitleMode::Phrase,
-        .font_size=0.12f, .sub_pos=0,
+        .font_size=0.14f, .sub_pos=0,
         .all_caps=true, .style=AnimStyle::ScratchRaw,
-        .tracking=0.02f, .anim_unit=2, .anim_stagger=0.f },
+        .tracking=0.0f, .anim_unit=2, .anim_stagger=0.f },
 };
 
 static const int g_n_typo_presets = (int)(sizeof(g_typo_presets) / sizeof(g_typo_presets[0]));
