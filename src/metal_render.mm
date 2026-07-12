@@ -811,6 +811,21 @@ vertex MkVOut face_mk_v(uint vid [[vertex_id]],
     o.pos = float4(o.srcuv.x * 2.0 - 1.0, 1.0 - o.srcuv.y * 2.0, 0.0, 1.0);
     return o;
 }
+// Debug landmark overlay: point sprites at the tracked/bridged landmarks.
+struct DbgVOut { float4 pos [[position]]; float ps [[point_size]]; float4 col [[flat]]; };
+vertex DbgVOut face_dbg_v(uint vid [[vertex_id]],
+                          device const float2* pts [[buffer(0)]],
+                          constant FaceMkUni& u [[buffer(1)]],
+                          constant float4& col [[buffer(2)]]) {
+    float2 p = pts[vid];
+    DbgVOut o;
+    o.pos = float4(p.x / u.dim[0] * 2.0 - 1.0, 1.0 - p.y / u.dim[1] * 2.0, 0.0, 1.0);
+    o.ps  = col.a > 0.99 ? 7.0 : 4.0;
+    o.col = float4(col.rgb, 1.0);
+    return o;
+}
+fragment float4 face_dbg_f(DbgVOut in [[stage_in]]) { return in.col; }
+
 fragment float4 face_mk_f(MkVOut in [[stage_in]], constant FaceMkUni& u [[buffer(0)]],
                           texture2d<float> mk  [[texture(0)]],
                           texture2d<float> srct [[texture(1)]]) {
@@ -1066,7 +1081,7 @@ static ChromaUniCPU chroma_uniforms(const LiveFx& fx, int pass, int w, int h) {
 }
 
 // ── Face FX (makeup looks — stateless passes over live FaceObs) ─────────────
-enum { kFaceWarp = 0, kFaceBeauty = 1, kFaceMesh = 2, kFacePsoCount = 3 };
+enum { kFaceWarp = 0, kFaceBeauty = 1, kFaceMesh = 2, kFaceDbg = 3, kFacePsoCount = 4 };
 static id<MTLRenderPipelineState> g_face_pso[kFacePsoCount] = { nil, nil, nil };
 static bool g_face_tried = false;
 
@@ -1267,6 +1282,8 @@ static id<MTLRenderPipelineState> get_face_pso(int which) {
                 make(kFaceBeauty, @"face_beauty_f", g_fs_v);
                 id<MTLFunction> mv = [lib newFunctionWithName:@"face_mk_v"];
                 if (mv) make(kFaceMesh, @"face_mk_f", mv);
+                id<MTLFunction> dv = [lib newFunctionWithName:@"face_dbg_v"];
+                if (dv) make(kFaceDbg, @"face_dbg_f", dv);
             }
         }
     }
@@ -1576,6 +1593,42 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     [e3 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
                     [e3 endEncoding];
                     cur = ping[dst]; dst ^= 1;
+                }
+                // 4. debug landmark overlay (face_overlay IPC toggle): green
+                //    dots at all 478 bridged/tracked landmarks, red at the
+                //    upper-lid chains — on-device alignment QA.
+                if (g_face_overlay) {
+                    id<MTLRenderPipelineState> dbg_pso = get_face_pso(kFaceDbg);
+                    if (dbg_pso) {
+                        FaceMkUniCPU du = {};
+                        du.dim[0] = (float)sw; du.dim[1] = (float)sh;
+                        static const int kChain[14] = {33, 161, 160, 159, 158,
+                            157, 133, 263, 388, 387, 386, 385, 384, 362};
+                        float chain_px[14][2];
+                        for (int k = 0; k < 14; ++k) {
+                            chain_px[k][0] = plan.mesh_pts[kChain[k]][0];
+                            chain_px[k][1] = plan.mesh_pts[kChain[k]][1];
+                        }
+                        float col_all[4]   = {0.1f, 1.f, 0.2f, 0.f};
+                        float col_chain[4] = {1.f, 0.15f, 0.1f, 1.f};
+                        MTLRenderPassDescriptor* rp4 = [MTLRenderPassDescriptor new];
+                        rp4.colorAttachments[0].texture     = cur;
+                        rp4.colorAttachments[0].loadAction  = MTLLoadActionLoad;
+                        rp4.colorAttachments[0].storeAction = MTLStoreActionStore;
+                        id<MTLRenderCommandEncoder> e4 = [cb renderCommandEncoderWithDescriptor:rp4];
+                        [e4 setRenderPipelineState:dbg_pso];
+                        [e4 setVertexBytes:&plan.mesh_pts[0][0]
+                                    length:sizeof(float) * FT_NPTS * 2 atIndex:0];
+                        [e4 setVertexBytes:&du length:sizeof(du) atIndex:1];
+                        [e4 setVertexBytes:col_all length:sizeof(col_all) atIndex:2];
+                        [e4 drawPrimitives:MTLPrimitiveTypePoint vertexStart:0
+                                vertexCount:FT_NPTS];
+                        [e4 setVertexBytes:chain_px length:sizeof(chain_px) atIndex:0];
+                        [e4 setVertexBytes:col_chain length:sizeof(col_chain) atIndex:2];
+                        [e4 drawPrimitives:MTLPrimitiveTypePoint vertexStart:0
+                                vertexCount:14];
+                        [e4 endEncoding];
+                    }
                 }
                 ++applied_faces;
             };

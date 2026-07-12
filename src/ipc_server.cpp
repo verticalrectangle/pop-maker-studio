@@ -6,6 +6,7 @@
 #include "recorder.h"
 #include "video_recorder.h"
 #include "face_track.h"
+#include "face_filters.h"
 #include "agent_harness.h"
 #include "render.h"
 #include "bg_presets.h"
@@ -2363,6 +2364,11 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             face_track_set_max_faces(params.value("max_faces", 2));
         return json{{"ok", true}, {"on", on}, {"sync", sync},
                     {"models_present", face_track_available()}};
+    }
+
+    if (method == "face_overlay") {     // debug landmark overlay toggle
+        g_face_overlay = params.value("on", false);
+        return json{{"ok", true}, {"on", g_face_overlay}};
     }
 
     if (method == "face_debug") {           // tracker status for the record UI / tests

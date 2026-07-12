@@ -135,6 +135,26 @@ int main(int argc, char** argv) {
         }
         expect(ev(159, 1) - mp[159][1] > 10.f && ev(386, 1) - mp[386][1] > 10.f,
                "upper lash follows the blinking lid");
+        // The mid-chain of the lash line must descend UNIFORMLY: mixed
+        // attachments (some points on ring pseudo-tris, some surface-snapped
+        // to different skin rows) made lash strokes drop chop-by-chop, one
+        // stroke at a time, on-device.
+        // (Total spread across the chain is legitimate — the deformation has
+        // a vertical gradient — but adjacent points must move ALIKE.)
+        {
+            const int chain[5] = {161, 160, 159, 158, 157};
+            float step_max = 0.f, prev = 0.f;
+            for (int k = 0; k < 5; ++k) {
+                float dy = ev(chain[k], 1) - mp[chain[k]][1];
+                if (k > 0) step_max = fmaxf(step_max, fabsf(dy - prev));
+                prev = dy;
+            }
+            char msg[80];
+            snprintf(msg, sizeof msg,
+                     "lash chain descends smoothly (max adjacent step %.1fpx)",
+                     step_max);
+            expect(step_max < 4.5f, msg);
+        }
     }
 
     // Everything on-frame and face-sized.

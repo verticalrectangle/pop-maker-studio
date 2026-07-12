@@ -80,6 +80,10 @@ int face_filter_bumps_look(const BeautyLook& L, float amount, const FaceObs& obs
 // by the desktop GL path (face_filter_apply_obs) and the iOS Metal runner
 // (metal_render.mm face_fx branch). `w/h` = the target texture size; obs
 // landmarks are rescaled from observation space exactly like apply_obs.
+// Debug: render the tracked/bridged 478 landmarks over the frame (toggled
+// via the "face_overlay" IPC command) — on-device alignment QA.
+extern bool g_face_overlay;
+
 struct FaceRenderPlan {
     bool  valid = false;
     bool  has_beauty = false;

@@ -637,6 +637,8 @@ void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
 // Assemble the platform-neutral render plan (see face_filters.h). This is
 // the exact parameter assembly face_filter_apply_obs used inline — moved out
 // so the iOS Metal runner shares it with the desktop GL path.
+bool g_face_overlay = false;
+
 bool face_filter_build_plan_look(const BeautyLook& L, float amount,
                                  const FaceObs& obs, int w, int h,
                                  FaceRenderPlan& out) {
@@ -754,14 +756,16 @@ bool face_filter_build_plan_look(const BeautyLook& L, float amount,
         out.has_beauty = true;
         // UV-mapped makeup texture: pre-warp so shape changes deform the
         // pigment with the skin. Landmarks rescaled to texture space.
+        // mesh_pts always filled: the makeup mesh pass needs them with an
+        // atlas, the face_overlay debug pass needs them regardless.
+        for (int i = 0; i < FT_NPTS; ++i) {
+            out.mesh_pts[i][0] = PX(obs.pts[i][0]);
+            out.mesh_pts[i][1] = PY(obs.pts[i][1]);
+        }
         if (L.makeup_tex) {
             out.makeup_tex     = L.makeup_tex;
             out.makeup_opacity = amount;
             out.makeup_adapt   = L.makeup_adapt;
-            for (int i = 0; i < FT_NPTS; ++i) {
-                out.mesh_pts[i][0] = PX(obs.pts[i][0]);
-                out.mesh_pts[i][1] = PY(obs.pts[i][1]);
-            }
         }
     }
     out.n_bumps = face_filter_bumps_look(L, amount, obs, out.bumps);

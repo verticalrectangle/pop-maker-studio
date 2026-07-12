@@ -515,16 +515,24 @@ def main():
             w0, w1, w2 = bary2d(p, ak_v[c0], ak_v[c1], ak_v[top])
             rows.append((c0, c1, top, w0, w1, w2))
             continue
+        # The full lid complexes ALWAYS use the arc pseudo-triangle path,
+        # in-hole or not: the upper lash line sits just ABOVE the hole top in
+        # the neutral pose, so surface-snapping put alternating chain points
+        # on different skin rows with different blink gains — on-device the
+        # lash strokes descended chop-by-chop, one stroke at a time. One
+        # consistent attachment makes blink gain vary smoothly along the arc.
         hole = in_hole(p)
-        if hole is not None:
-            if i in MP_LOWER_COMPLEX:
-                low = True
-            elif i in MP_UPPER_COMPLEX:
-                low = False
-            else:
-                low = p[1] <= hole[3]
-                print(f"  WARN mp {i}: in-hole but in neither lid complex; "
-                      f"geometric arc fallback (low={low})")
+        low = None
+        if i in MP_LOWER_COMPLEX or i in MP_UPPER_COMPLEX:
+            low = i in MP_LOWER_COMPLEX
+            if hole is None:   # complex point outside the hole: nearest hole
+                hole = min(eye_holes,
+                           key=lambda h2: ((p[:2] - h2[2][:2]) ** 2).sum())
+        elif hole is not None:
+            low = p[1] <= hole[3]
+            print(f"  WARN mp {i}: in-hole but in neither lid complex; "
+                  f"geometric arc fallback (low={low})")
+        if low is not None:
             i0, i1, i2 = hole_pseudo_tri(p, hole, low)
             w0, w1, w2 = bary2d(p, ak_v[i0], ak_v[i1], ak_v[i2])
             assert max(abs(w0), abs(w1), abs(w2)) < 2.0, \
