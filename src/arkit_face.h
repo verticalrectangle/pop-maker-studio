@@ -33,7 +33,3 @@ bool arkit_face_available();
 
 // Clear the ARKit slot.
 void arkit_face_clear();
-
-// Static ARKit→MediaPipe UV table (1220 entries, generated offline by
-// tools/gen_arkit_mp_map.py from the canonical rest-pose meshes). Never null.
-const float* arkit_mesh_remap_uv();

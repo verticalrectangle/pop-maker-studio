@@ -48,17 +48,16 @@ void arkit_face_clear() {
     g_arkit_slot.n_faces = 0;
 }
 
-const float* arkit_mesh_remap_uv() { return &k_arkit_mp_uv[0][0]; }
-
 // Build a MediaPipe-format FaceRenderPlan from an ARKit observation.
 //
 // All 478 MediaPipe landmark positions are evaluated EXACTLY from the
 // projected ARKit mesh via k_mp_from_arkit — static barycentric weights
 // computed offline from the two canonical rest-pose meshes
 // (tools/gen_arkit_mp_map.py). L/R is anatomical on both sides of the
-// correspondence, so it is independent of preview mirroring; the makeup
-// mesh pass renders the 1220-vert ARKit mesh directly with k_arkit_mp_uv
-// (MediaPipe-atlas UVs per ARKit vertex).
+// correspondence, so it is independent of preview mirroring. Downstream
+// rendering is pure MediaPipe topology (hole-free — ARKit's oversized eye
+// cutouts would leave the under-eye concealer zone unpainted);
+// has_arkit_mesh only marks the plan as latency-free for the blink fade.
 bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
                                        const ARKitFaceObs& obs, int w, int h,
                                        FaceRenderPlan& out) {

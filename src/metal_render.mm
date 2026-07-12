@@ -1410,13 +1410,11 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
             float famt = 1.f;
             { auto p = fx.params.find("face_amount"); if (p != fx.params.end()) famt = p->second; }
             int applied_faces = 0;
-            // Generic render application for either MediaPipe or ARKit topology.
-            // pts_override: when non-null, uses these positions (flat [npts][2])
-            // for the mesh pass instead of plan.mesh_pts — used by the ARKit
-            // path to render the 1220-vert ARKit mesh directly (all real
-            // positions) instead of the 468-vert MediaPipe mesh (85% IDW).
+            // Generic render application over the MediaPipe topology
+            // (positions in plan.mesh_pts — from the tracker directly, or
+            // evaluated from the ARKit mesh via the barycentric bridge).
             auto apply_plan = [&](auto& plan, const float* uv, const unsigned short* tris,
-                                  int npts, int ntri, const float* pts_override = nullptr) {
+                                  int npts, int ntri) {
                 // 1. beauty (skin + procedural makeup) — fullscreen.
                 if (plan.has_beauty) {
                     MTLRenderPassDescriptor* rp1 = [MTLRenderPassDescriptor new];
@@ -1432,9 +1430,8 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     [e1 endEncoding];
                     cur = ping[dst]; dst ^= 1;
                 }
-                // 2. UV-mapped makeup texture over the tracked mesh.
-                //    ARKit path passes remapped MediaPipe UVs; MediaPipe path
-                //    passes canonical UVs. Skipped when plan has no makeup_tex.
+                // 2. UV-mapped makeup texture over the tracked mesh
+                //    (canonical MediaPipe UVs). Skipped without makeup_tex.
                 id<MTLTexture> mk = (uv && plan.makeup_tex) ? face_makeup_texture(plan.makeup_tex) : nil;
                 if (mk) {
                     id<MTLTexture> target = ping[dst];
@@ -1445,16 +1442,16 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                               toTexture:target destinationSlice:0
                        destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
                     [bl endEncoding];
-                    static float vtx[ARKIT_NPTS * 4];
-                    const float* px = pts_override ? pts_override : &plan.mesh_pts[0][0];
+                    static float vtx[FACE_UV_NPTS * 4];
+                    const float* px = &plan.mesh_pts[0][0];
                     for (int k = 0; k < npts; ++k) {
                         vtx[k*4+0] = px[k*2+0];
                         vtx[k*4+1] = px[k*2+1];
                         vtx[k*4+2] = uv[k*2+0];
                         vtx[k*4+3] = uv[k*2+1];
                     }
-                    static unsigned short live_tris[ARKIT_NTRI * 3];
-                    static float sa[ARKIT_NTRI];
+                    static unsigned short live_tris[FACE_UV_NTRI * 3];
+                    static float sa[FACE_UV_NTRI];
                     int n_live = 0, n_pos = 0;
                     for (int t2 = 0; t2 < ntri; ++t2) {
                         const unsigned short* tr = tris + t2 * 3;
@@ -1538,30 +1535,19 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                 ++applied_faces;
             };
             if (n_arkit > 0) {
+                // Render the MediaPipe topology positioned by the exact
+                // ARKit→MP barycentric bridge (plan.mesh_pts) — NOT the raw
+                // ARKit mesh: ARKit's eye cutouts extend ~5mm below the
+                // lower lash line, so drawing it directly leaves an unpainted
+                // strip exactly where plates put under-eye concealer. The
+                // hole-free MP mesh covers it and plate alpha keeps the
+                // eyeball clean, identical to the MediaPipe path's render.
                 for (int fi = 0; fi < n_arkit; ++fi) {
                     FaceRenderPlan plan;
                     if (!face_filter_build_plan_from_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
                         continue;
-                    if (plan.has_arkit_mesh) {
-                        // ARKit mesh path: 1220 real positions + remapped UVs
-                        // + 2304 real triangles. Scale obs.pts from observation
-                        // space to texture space (sw×sh), same as PX/PY does
-                        // for the MediaPipe path.
-                        const ARKitFaceObs& ao = arkit_faces[fi];
-                        float sx = (ao.w > 0) ? (float)sw / (float)ao.w : 1.f;
-                        float sy = (ao.h > 0) ? (float)sh / (float)ao.h : 1.f;
-                        static float scaled_pts[ARKIT_NPTS * 2];
-                        for (int k = 0; k < ARKIT_NPTS; ++k) {
-                            scaled_pts[k * 2 + 0] = ao.pts[k][0] * sx;
-                            scaled_pts[k * 2 + 1] = ao.pts[k][1] * sy;
-                        }
-                        const float* remap = arkit_mesh_remap_uv();
-                        apply_plan(plan, remap, &k_arkit_tris[0][0],
-                                   ARKIT_NPTS, ARKIT_NTRI, scaled_pts);
-                    } else {
-                        apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
-                                   FACE_UV_NPTS, FACE_UV_NTRI);
-                    }
+                    apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0],
+                               FACE_UV_NPTS, FACE_UV_NTRI);
                 }
             } else {
                 for (int fi = 0; fi < n_faces; ++fi) {
