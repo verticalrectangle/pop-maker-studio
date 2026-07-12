@@ -92,13 +92,12 @@ static inline ImU32 lerp_rgb_keepa(ImU32 c1rgb, ImU32 c2rgb, float t, unsigned a
     return IM_COL32(r, g, b, a);
 }
 
-// ── ScratchRaw: render a glyph as hand-scratched lines ──────────────────────
+// ── ScratchRaw: render a glyph as hand-scratched hatch lines ──────────────────────
 // Samples the font atlas to determine glyph coverage, then draws parallel
 // hatch lines (vertical by default, horizontal for wide glyphs) only where
-// the glyph has alpha. At each coverage transition (edge), draws a short
-// perpendicular scratch mark to emphasize the outline. All strokes use
-// rough, variable parameters (thickness, jitter, occasional gaps) that
-// re-randomize per frame at 24fps for the "boiling" hand-scratched feel.
+// the glyph has alpha. Strokes use rough, variable parameters (thickness,
+// jitter, occasional gaps) that re-randomize per frame at 24fps for the
+// "boiling" hand-scratched feel. Sparse spacing keeps letters legible.
 static float glyph_coverage_at(ImTextureData* tex, int x, int y, int bpp) {
     if (x < 0 || y < 0 || x >= tex->Width || y >= tex->Height) return 0.f;
     unsigned char* px = (unsigned char*)tex->GetPixelsAt(x, y);
@@ -147,45 +146,29 @@ static void draw_scratch_glyph(ImDrawList* dl, ImFont* font, float es,
     bool horizontal = (float)gw > (float)gh * 1.3f;
 
     const float thresh = 0.2f;
-    const int spacing = 2;       // atlas px between hatch lines
+    const int spacing = 5;       // atlas px between hatch lines (sparse for legibility)
     ImU32 sc = (base_rgb & 0x00FFFFFF) | ((unsigned)(alpha * 255) << 24);
 
-    // ── Interior hatch + outline emphasis ────────────────────────────────
+    // ── Interior hatch ───────────────────────────────────────────────────
     // Walk parallel lines through the glyph. For each line, find covered
-    // segments and draw them with rough strokes. At each transition
-    // (coverage starts/ends), draw a short perpendicular scratch mark to
-    // emphasize the outline.
+    // segments and draw them with rough strokes. Sparse spacing + thin
+    // lines keep letters readable; jitter + gaps add the hand-scratched feel.
     if (horizontal) {
         for (int y = 0; y < gh; y += spacing) {
             int segStart = -1;
             for (int x = 0; x <= gw; ++x) {
                 float c = (x < gw) ? glyph_coverage_at(tex, gx0 + x, gy0 + y, bpp) : 0.f;
                 if (c > thresh) {
-                    if (segStart < 0) {
-                        segStart = x;
-                        // Outline mark at start of segment (top/bottom edge)
-                        int ei = y / spacing;
-                        float mk = 2.f + hash01(gi * 71 + ei, frame_i + 7) * 3.f;
-                        float mt = 1.f + hash01(gi * 97 + ei, frame_i + 31) * 1.5f;
-                        dl->AddLine({rx0 + x * sx, ry0 + y * sy - mk * sy},
-                                    {rx0 + x * sx, ry0 + y * sy + mk * sy}, sc, mt);
-                    }
+                    if (segStart < 0) segStart = x;
                 } else {
                     if (segStart >= 0) {
                         int si = y / spacing;
-                        // Occasional gap — skip ~8% of segments
                         if (hash01(gi * 17 + si, frame_i) > 0.08f) {
-                            float thick = 1.5f + hash01(gi * 31 + si, frame_i + 13) * 2.5f;
+                            float thick = 1.f + hash01(gi * 31 + si, frame_i + 13) * 1.f;
                             float jy = (hash01(gi * 43 + si, frame_i + 27) - 0.5f) * 2.f;
                             dl->AddLine({rx0 + segStart * sx, ry0 + y * sy + jy},
                                         {rx0 + (x - 1) * sx, ry0 + y * sy + jy}, sc, thick);
                         }
-                        // Outline mark at end of segment
-                        int ei = y / spacing;
-                        float mk = 2.f + hash01(gi * 83 + ei, frame_i + 19) * 3.f;
-                        float mt = 1.f + hash01(gi * 113 + ei, frame_i + 43) * 1.5f;
-                        dl->AddLine({rx0 + (x - 1) * sx, ry0 + y * sy - mk * sy},
-                                    {rx0 + (x - 1) * sx, ry0 + y * sy + mk * sy}, sc, mt);
                         segStart = -1;
                     }
                 }
@@ -197,30 +180,16 @@ static void draw_scratch_glyph(ImDrawList* dl, ImFont* font, float es,
             for (int y = 0; y <= gh; ++y) {
                 float c = (y < gh) ? glyph_coverage_at(tex, gx0 + x, gy0 + y, bpp) : 0.f;
                 if (c > thresh) {
-                    if (segStart < 0) {
-                        segStart = y;
-                        // Outline mark at start of segment (left/right edge)
-                        int ei = x / spacing;
-                        float mk = 2.f + hash01(gi * 71 + ei, frame_i + 7) * 3.f;
-                        float mt = 1.f + hash01(gi * 97 + ei, frame_i + 31) * 1.5f;
-                        dl->AddLine({rx0 + x * sx - mk * sx, ry0 + y * sy},
-                                    {rx0 + x * sx + mk * sx, ry0 + y * sy}, sc, mt);
-                    }
+                    if (segStart < 0) segStart = y;
                 } else {
                     if (segStart >= 0) {
                         int si = x / spacing;
                         if (hash01(gi * 17 + si, frame_i) > 0.08f) {
-                            float thick = 1.5f + hash01(gi * 31 + si, frame_i + 13) * 2.5f;
+                            float thick = 1.f + hash01(gi * 31 + si, frame_i + 13) * 1.f;
                             float jx = (hash01(gi * 43 + si, frame_i + 27) - 0.5f) * 2.f;
                             dl->AddLine({rx0 + x * sx + jx, ry0 + segStart * sy},
                                         {rx0 + x * sx + jx, ry0 + (y - 1) * sy}, sc, thick);
                         }
-                        // Outline mark at end of segment
-                        int ei = x / spacing;
-                        float mk = 2.f + hash01(gi * 83 + ei, frame_i + 19) * 3.f;
-                        float mt = 1.f + hash01(gi * 113 + ei, frame_i + 43) * 1.5f;
-                        dl->AddLine({rx0 + (x - 1) * sx - mk * sx, ry0 + (y - 1) * sy},
-                                    {rx0 + (x - 1) * sx + mk * sx, ry0 + (y - 1) * sy}, sc, mt);
                         segStart = -1;
                     }
                 }

@@ -150,13 +150,11 @@ ElemAnim compute_elem_anim(AnimStyle style, float local_t, float clip_dur,
             break;
         }
         case AnimStyle::ScratchRaw: {
-            // Per-letter staggered pop: each letter snaps on at its stagger
-            // time. No position jitter — the scratch rendering itself (rough
-            // variable strokes re-randomized at 24fps) is the animation.
-            if (et < 0.f) { a.alpha = 0.f; break; }
-            // Very brief pop-in (0.06s) so letters arrive punchy, not floaty
-            float pop = fminf(1.f, et / 0.06f);
-            a.alpha = pop * exit_mul;
+            // Hard cut: letter snaps on instantly at its stagger time, stays
+            // at full alpha, hard-cuts off at clip end. No fade, no jitter —
+            // the scratch rendering itself (rough strokes re-randomized at
+            // 24fps) is the animation.
+            a.alpha = (et < 0.f) ? 0.f : 1.f;
             break;
         }
         default: {
