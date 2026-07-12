@@ -78,6 +78,20 @@ int main(int argc, char** argv) {
     // Irises sit inside their eye corner spans.
     expect(mp[33][0] < mp[468][0] && mp[468][0] < mp[133][0], "right iris within eye corners");
     expect(mp[362][0] < mp[473][0] && mp[473][0] < mp[263][0], "left iris within eye corners");
+    // Under-eye structure: the lash line must sit ABOVE the first
+    // infraorbital rows with an anatomically plausible band between them —
+    // this is the gate for the "makeup ring painted below the eyebag" class
+    // of bug (ARKit's oversized eye cutouts must not drag the lid contour
+    // down to the hole edge).
+    expect(mp[145][1] < mp[230][1] && mp[230][1] < mp[119][1],
+           "right under-eye rows ordered lash->ring3->infraorbital");
+    expect(mp[374][1] < mp[450][1] && mp[450][1] < mp[348][1],
+           "left under-eye rows ordered lash->ring3->infraorbital");
+    float band_r = mp[230][1] - mp[145][1];
+    expect(band_r > 8.f && band_r < 60.f, "right under-eye band plausible");
+    float asym = fabsf((mp[374][1] - mp[145][1]))
+               + fabsf(mp[374][0] + mp[145][0] - (float)W);
+    expect(asym < 6.f, "lower-lid landmarks L/R symmetric");
     // Everything on-frame and face-sized.
     float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
     for (int i = 0; i < FT_NPTS; ++i) {

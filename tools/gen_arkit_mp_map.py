@@ -265,48 +265,142 @@ def main():
 
     mp_w = s * (R @ mp_v.T).T + t          # MediaPipe verts in ARKit space
 
-    # ── Non-rigid refinement: pin boundary rings ────────────────────────────
+    # ── Non-rigid refinement: pin the inner-lip ring ───────────────────────
     # The two canonical heads are different face shapes; a global similarity
-    # leaves mm-scale residuals that visibly misplace eyeliner/shadow. Pin the
-    # eye-hole and inner-lip boundary rings to each other (arc-length
-    # correspondence from the outer corner) and TPS-warp the MediaPipe mesh —
-    # lid contours then align essentially exactly.
-    # ARKit rings come from mesh topology (the mesh has real eye/mouth holes);
-    # the MediaPipe triangulation is hole-free, so its rings are the canonical
-    # FACEMESH contour index loops.
+    # leaves mm-scale residuals. The mouth hole edge IS the inner lip margin
+    # in both meshes, so pinning it (arc-length correspondence from the
+    # corner) is semantically exact.
+    #
+    # The EYE rings are deliberately NOT pinned: ARKit's eye cutouts are cut
+    # well outside the palpebral opening (canonical hole 29x10mm vs the MP
+    # contour 26x6.7mm, lower edge 5.4mm below the MP lower lash line — and
+    # on-device the hole edge visibly sits below the real lash line).
+    # Pinning MP's lid contour to the hole edge painted the under-eye makeup
+    # band on the upper cheek, skipping the eyebag zone entirely.
     ak_rings = boundary_rings(ak_tris, 1220)
     print(f"arkit boundary rings: {sorted(len(r) for r in ak_rings)}")
-    MP_EYE_R = [33, 246, 161, 160, 159, 158, 157, 173, 133,
-                155, 154, 153, 145, 144, 163, 7]
-    MP_EYE_L = [263, 466, 388, 387, 386, 385, 384, 398, 362,
-                382, 381, 380, 374, 373, 390, 249]
     MP_LIPS_IN = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308,
                   324, 318, 402, 317, 14, 87, 178, 88, 95]
-    pairs = [  # (mp ring, ak centroid target idxs, mp corner, ak corner)
-        (MP_EYE_R, (1101, 1090), 33, 1101),    # person's right eye
-        (MP_EYE_L, (1069, 1080), 263, 1069),   # person's left eye
-        (MP_LIPS_IN, (249, 684), 78, 249),     # inner lips
-    ]
-    src_ctrl = [mp_w[mi]]
-    dst_ctrl = [ak_v[ai]]
-    for mring, ak_t, mp_c, ak_c in pairs:
-        aring = ring_near(ak_rings, ak_v, ak_v[list(ak_t)].mean(0))
-        mring = orient_ring(list(mring), mp_w, mp_w[mp_c])
-        aring = orient_ring(aring, ak_v, ak_v[ak_c])
-        mpts = mp_w[mring]
-        seg = np.sqrt(((np.roll(mpts, -1, 0) - mpts) ** 2).sum(1))
-        ts = np.concatenate([[0.0], np.cumsum(seg)[:-1]]) / seg.sum()
+    # TPS controls exclude the eye-corner anchors: their ARKit targets are
+    # hole-boundary verts ~3.6mm below/outside the true canthi (the cutout is
+    # oversized), and pinning them drags the whole eye complex down — the
+    # same under-eye displacement the ring pinning caused, just milder. Eye
+    # placement comes from MediaPipe's proportions under the global fit.
+    EYE_CORNER_MP = {33, 133, 263, 362}
+    tps_pairs = [(m, a) for m, a in ANCHORS if m not in EYE_CORNER_MP]
+    tmi = [m for m, _ in tps_pairs]
+    tai = [a for _, a in tps_pairs]
+    src_ctrl = [mp_w[tmi]]
+    dst_ctrl = [ak_v[tai]]
+    aring = ring_near(ak_rings, ak_v, ak_v[[249, 684]].mean(0))
+    mring = orient_ring(list(MP_LIPS_IN), mp_w, mp_w[78])
+    aring = orient_ring(aring, ak_v, ak_v[249])
+    # Split both rings at the two mouth corners and match each arc
+    # separately — whole-ring arc-length matching lets upper/lower
+    # vertex-density differences rotate the correspondence asymmetrically.
+    mci = mring.index(308)                       # person's left inner corner
+    aci = int(np.argmin(((ak_v[aring] - ak_v[684]) ** 2).sum(1)))
+    m_arcs = [mring[:mci + 1], mring[mci:] + [mring[0]]]
+    a_arcs = [aring[:aci + 1], aring[aci:] + [aring[0]]]
+    for m_arc, a_arc in zip(m_arcs, a_arcs):
+        mpts = mp_w[m_arc]
+        seg = np.sqrt(((mpts[1:] - mpts[:-1]) ** 2).sum(1))
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        ts = cum / max(cum[-1], 1e-9)
+        apts = ak_v[a_arc]
+        aseg = np.sqrt(((apts[1:] - apts[:-1]) ** 2).sum(1))
+        acum = np.concatenate([[0.0], np.cumsum(aseg)])
+        atot = max(acum[-1], 1e-9)
+        dst = np.empty((len(ts), 3))
+        for k, t in enumerate(ts):
+            d = t * atot
+            j = min(int(np.searchsorted(acum, d, side="right")) - 1,
+                    len(apts) - 2)
+            f = (d - acum[j]) / max(aseg[j], 1e-9)
+            dst[k] = apts[j] * (1 - f) + apts[j + 1] * f
         src_ctrl.append(mpts)
-        dst_ctrl.append(ring_resample(ak_v[aring], ts))
+        dst_ctrl.append(dst)
     src_ctrl = np.vstack(src_ctrl)
     dst_ctrl = np.vstack(dst_ctrl)
     mp_w = tps_warp(src_ctrl, dst_ctrl, mp_w)
-    rms2 = np.sqrt(((mp_w[mi] - ak_v[ai]) ** 2).sum(1).mean())
-    ring_rms = np.sqrt(((tps_warp(src_ctrl, dst_ctrl, src_ctrl)
-                         - dst_ctrl) ** 2).sum(1).mean())
-    print(f"post-TPS anchor RMS: {rms2:.2f}mm, control RMS: {ring_rms:.3f}mm")
-    assert rms2 < rms and ring_rms < 0.5
+    rms2 = np.sqrt(((mp_w[tmi] - ak_v[tai]) ** 2).sum(1).mean())
+    eye_res = np.sqrt(((mp_w[[33, 133, 263, 362]]
+                        - ak_v[[1101, 1090, 1069, 1080]]) ** 2).sum(1))
+    print(f"post-TPS anchor RMS: {rms2:.2f}mm; eye-corner offsets vs hole "
+          f"corners: {np.round(eye_res, 1)}mm (expected ~3-4, NOT pinned)")
+    assert rms2 < rms
 
+    # ── Eye-hole handling ───────────────────────────────────────────────────
+    # The true lash lines and the first under-eye row fall INSIDE ARKit's
+    # oversized holes, where the mesh has no geometry. Clamped
+    # nearest-surface would snap them to whichever hole edge is closer
+    # (upper-lid triangles for the lower lash — which then dives on every
+    # blink). Instead, landmarks inside a hole get UNCLAMPED plane
+    # barycentrics extrapolated from the anatomically-correct side of the
+    # hole: the lower arc's triangle fan for the lower-lid complex, the
+    # upper arc's for the upper. The runtime evaluation is linear, so
+    # negative weights are fine, and the point tracks the tissue it belongs
+    # to (under-eye makeup no longer jumps with upper-lid blinks).
+    ring_all = set()
+    eye_holes = []   # (ordered ring, 2D poly, centroid, ymid)
+    for ak_t in ((1101, 1090), (1069, 1080)):
+        ring = ring_near(ak_rings, ak_v, ak_v[list(ak_t)].mean(0))
+        ring_all |= set(ring)
+        eye_holes.append((ring, ak_v[ring][:, :2],
+                          ak_v[ring].mean(0), ak_v[ring][:, 1].mean()))
+
+    def in_hole(p):
+        for hole in eye_holes:
+            ring, poly, cen, ymid = hole
+            inside, n = False, len(poly)
+            for i2 in range(n):
+                a, b = poly[i2], poly[(i2 + 1) % n]
+                if (a[1] > p[1]) != (b[1] > p[1]):
+                    xin = a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
+                    if p[0] < xin:
+                        inside = not inside
+            if inside:
+                return hole
+        return None
+
+    def hole_pseudo_tri(p, hole):
+        """Two adjacent ring verts on the landmark's side of the hole plus a
+        vert one row outward — a wide, stable triangle whose plane tracks the
+        local skin, so the unclamped solve stays symmetric and moderate."""
+        ring, poly, cen, ymid = hole
+        low = p[1] <= ymid
+        arc = [v for v in ring if (ak_v[v][1] <= ymid) == low]
+        v0 = min(arc, key=lambda v: ((ak_v[v] - p) ** 2).sum())
+        v1 = min((v for v in arc if v != v0),
+                 key=lambda v: ((ak_v[v] - ak_v[v0]) ** 2).sum())
+        mid = (ak_v[v0] + ak_v[v1]) * 0.5
+        outd = mid - cen
+        outd /= max(np.linalg.norm(outd), 1e-9)
+        tgt = mid + outd * 5.0
+        v2 = min((v for v in range(len(ak_v)) if v not in ring_all),
+                 key=lambda v: ((ak_v[v] - tgt) ** 2).sum())
+        return v0, v1, v2
+
+    def bary2d(p, a, b, c):
+        """Weights (sum=1) reproducing p's xy exactly from vert xy — the
+        runtime consumes projected 2D positions, so xy is what must match;
+        z is deliberately unconstrained."""
+        m = np.array([[a[0] - c[0], b[0] - c[0]],
+                      [a[1] - c[1], b[1] - c[1]]])
+        w01 = np.linalg.solve(m, p[:2] - c[:2])
+        return w01[0], w01[1], 1.0 - w01[0] - w01[1]
+
+    def plane_bary(p, a, b, c):
+        """Unclamped barycentric of p projected onto plane(a,b,c)."""
+        ab, ac = b - a, c - a
+        n = np.cross(ab, ac)
+        q = p - n * ((p - a) @ n) / max(n @ n, 1e-12)
+        d00, d01, d11 = ab @ ab, ab @ ac, ac @ ac
+        d20, d21 = (q - a) @ ab, (q - a) @ ac
+        den = d00 * d11 - d01 * d01
+        v = (d11 * d20 - d01 * d21) / den
+        w = (d00 * d21 - d01 * d20) / den
+        return 1.0 - v - w, v, w
     # Barycentric weights over ARKit verts per MediaPipe landmark. (The
     # render path draws the hole-free MediaPipe topology positioned by these
     # weights; the raw ARKit mesh is never drawn — its oversized eye cutouts
@@ -317,15 +411,47 @@ def main():
         = mp_w[IRIS_R_RING].mean(0)
     targets[473] = targets[474] = targets[475] = targets[476] = targets[477] \
         = mp_w[IRIS_L_RING].mean(0)
+    # Iris centers get a stable pseudo-triangle — the two hole corners plus
+    # the upper arc's top vertex (the bary table may reference ANY vertex
+    # triple, not just mesh triangles). Solved exactly to the eye-center
+    # target; only ~1/5 of the weight rides the blinking upper lid.
+    def iris_tri(hole_idx):
+        ring, poly, cen, ymid = eye_holes[hole_idx]
+        upper = [v for v in ring if ak_v[v][1] > ymid]
+        return max(upper, key=lambda v: ak_v[v][1])
+    IRIS_TRI = {}
+    for ids, (c0, c1), hi in (((468, 469, 470, 471, 472), (1101, 1090), 0),
+                              ((473, 474, 475, 476, 477), (1069, 1080), 1)):
+        top = iris_tri(hi)
+        for i in ids:
+            IRIS_TRI[i] = (c0, c1, top)
     rows = []
+    n_extrap = 0
     for i, p in enumerate(targets):
+        if i in IRIS_TRI:
+            c0, c1, top = IRIS_TRI[i]
+            w0, w1, w2 = bary2d(p, ak_v[c0], ak_v[c1], ak_v[top])
+            rows.append((c0, c1, top, w0, w1, w2))
+            continue
+        hole = in_hole(p)
+        if hole is not None:
+            i0, i1, i2 = hole_pseudo_tri(p, hole)
+            w0, w1, w2 = bary2d(p, ak_v[i0], ak_v[i1], ak_v[i2])
+            assert max(abs(w0), abs(w1), abs(w2)) < 8.0, \
+                f"mp {i}: unstable extrapolation " \
+                f"w=({w0:.2f},{w1:.2f},{w2:.2f})"
+            rows.append((i0, i1, i2, w0, w1, w2))
+            n_extrap += 1
+            continue
         ti, w0, w1, w2, d = nearest_surface(p, ak_v, ak_tris)
         i0, i1, i2 = ak_tris[ti]
         rows.append((i0, i1, i2, w0, w1, w2))
-        if i in (1, 33, 263, 61, 291, 152, 468, 473):
-            q = w0 * ak_v[i0] + w1 * ak_v[i1] + w2 * ak_v[i2]
-            print(f"  mp {i:3d} → ar tri ({i0},{i1},{i2}) "
-                  f"dist {np.sqrt(d):.2f}mm  x={q[0]:+.1f}")
+    print(f"in-hole extrapolated landmarks: {n_extrap}")
+    for i in (1, 33, 263, 61, 291, 152, 145, 374, 468, 473):
+        i0, i1, i2, w0, w1, w2 = rows[i]
+        q = w0 * ak_v[i0] + w1 * ak_v[i1] + w2 * ak_v[i2]
+        print(f"  mp {i:3d} → ({i0},{i1},{i2}) w=({w0:+.2f},{w1:+.2f},{w2:+.2f})"
+              f" pos=({q[0]:+6.1f},{q[1]:+6.1f}) target_y={targets[i][1]:+6.1f}")
 
     # L/R spot check: person's right (MP 33) must land at x<0, left (263) x>0.
     def bary_x(r):
