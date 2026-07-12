@@ -325,8 +325,8 @@ bool face_filter_build_plan_arkit(const BeautyLook& L, float amount,
     for (int i = 0; i < ARKIT_NPTS; ++i) {
         out.mesh_pts[i][0] = obs.pts[i][0] * sx_;
         out.mesh_pts[i][1] = obs.pts[i][1] * sy_;
-        out.uvs[i][0] = obs.uvs[i][0];
-        out.uvs[i][1] = obs.uvs[i][1];
+        out.uvs[i][0] = 1.0f - obs.uvs[i][0];  // flip U: ARKit canonical texture is camera-perspective (person's R at low U), but makeup PNGs are painted for MediaPipe UV space (person's L at low U)
+        out.uvs[i][1] = obs.uvs[i][1];          // V matches: both ARKit and MediaPipe use V=0 at top (Metal convention)
     }
     // Detect whether we have real UVs (not all zero). ARKit's
     // textureCoordinates are constant and nonzero; if the Swift layer didn't
