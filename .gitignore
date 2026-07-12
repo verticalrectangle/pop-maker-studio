@@ -11,3 +11,4 @@ code-search/.venv/
 models/ggml-tiny.en.bin
 projects/
 compile_commands.json
+build-linux/

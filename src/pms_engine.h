@@ -49,6 +49,16 @@ void pms_submit_mic_block(pms_engine*, const float* interleaved_lr,
 void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8,
                              double host_time_seconds);
 
+// Submit ARKit face anchor data (front camera, TrueDepth). Up to 4 faces.
+// vertices: flat float array [n_faces * 1220 * 2] — 2D pixel coords in the
+//   composited frame space (projected by the Swift caller).
+// blendshapes: flat float array [n_faces * 52] — ARKit blendshape coefficients.
+// w,h: size of the frame the vertices are projected into (all faces share it).
+// n_faces: number of tracked faces (0..4). Pass n_faces=0 to clear (face lost).
+void pms_submit_arkit_face(pms_engine*, const float* vertices_1220x2,
+                           const float* blendshapes_52, int n_faces,
+                           int w, int h);
+
 // Submit one visual layer's frame, addressed by engine clip identity
 // (track index, clip index). BGRA CVPixelBufferRef bridged as void*; the
 // engine retains it until superseded. Text/overlay layers may be submitted
@@ -74,7 +84,7 @@ char* pms_poll_events(pms_engine*);
 
 void pms_free(char*);
 
-#define PMS_ENGINE_ABI 3
+#define PMS_ENGINE_ABI 4
 uint32_t pms_abi_version(void);
 uint32_t pms_project_version(void);
 

@@ -8,6 +8,7 @@
 #include "app.h"
 #include "audio.h"
 #include "face_track.h"
+#include "arkit_face.h"
 #include "ipc_server.h"
 #include "engine_runtime.h"
 #if defined(__APPLE__)
@@ -108,7 +109,7 @@ void pms_submit_camera_frame(pms_engine*, void* cv_pixel_buffer, int rotation, d
     // in metal_render.mm (CoreVideo there; CarbonCore's Marker collides with
     // the engine's in plain C++ TUs). Upright frames only.
     if (cv_pixel_buffer && rotation == 0)
-        metal_render_face_feed(cv_pixel_buffer);
+        metal_render_face_feed(cv_pixel_buffer, host_time);
 #else
     (void)cv_pixel_buffer; (void)rotation; (void)host_time;
 #endif
@@ -119,6 +120,32 @@ void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8, double host_
 #else
     (void)cv_pixel_buffer_r8; (void)host_time;
 #endif
+}
+
+void pms_submit_arkit_face(pms_engine*, const float* vertices_1220x2,
+                           const float* blendshapes_52, int n_faces,
+                           int w, int h) {
+    if (!vertices_1220x2 || !blendshapes_52 || n_faces <= 0) {
+        arkit_face_clear();
+        return;
+    }
+    if (n_faces > ARKIT_MAX_FACES) n_faces = ARKIT_MAX_FACES;
+    ARKitFaceObs obs[ARKIT_MAX_FACES];
+    for (int f = 0; f < n_faces; ++f) {
+        for (int i = 0; i < ARKIT_NPTS; ++i) {
+            obs[f].pts[i][0] = vertices_1220x2[f * ARKIT_NPTS * 2 + i * 2 + 0];
+            obs[f].pts[i][1] = vertices_1220x2[f * ARKIT_NPTS * 2 + i * 2 + 1];
+        }
+        for (int b = 0; b < ARKIT_NBLEND; ++b) {
+            obs[f].blend[b] = blendshapes_52[f * ARKIT_NBLEND + b];
+        }
+        obs[f].has_blend = true;
+        obs[f].score = 1.0f;
+        obs[f].valid = true;
+        obs[f].w = w;
+        obs[f].h = h;
+    }
+    arkit_face_submit(obs, n_faces);
 }
 void pms_submit_layer_frame(pms_engine*, int track, int clip,
                             void* cv_pixel_buffer_bgra,

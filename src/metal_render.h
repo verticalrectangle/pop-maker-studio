@@ -41,7 +41,8 @@ void metal_render_submit_layer(int track, int clip, void* cv_pixel_buffer_bgra,
 
 // Camera frame → face-tracker side-feed (stride-2 BGRA→RGB) when the
 // face_track_enable gate is on. No-op otherwise; called per camera frame.
-void metal_render_face_feed(void* cv_pixel_buffer_bgra);
+// host_time_seconds is the capture timestamp passed to the tracker.
+void metal_render_face_feed(void* cv_pixel_buffer_bgra, double host_time_seconds);
 
 // Drop EVERY stored layer frame (and invalidate the scene clock). Record mode
 // calls this (clear_layer_frames command) so the renderer falls back to the

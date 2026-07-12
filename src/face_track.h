@@ -45,7 +45,7 @@ bool face_track_available();  // models found (models/face/*.onnx)
 
 // Live path: submit copies the frame and wakes the worker (call from the UI
 // thread at mirror rate); latest returns the most recent smoothed result.
-void face_track_submit(const uint8_t* rgb, int w, int h);
+void face_track_submit(const uint8_t* rgb, int w, int h, double host_time = 0);
 bool face_track_latest(FaceObs& out);
 // Multi-face: up to max_n concurrent faces (tracked independently, each
 // velocity-extrapolated to the read instant). Returns the count written.
@@ -62,6 +62,14 @@ bool face_feed_enabled();
 
 // Synchronous single-frame run (take analysis pass) — no smoothing.
 bool face_track_run_sync(const uint8_t* rgb, int w, int h, FaceObs& out);
+// Synchronous live path: run inference on the latest submitted frame and
+// update the shared FaceTrack table. Used for rear-camera CoreML sync.
+int face_track_run_sync_live();
+// Enable/disable synchronous live tracking (rear camera). When enabled,
+// face_track_submit stores the latest frame; face_track_run_sync_live runs
+// it on the render thread. The worker is not used while sync is enabled.
+void face_track_set_sync_mode(bool on);
+bool face_track_sync_enabled();
 
 void face_track_shutdown();
 bool face_track_dump_last(const char* path);  // debug: PPM of last submitted frame

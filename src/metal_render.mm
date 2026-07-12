@@ -13,7 +13,10 @@
 #include "face_track.h"   // live FaceObs for the record-mode makeup passes
 #include "paths.h"        // app_models_dir() — makeup PNGs live in models/face
 #include "stb_image.h"    // makeup texture load (impl compiled in video.cpp)
-#include "generated/face_uv_mesh.h"   // canonical UVs + 898-tri topology
+// ARKit face mesh topology (1220 verts, 2304 tris) for the TrueDepth front-camera path
+#include "generated/arkit_face_mesh.h"
+// MediaPipe canonical UVs + 898-tri topology (rear / non-TrueDepth path)
+#include "generated/face_uv_mesh.h"
 #include "json.hpp"
 #include <vector>
 #include <mutex>
@@ -1373,12 +1376,21 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
         // encode below). Live camera only for now: obs comes from the face
         // worker; layer chains report no_face until the take-cache port.
         if (fx.fx_type == "face_fx") {
-            if (!face_track_available()) { set_status(i, "face_models_missing"); continue; }
-            // Every tracked face gets the look (lag-compensated landmarks —
-            // face_track_latest_all extrapolates to the render instant).
+            // Tier 1: TrueDepth front camera → ARKit face mesh (zero latency).
+            // Tier 2: rear camera → CoreML EP synchronous tracking on this thread.
+            // Tier 3: fallback → async MediaPipe worker (non-TrueDepth / desktop).
+            ARKitFaceObs arkit_faces[4];
+            int n_arkit = arkit_face_take(arkit_faces, 4);
+            if (n_arkit < 1 && !face_track_available()) {
+                set_status(i, "face_models_missing"); continue;
+            }
             FaceObs faces[4];
-            int n_faces = face_track_latest_all(faces, 4);
-            if (n_faces < 1) { set_status(i, "no_face"); continue; }
+            int n_faces = 0;
+            if (n_arkit < 1) {
+                face_track_run_sync_live();       // synchronous rear-camera path
+                n_faces = face_track_latest_all(faces, 4);
+            }
+            if (n_arkit < 1 && n_faces < 1) { set_status(i, "no_face"); continue; }
             id<MTLRenderPipelineState> warp_pso   = get_face_pso(kFaceWarp);
             id<MTLRenderPipelineState> beauty_pso = get_face_pso(kFaceBeauty);
             id<MTLRenderPipelineState> mesh_pso   = get_face_pso(kFaceMesh);
@@ -1389,123 +1401,135 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
             float famt = 1.f;
             { auto p = fx.params.find("face_amount"); if (p != fx.params.end()) famt = p->second; }
             int applied_faces = 0;
-            for (int fi = 0; fi < n_faces; ++fi) {
-            const FaceObs& obs = faces[fi];
-            FaceRenderPlan plan;
-            if (!face_filter_build_plan_look(look, famt, obs, sw, sh, plan) || !plan.valid)
-                continue;
-            // 1. beauty (skin + procedural makeup) — fullscreen.
-            if (plan.has_beauty) {
-                MTLRenderPassDescriptor* rp1 = [MTLRenderPassDescriptor new];
-                rp1.colorAttachments[0].texture     = ping[dst];
-                rp1.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
-                rp1.colorAttachments[0].storeAction = MTLStoreActionStore;
-                id<MTLRenderCommandEncoder> e1 = [cb renderCommandEncoderWithDescriptor:rp1];
-                [e1 setRenderPipelineState:beauty_pso];
-                FaceBeautyUniCPU bu = face_beauty_uniforms(plan.beauty, sw, sh);
-                [e1 setFragmentBytes:&bu length:sizeof(bu) atIndex:0];
-                [e1 setFragmentTexture:cur atIndex:0];
-                [e1 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-                [e1 endEncoding];
-                cur = ping[dst]; dst ^= 1;
+            // Generic render application for either MediaPipe or ARKit topology.
+            auto apply_plan = [&](auto& plan, const float* uv, const unsigned short* tris,
+                                  int npts, int ntri) {
+                // 1. beauty (skin + procedural makeup) — fullscreen.
+                if (plan.has_beauty) {
+                    MTLRenderPassDescriptor* rp1 = [MTLRenderPassDescriptor new];
+                    rp1.colorAttachments[0].texture     = ping[dst];
+                    rp1.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
+                    rp1.colorAttachments[0].storeAction = MTLStoreActionStore;
+                    id<MTLRenderCommandEncoder> e1 = [cb renderCommandEncoderWithDescriptor:rp1];
+                    [e1 setRenderPipelineState:beauty_pso];
+                    FaceBeautyUniCPU bu = face_beauty_uniforms(plan.beauty, sw, sh);
+                    [e1 setFragmentBytes:&bu length:sizeof(bu) atIndex:0];
+                    [e1 setFragmentTexture:cur atIndex:0];
+                    [e1 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                    [e1 endEncoding];
+                    cur = ping[dst]; dst ^= 1;
+                }
+                // 2. UV-mapped makeup texture over the tracked mesh.
+                id<MTLTexture> mk = plan.makeup_tex ? face_makeup_texture(plan.makeup_tex) : nil;
+                if (mk) {
+                    id<MTLTexture> target = ping[dst];
+                    id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+                    [bl copyFromTexture:cur sourceSlice:0 sourceLevel:0
+                           sourceOrigin:MTLOriginMake(0, 0, 0)
+                             sourceSize:MTLSizeMake(sw, sh, 1)
+                              toTexture:target destinationSlice:0
+                       destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    [bl endEncoding];
+                    static float vtx[ARKIT_NPTS * 4];
+                    for (int k = 0; k < npts; ++k) {
+                        int idx = k;
+                        vtx[k*4+0] = plan.mesh_pts[idx][0];
+                        vtx[k*4+1] = plan.mesh_pts[idx][1];
+                        vtx[k*4+2] = uv[k*2+0];
+                        vtx[k*4+3] = uv[k*2+1];
+                    }
+                    static unsigned short live_tris[ARKIT_NTRI * 3];
+                    static float sa[ARKIT_NTRI];
+                    int n_live = 0, n_pos = 0;
+                    for (int t2 = 0; t2 < ntri; ++t2) {
+                        const unsigned short* tr = tris + t2 * 3;
+                        float ax = plan.mesh_pts[tr[1]][0] - plan.mesh_pts[tr[0]][0];
+                        float ay = plan.mesh_pts[tr[1]][1] - plan.mesh_pts[tr[0]][1];
+                        float bx2 = plan.mesh_pts[tr[2]][0] - plan.mesh_pts[tr[0]][0];
+                        float by2 = plan.mesh_pts[tr[2]][1] - plan.mesh_pts[tr[0]][1];
+                        sa[t2] = ax * by2 - ay * bx2;
+                        if (sa[t2] > 0.f) ++n_pos;
+                    }
+                    bool front_pos = n_pos * 2 >= ntri;
+                    for (int t2 = 0; t2 < ntri; ++t2) {
+                        if ((sa[t2] > 0.f) != front_pos) continue;
+                        live_tris[n_live*3+0] = tris[t2*3+0];
+                        live_tris[n_live*3+1] = tris[t2*3+1];
+                        live_tris[n_live*3+2] = tris[t2*3+2];
+                        ++n_live;
+                    }
+                    if (n_live > 0) {
+                        id<MTLBuffer> vb = [g_dev newBufferWithBytes:vtx
+                                                              length:(NSUInteger)npts * 4 * sizeof(float)
+                                                             options:MTLResourceStorageModeShared];
+                        id<MTLBuffer> ib = [g_dev newBufferWithBytes:live_tris
+                                                              length:(NSUInteger)n_live * 3 * sizeof(unsigned short)
+                                                             options:MTLResourceStorageModeShared];
+                        FaceMkUniCPU mu = {};
+                        mu.dim[0] = (float)sw; mu.dim[1] = (float)sh;
+                        mu.opacity = plan.makeup_opacity; mu.adapt = plan.makeup_adapt;
+                        mu.eyes[0] = plan.beauty.eyeL_x; mu.eyes[1] = plan.beauty.eyeL_y;
+                        mu.eyes[2] = plan.beauty.eyeR_x; mu.eyes[3] = plan.beauty.eyeR_y;
+                        mu.blink[0] = plan.beauty.blink_l; mu.blink[1] = plan.beauty.blink_r;
+                        mu.eye_r = plan.beauty.eye_r;
+                        MTLRenderPassDescriptor* rp2 = [MTLRenderPassDescriptor new];
+                        rp2.colorAttachments[0].texture     = target;
+                        rp2.colorAttachments[0].loadAction  = MTLLoadActionLoad;
+                        rp2.colorAttachments[0].storeAction = MTLStoreActionStore;
+                        id<MTLRenderCommandEncoder> e2 = [cb renderCommandEncoderWithDescriptor:rp2];
+                        [e2 setRenderPipelineState:mesh_pso];
+                        [e2 setVertexBuffer:vb offset:0 atIndex:0];
+                        [e2 setVertexBytes:&mu length:sizeof(mu) atIndex:1];
+                        [e2 setFragmentBytes:&mu length:sizeof(mu) atIndex:0];
+                        [e2 setFragmentTexture:mk atIndex:0];
+                        [e2 setFragmentTexture:cur atIndex:1];
+                        [e2 drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                       indexCount:(NSUInteger)n_live * 3
+                                        indexType:MTLIndexTypeUInt16
+                                      indexBuffer:ib indexBufferOffset:0];
+                        [e2 endEncoding];
+                    }
+                    cur = target; dst ^= 1;
+                }
+                // 3. shape warp — fullscreen, last so it deforms skin + pigment.
+                if (plan.n_bumps > 0) {
+                    FaceWarpUniCPU wu = {};
+                    wu.n = (float)std::min(plan.n_bumps, 12);
+                    wu.aspect = (float)sw / (float)sh;
+                    for (int k = 0; k < plan.n_bumps && k < 12; ++k) {
+                        wu.ba[k*4+0] = plan.bumps[k].cx;  wu.ba[k*4+1] = plan.bumps[k].cy;
+                        wu.ba[k*4+2] = plan.bumps[k].radius; wu.ba[k*4+3] = plan.bumps[k].scale;
+                        wu.bb[k*4+0] = plan.bumps[k].dx;  wu.bb[k*4+1] = plan.bumps[k].dy;
+                    }
+                    MTLRenderPassDescriptor* rp3 = [MTLRenderPassDescriptor new];
+                    rp3.colorAttachments[0].texture     = ping[dst];
+                    rp3.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
+                    rp3.colorAttachments[0].storeAction = MTLStoreActionStore;
+                    id<MTLRenderCommandEncoder> e3 = [cb renderCommandEncoderWithDescriptor:rp3];
+                    [e3 setRenderPipelineState:warp_pso];
+                    [e3 setFragmentBytes:&wu length:sizeof(wu) atIndex:0];
+                    [e3 setFragmentTexture:cur atIndex:0];
+                    [e3 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                    [e3 endEncoding];
+                    cur = ping[dst]; dst ^= 1;
+                }
+                ++applied_faces;
+            };
+            if (n_arkit > 0) {
+                for (int fi = 0; fi < n_arkit; ++fi) {
+                    ARKitFaceRenderPlan plan;
+                    if (!face_filter_build_plan_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
+                        continue;
+                    apply_plan(plan, &k_arkit_uv[0][0], &k_arkit_tris[0][0], ARKIT_NPTS, ARKIT_NTRI);
+                }
+            } else {
+                for (int fi = 0; fi < n_faces; ++fi) {
+                    FaceRenderPlan plan;
+                    if (!face_filter_build_plan_look(look, famt, faces[fi], sw, sh, plan) || !plan.valid)
+                        continue;
+                    apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0], FACE_UV_NPTS, FACE_UV_NTRI);
+                }
             }
-            // 2. UV-mapped makeup texture over the tracked mesh (pre-warp so
-            //    pigment deforms with the skin). Base copy + mesh on top.
-            id<MTLTexture> mk = plan.makeup_tex ? face_makeup_texture(plan.makeup_tex) : nil;
-            if (mk) {
-                id<MTLTexture> target = ping[dst];
-                id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
-                [bl copyFromTexture:cur sourceSlice:0 sourceLevel:0
-                       sourceOrigin:MTLOriginMake(0, 0, 0)
-                         sourceSize:MTLSizeMake(sw, sh, 1)
-                          toTexture:target destinationSlice:0
-                   destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
-                [bl endEncoding];
-                // Vertex buffer: landmark px + canonical UV; index buffer with
-                // fold-culled triangles (majority-winding rule, GL parity).
-                static float vtx[FACE_UV_NPTS * 4];
-                for (int k = 0; k < FACE_UV_NPTS; ++k) {
-                    vtx[k*4+0] = plan.mesh_pts[k][0];
-                    vtx[k*4+1] = plan.mesh_pts[k][1];
-                    vtx[k*4+2] = k_face_uv[k][0];
-                    vtx[k*4+3] = k_face_uv[k][1];
-                }
-                static unsigned short live_tris[FACE_UV_NTRI * 3];
-                static float sa[FACE_UV_NTRI];
-                int n_live = 0, n_pos = 0;
-                for (int t2 = 0; t2 < FACE_UV_NTRI; ++t2) {
-                    const unsigned short* tr = k_face_tris[t2];
-                    float ax = plan.mesh_pts[tr[1]][0] - plan.mesh_pts[tr[0]][0];
-                    float ay = plan.mesh_pts[tr[1]][1] - plan.mesh_pts[tr[0]][1];
-                    float bx2 = plan.mesh_pts[tr[2]][0] - plan.mesh_pts[tr[0]][0];
-                    float by2 = plan.mesh_pts[tr[2]][1] - plan.mesh_pts[tr[0]][1];
-                    sa[t2] = ax * by2 - ay * bx2;
-                    if (sa[t2] > 0.f) ++n_pos;
-                }
-                bool front_pos = n_pos * 2 >= FACE_UV_NTRI;
-                for (int t2 = 0; t2 < FACE_UV_NTRI; ++t2) {
-                    if ((sa[t2] > 0.f) != front_pos) continue;
-                    live_tris[n_live*3+0] = k_face_tris[t2][0];
-                    live_tris[n_live*3+1] = k_face_tris[t2][1];
-                    live_tris[n_live*3+2] = k_face_tris[t2][2];
-                    ++n_live;
-                }
-                if (n_live > 0) {
-                    id<MTLBuffer> vb = [g_dev newBufferWithBytes:vtx length:sizeof(vtx)
-                                                         options:MTLResourceStorageModeShared];
-                    id<MTLBuffer> ib = [g_dev newBufferWithBytes:live_tris
-                                                          length:(NSUInteger)n_live * 3 * sizeof(unsigned short)
-                                                         options:MTLResourceStorageModeShared];
-                    FaceMkUniCPU mu = {};
-                    mu.dim[0] = (float)sw; mu.dim[1] = (float)sh;
-                    mu.opacity = plan.makeup_opacity; mu.adapt = plan.makeup_adapt;
-                    mu.eyes[0] = plan.beauty.eyeL_x; mu.eyes[1] = plan.beauty.eyeL_y;
-                    mu.eyes[2] = plan.beauty.eyeR_x; mu.eyes[3] = plan.beauty.eyeR_y;
-                    mu.blink[0] = plan.beauty.blink_l; mu.blink[1] = plan.beauty.blink_r;
-                    mu.eye_r = plan.beauty.eye_r;
-                    MTLRenderPassDescriptor* rp2 = [MTLRenderPassDescriptor new];
-                    rp2.colorAttachments[0].texture     = target;
-                    rp2.colorAttachments[0].loadAction  = MTLLoadActionLoad;
-                    rp2.colorAttachments[0].storeAction = MTLStoreActionStore;
-                    id<MTLRenderCommandEncoder> e2 = [cb renderCommandEncoderWithDescriptor:rp2];
-                    [e2 setRenderPipelineState:mesh_pso];
-                    [e2 setVertexBuffer:vb offset:0 atIndex:0];
-                    [e2 setVertexBytes:&mu length:sizeof(mu) atIndex:1];
-                    [e2 setFragmentBytes:&mu length:sizeof(mu) atIndex:0];
-                    [e2 setFragmentTexture:mk atIndex:0];
-                    [e2 setFragmentTexture:cur atIndex:1];
-                    [e2 drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                   indexCount:(NSUInteger)n_live * 3
-                                    indexType:MTLIndexTypeUInt16
-                                  indexBuffer:ib indexBufferOffset:0];
-                    [e2 endEncoding];
-                }
-                cur = target; dst ^= 1;
-            }
-            // 3. shape warp — fullscreen, last so it deforms skin + pigment.
-            if (plan.n_bumps > 0) {
-                FaceWarpUniCPU wu = {};
-                wu.n = (float)std::min(plan.n_bumps, 12);
-                wu.aspect = (float)sw / (float)sh;
-                for (int k = 0; k < plan.n_bumps && k < 12; ++k) {
-                    wu.ba[k*4+0] = plan.bumps[k].cx;  wu.ba[k*4+1] = plan.bumps[k].cy;
-                    wu.ba[k*4+2] = plan.bumps[k].radius; wu.ba[k*4+3] = plan.bumps[k].scale;
-                    wu.bb[k*4+0] = plan.bumps[k].dx;  wu.bb[k*4+1] = plan.bumps[k].dy;
-                }
-                MTLRenderPassDescriptor* rp3 = [MTLRenderPassDescriptor new];
-                rp3.colorAttachments[0].texture     = ping[dst];
-                rp3.colorAttachments[0].loadAction  = MTLLoadActionDontCare;
-                rp3.colorAttachments[0].storeAction = MTLStoreActionStore;
-                id<MTLRenderCommandEncoder> e3 = [cb renderCommandEncoderWithDescriptor:rp3];
-                [e3 setRenderPipelineState:warp_pso];
-                [e3 setFragmentBytes:&wu length:sizeof(wu) atIndex:0];
-                [e3 setFragmentTexture:cur atIndex:0];
-                [e3 drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-                [e3 endEncoding];
-                cur = ping[dst]; dst ^= 1;
-            }
-            ++applied_faces;
-            }   // per-face loop
             set_status(i, applied_faces > 0 ? "applied" : "face_plan_empty");
             if (result && applied_faces > 0) result->applied++;
             continue;
@@ -1928,7 +1952,7 @@ void metal_render_submit_layer(int track, int clip, void* cv_pixel_buffer_bgra,
 // Camera → face-tracker side-feed: stride-2 BGRA→RGB downscale on the GPU.
 // The output is copied into the worker queue (face_track_submit), so the camera
 // queue only encodes a small compute pass and does no CPU pixel work.
-void metal_render_face_feed(void* cv_pixel_buffer_bgra) {
+void metal_render_face_feed(void* cv_pixel_buffer_bgra, double host_time_seconds) {
     if (!cv_pixel_buffer_bgra || !face_feed_enabled()) return;
     CVPixelBufferRef pb = (CVPixelBufferRef)cv_pixel_buffer_bgra;
     if (CVPixelBufferGetPixelFormatType(pb) != kCVPixelFormatType_32BGRA) return;
@@ -1978,7 +2002,7 @@ void metal_render_face_feed(void* cv_pixel_buffer_bgra) {
                     CFRelease(cvt);
                     CVMetalTextureCacheFlush(g_texcache, 0);
                 }
-                face_track_submit((uint8_t*)[g_downscale_buf contents], dw, dh);
+                face_track_submit((uint8_t*)[g_downscale_buf contents], dw, dh, host_time_seconds);
                 return;
             }
             if (cvt) CFRelease(cvt);
@@ -2000,7 +2024,7 @@ void metal_render_face_feed(void* cv_pixel_buffer_bgra) {
         }
     }
     CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-    face_track_submit(rgb.data(), dw, dh);
+    face_track_submit(rgb.data(), dw, dh, host_time_seconds);
 }
 
 // Drop every stored layer frame + invalidate the scene clock (record mode:

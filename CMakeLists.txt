@@ -106,6 +106,7 @@ set(PMS_ENGINE_SOURCES
     src/face_track.cpp
     src/face_cache.cpp
     src/face_filters.cpp
+    src/arkit_face.cpp
     src/recorder.cpp
     src/video_recorder.cpp
     src/av_sync.cpp
