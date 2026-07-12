@@ -321,15 +321,44 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
                     float gx1 = cx + gl->X1 * scale, gy1 = cy + gl->Y1 * scale;
                     float gw = gx1 - gx0, gh = gy1 - gy0;
                     if (gw > 0.5f && gh > 0.5f) {
-                        int ns = 4 + (int)(hash01(gi, frame_i + 99) * 5.f);
+                        // Scratch count scales with glyph area; more scratches
+                        // for bigger glyphs so dense letters read clearly.
+                        int ns = 6 + (int)(hash01(gi, frame_i + 99) * 8.f);
                         for (int si = 0; si < ns; ++si) {
-                            float sy0 = hash01(gi * 17 + si, frame_i)       * gh;
                             float sx0 = hash01(gi * 31 + si, frame_i + 13)  * gw;
-                            float ang = (hash01(gi * 43 + si, frame_i + 27) - 0.5f) * 0.8f;
-                            float len = gw * (0.4f + hash01(gi * 53 + si, frame_i + 41) * 0.8f);
+                            float sy0 = hash01(gi * 17 + si, frame_i)       * gh;
+
+                            // Sample the glyph at the start point to determine
+                            // local orientation: scan ±3px in x and y, count
+                            // covered pixels. If the area is wider than tall →
+                            // horizontal scratch; otherwise → vertical (default).
+                            float u0 = gl->U0 + (sx0 / gw) * (gl->U1 - gl->U0);
+                            float v0 = gl->V0 + (sy0 / gh) * (gl->V1 - gl->V0);
+                            int tx0 = (int)(u0 * aw), ty0 = (int)(v0 * ah);
+                            auto covered = [&](int dx, int dy) -> bool {
+                                int x = tx0 + dx, y = ty0 + dy;
+                                if (x < 0 || x >= aw || y < 0 || y >= ah) return false;
+                                unsigned char val = (bpp == 1) ? tpix[y * aw + x]
+                                                               : tpix[(y * aw + x) * bpp + 3];
+                                return val > 64;
+                            };
+                            int hcov = 0, vcov = 0;
+                            for (int d = 1; d <= 3; ++d) {
+                                if (covered(d, 0))  hcov++;  if (covered(-d, 0)) hcov++;
+                                if (covered(0, d))  vcov++;  if (covered(0, -d)) vcov++;
+                            }
+                            bool horizontal = (hcov > vcov);
+
+                            // Direction: vertical (down) or horizontal (right),
+                            // with a small per-scratch jitter for hand-scratched feel.
+                            float jitter = (hash01(gi * 43 + si, frame_i + 27) - 0.5f) * 0.15f;
+                            float ang = horizontal ? jitter : (3.14159265f * 0.5f + jitter);
+                            float len = (horizontal ? gw : gh) *
+                                        (0.7f + hash01(gi * 53 + si, frame_i + 41) * 0.4f);
                             float dx2 = cosf(ang) * len, dy2 = sinf(ang) * len;
+
                             // Sample along the line; draw only covered segments
-                            const int NSAMP = 20;
+                            const int NSAMP = 24;
                             bool prev_cov = false;
                             float seg_sx = 0, seg_sy = 0;
                             for (int j = 0; j <= NSAMP; ++j) {
