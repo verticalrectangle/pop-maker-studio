@@ -113,9 +113,9 @@ static int arkit_index_for_mp(int mp) {
 // positions; we use the known landmarks (eyes, nose, mouth) to establish a
 // face coordinate frame, then find the unknowns by direction.
 //
-// In the ARKit selfie projection (portrait, mirrored for self-view), the
-// person's left appears on the LEFT side of the screen (smaller X), and Y
-// increases downward (screen coordinates).
+// In the ARKit selfie projection (portrait, unmirrored), the person's left
+// appears on the RIGHT side of the screen (larger X), and Y increases
+// downward (screen coordinates).
 static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp) {
     // Known landmarks (already filled by arkit_index_for_mp).
     float eyeLx = mp.pts[468][0], eyeLy = mp.pts[468][1]; // person's left iris
