@@ -279,13 +279,15 @@ static void compute_mesh_landmarks(const ARKitFaceObs& obs, FaceObs& mp) {
     }
 }
 
-// Build an ARKit-aware render plan by translating the ARKit mesh into the
-// MediaPipe coordinate system that face_filter_build_plan_look expects, then
-// copying the full 1220-pt mesh + textureCoordinates into the ARKit plan.
-bool face_filter_build_plan_arkit(const BeautyLook& L, float amount,
-                                  const ARKitFaceObs& obs, int w, int h,
-                                  ARKitFaceRenderPlan& out) {
-    out = ARKitFaceRenderPlan{};
+// Build a MediaPipe-format FaceRenderPlan from an ARKit observation.
+// Maps ARKit mesh landmarks → MediaPipe indices, computes runtime landmarks
+// (chin, cheeks, jaw, nose wings, face sides) from the live mesh, then calls
+// face_filter_build_plan_look. The returned plan uses the MediaPipe mesh
+// (468 pts) + MediaPipe canonical UVs for the texture pass — makeup PNGs are
+// authored for MediaPipe UV space, NOT ARKit UV space.
+bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
+                                       const ARKitFaceObs& obs, int w, int h,
+                                       FaceRenderPlan& out) {
     if (w <= 0 || h <= 0 || !obs.valid) return false;
 
     FaceObs mp_obs{};
@@ -307,37 +309,5 @@ bool face_filter_build_plan_arkit(const BeautyLook& L, float amount,
     // searching the live mesh geometry.
     compute_mesh_landmarks(obs, mp_obs);
 
-    FaceRenderPlan mp_plan;
-    if (!face_filter_build_plan_look(L, amount, mp_obs, w, h, mp_plan) || !mp_plan.valid)
-        return false;
-
-    out.valid = true;
-    out.has_beauty = mp_plan.has_beauty;
-    out.beauty = mp_plan.beauty;
-    out.makeup_tex = mp_plan.makeup_tex;
-    out.makeup_opacity = mp_plan.makeup_opacity;
-    out.makeup_adapt = mp_plan.makeup_adapt;
-    out.n_bumps = mp_plan.n_bumps;
-    for (int i = 0; i < out.n_bumps && i < MAX_FACE_BUMPS; ++i) out.bumps[i] = mp_plan.bumps[i];
-
-    float sx_ = (obs.w > 0) ? (float)w / (float)obs.w : 1.f;
-    float sy_ = (obs.h > 0) ? (float)h / (float)obs.h : 1.f;
-    for (int i = 0; i < ARKIT_NPTS; ++i) {
-        out.mesh_pts[i][0] = obs.pts[i][0] * sx_;
-        out.mesh_pts[i][1] = obs.pts[i][1] * sy_;
-        out.uvs[i][0] = 1.0f - obs.uvs[i][0];  // flip U: ARKit canonical texture is camera-perspective (person's R at low U), but makeup PNGs are painted for MediaPipe UV space (person's L at low U)
-        out.uvs[i][1] = obs.uvs[i][1];          // V matches: both ARKit and MediaPipe use V=0 at top (Metal convention)
-    }
-    // Detect whether we have real UVs (not all zero). ARKit's
-    // textureCoordinates are constant and nonzero; if the Swift layer didn't
-    // pass them, all UVs are {0,0} and the mesh pass must be skipped to avoid
-    // the grey-flicker artifact (every vertex samples the same texel).
-    out.has_uvs = false;
-    for (int i = 0; i < ARKIT_NPTS; ++i) {
-        if (obs.uvs[i][0] != 0.f || obs.uvs[i][1] != 0.f) {
-            out.has_uvs = true;
-            break;
-        }
-    }
-    return true;
+    return face_filter_build_plan_look(L, amount, mp_obs, w, h, out);
 }

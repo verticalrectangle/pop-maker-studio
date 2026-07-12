@@ -1527,10 +1527,12 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
             };
             if (n_arkit > 0) {
                 for (int fi = 0; fi < n_arkit; ++fi) {
-                    ARKitFaceRenderPlan plan;
-                    if (!face_filter_build_plan_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
+                    FaceRenderPlan plan;
+                    if (!face_filter_build_plan_from_arkit(look, famt, arkit_faces[fi], sw, sh, plan) || !plan.valid)
                         continue;
-                    apply_plan(plan, plan.has_uvs ? &plan.uvs[0][0] : nullptr, &k_arkit_tris[0][0], ARKIT_NPTS, ARKIT_NTRI);
+                    // Use MediaPipe mesh + canonical UVs for the texture pass.
+                    // Makeup PNGs are authored for MediaPipe UV space, not ARKit.
+                    apply_plan(plan, &k_face_uv[0][0], &k_face_tris[0][0], FACE_UV_NPTS, FACE_UV_NTRI);
                 }
             } else {
                 for (int fi = 0; fi < n_faces; ++fi) {

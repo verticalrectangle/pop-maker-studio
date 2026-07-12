@@ -7,7 +7,7 @@
 //   - luca992's contour data (eye/mouth ring vertices)
 //
 // Indices marked // runtime are computed from the live mesh in
-// face_filter_build_plan_arkit (their facial position varies with head
+// face_filter_build_plan_from_arkit (their facial position varies with head
 // pose and cannot be reliably hardcoded without the canonical mesh).
 //
 // Convention: L/R are the PERSON's left/right (ARKit +X = person's left).
