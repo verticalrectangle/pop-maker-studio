@@ -3,7 +3,6 @@
 #include "paths.h"
 #include "gl_compat.h"
 #include "stb_image.h"
-#include "generated/arkit_landmark_map.h"
 #include <cmath>
 #include <string>
 #include <map>
