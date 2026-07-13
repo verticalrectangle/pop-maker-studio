@@ -299,14 +299,25 @@ def el_shadow(img, color=None, alpha=None, palette=None, layers=None, seed=0, wi
     return over(img, l)
 
 def el_aegyo(img, alpha=30, seed=0):
+    # Bag-safe aegyo: sheer highlight tight under the lash line only.
+    # No dark crease — the old light+shadow pair sculpted real bags
+    # (highlight on the puff, trough under it). Blur ALPHA ONLY: RGBA
+    # GaussianBlur pulls RGB toward 0 and turns a "highlight" into a
+    # muddy multiply that the material-aware compositor deepens further.
     l = layer()
     d = ImageDraw.Draw(l)
+    a = max(0, min(255, int(alpha)))
     for lows in (LOW_L, LOW_R):
-        pts = [(x, y + ed * 0.045) for x, y in (P(i) for i in lows)]
-        d.line(pts, fill=(255, 238, 240, alpha), width=max(1, int(ed * 0.075)), joint='curve')
-        crease = [(x, y + ed * 0.10) for x, y in (P(i) for i in lows)]
-        d.line(crease, fill=(150, 100, 105, int(alpha * 0.6)), width=max(1, int(ed * 0.028)), joint='curve')
-    return over(img, l.filter(ImageFilter.GaussianBlur(ed * 0.035)))
+        pts = [(x, y + ed * 0.028) for x, y in (P(i) for i in lows)]
+        d.line(pts, fill=(255, 242, 244, a), width=max(1, int(ed * 0.040)), joint='curve')
+    _, _, _, al = l.split()
+    al = al.filter(ImageFilter.GaussianBlur(ed * 0.028))
+    l = Image.merge('RGBA', (
+        Image.new('L', l.size, 255),
+        Image.new('L', l.size, 242),
+        Image.new('L', l.size, 244),
+        al))
+    return over(img, l)
 
 def el_freckles(img, density=1.0, color=(150, 92, 66), alpha=110, seed=0):
     rng = random.Random(seed + 3)
@@ -594,7 +605,7 @@ LOOKS = {
     'doll_pink': [
         ('contour', dict(style='soft', alpha=30, areas=['cheek', 'jaw'])),
         ('blush', dict(style='cheeks', color=(255, 120, 160), alpha=50)),
-        ('aegyo', dict(alpha=36)),
+        ('aegyo', dict(alpha=20)),
         ('shadow', S(lid=((235, 130, 160), 55), crease=((220, 100, 135), 45), outer=((200, 80, 120), 40), inner=((255, 240, 245), 45), shimmer=((255, 245, 250), 30))),
         ('liner', dict(style='wing', alpha=200)),
         ('brow', dict(color=(75, 45, 40), alpha=95, width=0.065)),
@@ -606,7 +617,7 @@ LOOKS = {
         ('freckles', dict(density=1.4, color=(160, 90, 70), alpha=100)),
         ('shadow', S(lid=((235, 130, 150), 45), crease=((220, 95, 125), 40), outer=((200, 70, 100), 38), inner=((255, 240, 245), 40))),
         ('liner', dict(style='wing', alpha=210)),
-        ('aegyo', dict(alpha=22)),
+        ('aegyo', dict(alpha=12)),
         ('lip', dict(style='gloss', color=(220, 85, 105), alpha=90)),
         ('highlight', dict(style='satin', color=(255, 250, 245), alpha=40)),
     ],
@@ -618,13 +629,13 @@ LOOKS = {
         ('brow', dict(color=(70, 45, 38), alpha=110, width=0.070)),
         ('lip', dict(style='overline', color=(172, 110, 96), alpha=120)),
         ('highlight', dict(style='satin', color=(255, 245, 235), alpha=55)),
-        ('aegyo', dict(alpha=28)),
+        ('aegyo', dict(alpha=15)),
     ],
     'coquette': [
         ('blush', dict(style='cheeks', color=(255, 140, 160), alpha=48)),
         ('shadow', S(lid=((225, 160, 175), 45), crease=((205, 135, 150), 38), inner=((255, 240, 245), 40))),
         ('liner', dict(style='soft', alpha=170)),
-        ('aegyo', dict(alpha=28)),
+        ('aegyo', dict(alpha=15)),
         ('lip', dict(style='bitten', color=(210, 80, 105), alpha=85)),
         ('highlight', dict(style='satin', color=(255, 250, 245), alpha=42)),
     ],
@@ -662,7 +673,7 @@ LOOKS = {
     ],
     'angel': [
         ('blush', dict(style='cheeks', color=(255, 170, 185), alpha=40)),
-        ('aegyo', dict(alpha=36)),
+        ('aegyo', dict(alpha=20)),
         ('shadow', S(lid=((240, 210, 220), 42), crease=((225, 185, 195), 35), inner=((255, 245, 248), 45), shimmer=((255, 255, 255), 35))),
         ('liner', dict(style='soft', alpha=165)),
         ('brow', dict(color=(70, 50, 50), alpha=80, width=0.060)),
@@ -691,7 +702,7 @@ LOOKS = {
         ('freckles', dict(density=1.0, color=(170, 90, 80), alpha=95)),
         ('shadow', S(lid=((225, 140, 155), 45), crease=((205, 115, 130), 38), inner=((255, 240, 245), 40))),
         ('liner', dict(style='wing', alpha=200)),
-        ('aegyo', dict(alpha=26)),
+        ('aegyo', dict(alpha=14)),
         ('lip', dict(style='bitten', color=(225, 75, 95), alpha=92)),
         ('highlight', dict(style='satin', color=(255, 250, 245), alpha=45)),
     ],
@@ -892,7 +903,7 @@ LOOKS = {
     ('blush', dict(style='band', color=(255, 100, 110), alpha=55)),
     ('freckles', dict(density=1.2, color=(170, 95, 75), alpha=100)),
     ('shadow', S(lid=((235, 205, 180), 48), crease=((210, 175, 150), 42), outer=((185, 150, 125), 36), inner=((255, 250, 245), 45), shimmer=((255, 255, 255), 35))),
-    ('aegyo', dict(alpha=25)),
+    ('aegyo', dict(alpha=14)),
     ('liner', dict(style='wing', alpha=210)),
     ('brow', dict(color=(75, 55, 50), alpha=90, width=0.065)),
     ('lip', dict(style='gloss', color=(220, 100, 120), alpha=100)),
@@ -927,7 +938,7 @@ LOOKS = {
     'fairy_doll': [
     ('blush', dict(style='apple', color=(255, 160, 160), alpha=50)),
     ('shadow', S(lid=((250, 175, 180), 45), crease=((230, 150, 160), 38), outer=((210, 125, 135), 34), inner=((255, 245, 250), 48), shimmer=((255, 255, 255), 40))),
-    ('aegyo', dict(alpha=30)),
+    ('aegyo', dict(alpha=16)),
     ('liner', dict(style='soft', alpha=175)),
     ('brow', dict(color=(80, 60, 65), alpha=80, width=0.060)),
     ('lip', dict(style='gloss', color=(230, 130, 140), alpha=95)),
@@ -1052,7 +1063,7 @@ LOOKS = {
     'anime_doll': [
         ('contour', dict(style='soft', alpha=30, areas=['cheek', 'jaw'])),
         ('blush', dict(style='cheeks', color=(255, 130, 160), alpha=55)),
-        ('aegyo', dict(alpha=40)),
+        ('aegyo', dict(alpha=22)),
         ('shadow', S(lid=((80, 200, 220), 60), crease=((50, 170, 200), 50), outer=((30, 140, 180), 42), inner=((220, 250, 255), 45), shimmer=((200, 245, 255), 40))),
         ('liner', dict(style='graphic', alpha=230)),
         ('lashes', dict(strength=1.0, style='doll')),
@@ -1072,7 +1083,7 @@ LOOKS = {
     'pastel_fairy': [
         ('contour', dict(style='soft', alpha=25)),
         ('blush', dict(style='cheeks', color=(240, 150, 180), alpha=48)),
-        ('aegyo', dict(alpha=35)),
+        ('aegyo', dict(alpha=19)),
         ('shadow', S(lid=((210, 180, 230), 50), crease=((185, 155, 210), 42), outer=((160, 130, 190), 35), inner=((245, 235, 255), 45), shimmer=((255, 230, 250), 45))),
         ('liner', dict(style='wing', alpha=210)),
         ('lashes', dict(strength=0.9, style='wispy')),
@@ -1103,7 +1114,7 @@ LOOKS = {
     'rose_gold_doll': [
         ('contour', dict(style='soft', alpha=30)),
         ('blush', dict(style='cheeks', color=(255, 150, 140), alpha=48)),
-        ('aegyo', dict(alpha=35)),
+        ('aegyo', dict(alpha=19)),
         ('shadow', S(lid=((235, 180, 165), 52), crease=((215, 150, 140), 42), outer=((195, 120, 115), 36), inner=((255, 240, 230), 45), shimmer=((255, 220, 200), 45))),
         ('liner', dict(style='wing', alpha=200)),
         ('lashes', dict(strength=0.9, style='doll')),
@@ -1143,7 +1154,7 @@ LOOKS = {
     ],
     'kawaii_blush': [
         ('blush', dict(style='band', color=(255, 110, 130), alpha=70)),
-        ('aegyo', dict(alpha=38)),
+        ('aegyo', dict(alpha=21)),
         ('shadow', S(lid=((230, 160, 170), 42), crease=((210, 130, 145), 35), inner=((255, 240, 245), 40))),
         ('liner', dict(style='soft', alpha=170)),
         ('lashes', dict(strength=0.85, style='doll')),
@@ -1164,7 +1175,7 @@ LOOKS = {
     'soft_amber_doll': [
         ('contour', dict(style='soft', alpha=28)),
         ('blush', dict(style='cheeks', color=(250, 160, 130), alpha=48)),
-        ('aegyo', dict(alpha=35)),
+        ('aegyo', dict(alpha=19)),
         ('shadow', S(lid=((235, 175, 130), 48), crease=((215, 145, 100), 40), inner=((255, 240, 220), 42), shimmer=((255, 235, 200), 35))),
         ('liner', dict(style='soft', alpha=170)),
         ('lashes', dict(strength=0.85, style='doll')),
@@ -1193,7 +1204,7 @@ LOOKS = {
     ],
     'pastel_kitten': [
         ('blush', dict(style='cheeks', color=(255, 135, 155), alpha=55)),
-        ('aegyo', dict(alpha=32)),
+        ('aegyo', dict(alpha=18)),
         ('shadow', S(lid=((225, 165, 185), 48), crease=((205, 135, 160), 40), outer=((185, 110, 140), 34), inner=((255, 240, 250), 42), shimmer=((245, 220, 240), 45))),
         ('liner', dict(style='wing', alpha=205)),
         ('lashes', dict(strength=0.85, style='wispy')),
@@ -1214,7 +1225,7 @@ LOOKS = {
     'soft_amber_glow': [
         ('contour', dict(style='soft', alpha=30)),
         ('blush', dict(style='sunkissed', color=(245, 160, 120), alpha=48)),
-        ('aegyo', dict(alpha=30)),
+        ('aegyo', dict(alpha=16)),
         ('shadow', S(lid=((235, 180, 135), 50), crease=((215, 150, 105), 42), outer=((195, 125, 80), 36), inner=((255, 240, 220), 42), shimmer=((255, 235, 200), 40))),
         ('liner', dict(style='soft', alpha=170)),
         ('lashes', dict(strength=0.8, style='wispy')),

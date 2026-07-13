@@ -93,6 +93,12 @@ CatEye 26, EGirl 22, Doll 23…). Plate looks: force via `PMS_NATIVE_ATLAS`.
 - **Skin tone runs** (light vs deep `--skin`): pigment adapts — pink stays
   pink but takes the skin's brightness; NO whitening from foundation
   washes; skin texture visible through pigment.
+- **Under-eye / bags**: aegyo looks (Doll Pink, Angel, Anime Doll, …) may
+  show a sheer bright strip tight under the lash — never a dark trough
+  under it. A highlight+crease pair sculpts real bags worse; material-
+  aware blend then deepens the trough. Check on a *real* fixture, not the
+  canonical head (bags are per-person). If bags pop, kill/soften `el_aegyo`
+  and rebake plates → ARKit atlases.
 
 ## 5. Gates (run all before pushing engine or atlas changes)
 
@@ -127,5 +133,6 @@ liner floating above lash lines (warp built from similarity fit only),
 phantom brows (TPS dragging the brow zone), leopard freckles
 (nearest-neighbor warp), mask edges at profile (no silhouette fade),
 doubled liner on closed lids (no depth buffer), twitchy lids (unfiltered
-vertex noise), whitening (mid-grey multiply tint). Static neutral-pose
-checks caught none of them — motion fixtures and eyes-on PNG review did.
+vertex noise), whitening (mid-grey multiply tint), under-eye bags carved
+harder by aegyo highlight+crease (RGBA blur muddying the strip into dark
+pigment the material blend then deepened). Static neutral-pose
