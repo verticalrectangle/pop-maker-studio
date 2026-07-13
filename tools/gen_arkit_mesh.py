@@ -47,6 +47,8 @@ def parse_obj(path):
     ntri = len(tris)
     if not vt_raw:
         uv = [(0.0, 0.0)] * npts
+    elif len(vt_raw) == npts:
+        uv = vt_raw          # ARKit dumps: vt is 1:1 with v
     else:
         uv = [vt_raw[v2vt[i]] for i in range(npts)]
     return verts, uv, tris

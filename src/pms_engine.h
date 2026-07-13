@@ -62,6 +62,23 @@ void pms_submit_arkit_face(pms_engine*, const float* vertices_1220x2,
                            const float* blendshapes_52, int n_faces,
                            int w, int h);
 
+// Native 3D ARKit face submission (tier-1 rewrite; supersedes the 2D
+// variant on devices with TrueDepth). All matrices are column-major
+// simd_float4x4 layout. verts are ARFaceGeometry.vertices in face-anchor
+// model space (meters); model = anchor transform; view/proj = the camera's
+// viewMatrix/projectionMatrix for the PORTRAIT viewport (w x h) that the
+// submitted camera frames use. eye_l/eye_r = left/rightEyeTransform
+// (anchor space). is_tracked == 0 clears the slot (face lost): the engine
+// hides makeup instead of painting with frozen geometry.
+void pms_submit_arkit_face_3d(pms_engine*, const float* verts_1220x3,
+                              const float* model_4x4,
+                              const float* view_4x4,
+                              const float* proj_4x4,
+                              const float* eye_l_4x4,
+                              const float* eye_r_4x4,
+                              const float* blendshapes_52,
+                              int is_tracked, int w, int h);
+
 // Submit one visual layer's frame, addressed by engine clip identity
 // (track index, clip index). BGRA CVPixelBufferRef bridged as void*; the
 // engine retains it until superseded. Text/overlay layers may be submitted

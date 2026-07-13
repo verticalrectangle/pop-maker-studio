@@ -15,9 +15,40 @@ struct ARKitFaceSlot {
 
 static ARKitFaceSlot g_arkit_slot;
 
+static struct {
+    std::mutex mtx;
+    ARKitFace3D face;
+    double submit_t = 0.0;
+} g_arkit3d;
+
 void arkit_face_note_camera_time(double host_time) {
-    std::lock_guard<std::mutex> lk(g_arkit_slot.mtx);
-    g_arkit_slot.cam_t = host_time;
+    {
+        std::lock_guard<std::mutex> lk(g_arkit_slot.mtx);
+        g_arkit_slot.cam_t = host_time;
+    }
+    // (single writer per frame; the 3D slot reads the 2D slot's clock)
+}
+
+void arkit_face3d_submit(const ARKitFace3D* f) {
+    std::lock_guard<std::mutex> lk(g_arkit3d.mtx);
+    if (!f || !f->valid) { g_arkit3d.face.valid = false; return; }
+    g_arkit3d.face = *f;
+    std::lock_guard<std::mutex> lk2(g_arkit_slot.mtx);
+    g_arkit3d.submit_t = g_arkit_slot.cam_t;
+}
+
+bool arkit_face3d_take(ARKitFace3D* out) {
+    if (!out) return false;
+    double cam_t;
+    {
+        std::lock_guard<std::mutex> lk2(g_arkit_slot.mtx);
+        cam_t = g_arkit_slot.cam_t;
+    }
+    std::lock_guard<std::mutex> lk(g_arkit3d.mtx);
+    if (!g_arkit3d.face.valid) return false;
+    if (cam_t - g_arkit3d.submit_t > 0.15) return false;   // stale (see 2D slot)
+    *out = g_arkit3d.face;
+    return true;
 }
 
 void arkit_face_submit(const ARKitFaceObs* obs, int n_faces) {
@@ -108,7 +139,7 @@ bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
              FB_EYE_LOOK_UP_L, FB_EYE_LOOK_DOWN_L, -1.f},
         };
         for (const EyeMap& e : eyes) {
-            float cx = mp_obs.pts[e.iris0][0], cy = mp_obs.pts[e.iris0][1];
+            float cy = mp_obs.pts[e.iris0][1];
             float half_w = 0.5f * fabsf(mp_obs.pts[e.c_in][0]
                                         - mp_obs.pts[e.c_out][0]);
             float up_span = cy - mp_obs.pts[e.lid_up][1];   // screen y down

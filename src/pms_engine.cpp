@@ -156,6 +156,36 @@ void pms_submit_arkit_face(pms_engine*, const float* vertices_1220x2,
     }
     arkit_face_submit(obs, n_faces);
 }
+void pms_submit_arkit_face_3d(pms_engine*, const float* verts_1220x3,
+                              const float* model_4x4,
+                              const float* view_4x4,
+                              const float* proj_4x4,
+                              const float* eye_l_4x4,
+                              const float* eye_r_4x4,
+                              const float* blendshapes_52,
+                              int is_tracked, int w, int h) {
+    if (!verts_1220x3 || !model_4x4 || !view_4x4 || !proj_4x4 ||
+        !is_tracked || w <= 0 || h <= 0) {
+        arkit_face3d_submit(nullptr);
+        return;
+    }
+    static ARKitFace3D f;   // large; engine submits are single-threaded
+    f.valid = true;
+    memcpy(f.verts, verts_1220x3, sizeof(f.verts));
+    memcpy(f.model, model_4x4, sizeof(f.model));
+    memcpy(f.view, view_4x4, sizeof(f.view));
+    memcpy(f.proj, proj_4x4, sizeof(f.proj));
+    if (eye_l_4x4) memcpy(f.eye_l, eye_l_4x4, sizeof(f.eye_l));
+    else           memset(f.eye_l, 0, sizeof(f.eye_l));
+    if (eye_r_4x4) memcpy(f.eye_r, eye_r_4x4, sizeof(f.eye_r));
+    else           memset(f.eye_r, 0, sizeof(f.eye_r));
+    f.has_blend = blendshapes_52 != nullptr;
+    if (blendshapes_52) memcpy(f.blend, blendshapes_52, sizeof(f.blend));
+    else                memset(f.blend, 0, sizeof(f.blend));
+    f.w = w; f.h = h;
+    arkit_face3d_submit(&f);
+}
+
 void pms_submit_layer_frame(pms_engine*, int track, int clip,
                             void* cv_pixel_buffer_bgra,
                             int rotation_quarter_turns, double host_time) {

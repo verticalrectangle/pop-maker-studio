@@ -11,10 +11,12 @@
 #include "app.h"          // AppState/Track/Clip — the scene compositor walks these
 #include "face_filters.h" // BeautyLook + face_filter_build_plan_look (face_fx)
 #include "face_track.h"   // live FaceObs for the record-mode makeup passes
+#include "arkit_face.h"   // 2D bridge slot + native 3D observation (tier 1)
 #include "paths.h"        // app_models_dir() — makeup PNGs live in models/face
 #include "stb_image.h"    // makeup texture load (impl compiled in video.cpp)
 // ARKit face mesh topology (1220 verts, 2304 tris) for the TrueDepth front-camera path
 #include "generated/arkit_face_mesh.h"
+#include <functional>
 // MediaPipe canonical UVs + 898-tri topology (rear / non-TrueDepth path)
 #include "generated/face_uv_mesh.h"
 #include "json.hpp"
@@ -811,6 +813,70 @@ vertex MkVOut face_mk_v(uint vid [[vertex_id]],
     o.pos = float4(o.srcuv.x * 2.0 - 1.0, 1.0 - o.srcuv.y * 2.0, 0.0, 1.0);
     return o;
 }
+// ── Native ARKit mesh + iris (tier-1 rewrite; docs/ARKIT_NATIVE_PLAN.md) ──
+// The mesh is rendered with ARKit's own MVP and textured by an ARKit-UV
+// makeup atlas: pigment rides the skin, so blinks/expressions/noise are
+// carried by the surface instead of reconstructed from landmarks. The pass
+// writes stencil=1 wherever the face covers the frame; the iris pass tests
+// stencil==0 so discs show only through the mesh's eye holes (lids clip
+// them geometrically, closing the eye hides the iris).
+struct FaceNatUni {
+    float4x4 mvp;
+    float2 dim; float opacity; float adapt;
+};
+struct NatVOut { float4 pos [[position]]; float2 mkuv; };
+vertex NatVOut face_nat_v(uint vid [[vertex_id]],
+                          device const packed_float3* pos [[buffer(0)]],
+                          device const float2* uv [[buffer(1)]],
+                          constant FaceNatUni& u [[buffer(2)]]) {
+    NatVOut o;
+    o.pos = u.mvp * float4(float3(pos[vid]), 1.0);
+    o.mkuv = uv[vid];
+    return o;
+}
+fragment float4 face_nat_f(NatVOut in [[stage_in]],
+                           constant FaceNatUni& u [[buffer(0)]],
+                           texture2d<float> mk [[texture(0)]],
+                           texture2d<float> srct [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float2 srcuv = in.pos.xy / u.dim;
+    float3 base = srct.sample(s, srcuv).rgb;
+    float4 mkc = mk.sample(s, in.mkuv);
+    float base_lum = f_lum(base);
+    float3 tintn = base / max(base_lum, 0.04);
+    float3 lit = mkc.rgb
+               * mix(float3(1.0), clamp(tintn, 0.55, 1.0), u.adapt * 0.65)
+               * mix(1.0, clamp(base_lum * 1.9, 0.20, 1.0), u.adapt * 0.85);
+    float a = clamp(mkc.a * u.opacity, 0.0, 1.0);
+    return float4(mix(base, lit, a), 1.0);
+}
+
+struct FaceIrisUni { float2 dim; float amount; float pad0; float4 color; };
+struct IrisV { float4 clip; float2 loc; float2 pad; };
+struct IrisVOut { float4 pos [[position]]; float2 loc; };
+vertex IrisVOut face_iris_v(uint vid [[vertex_id]],
+                            device const IrisV* v [[buffer(0)]]) {
+    IrisVOut o; o.pos = v[vid].clip; o.loc = v[vid].loc; return o;
+}
+fragment float4 face_iris_f(IrisVOut in [[stage_in]],
+                            constant FaceIrisUni& u [[buffer(0)]],
+                            texture2d<float> srct [[texture(1)]]) {
+    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+    float r = length(in.loc);
+    if (r > 1.0) discard_fragment();
+    float2 srcuv = in.pos.xy / u.dim;
+    float3 base = srct.sample(s, srcuv).rgb;
+    float lum = f_lum(base);
+    float ring  = smoothstep(0.78, 0.98, r);      // limbal ring
+    float pupil = 1.0 - smoothstep(0.30, 0.42, r);
+    float3 col = float3(u.color.rgb) * (0.35 + 0.90 * lum);
+    col *= (1.0 - 0.55 * ring);
+    col *= (1.0 - 0.85 * pupil);
+    float a = u.amount * (1.0 - smoothstep(0.92, 1.0, r));
+    a *= 1.0 - smoothstep(0.75, 0.90, lum);       // keep catchlights white
+    return float4(mix(base, col, a), 1.0);
+}
+
 // Debug landmark overlay: point sprites at the tracked/bridged landmarks.
 struct DbgVOut { float4 pos [[position]]; float ps [[point_size]]; float4 col [[flat]]; };
 vertex DbgVOut face_dbg_v(uint vid [[vertex_id]],
@@ -1081,7 +1147,8 @@ static ChromaUniCPU chroma_uniforms(const LiveFx& fx, int pass, int w, int h) {
 }
 
 // ── Face FX (makeup looks — stateless passes over live FaceObs) ─────────────
-enum { kFaceWarp = 0, kFaceBeauty = 1, kFaceMesh = 2, kFaceDbg = 3, kFacePsoCount = 4 };
+enum { kFaceWarp = 0, kFaceBeauty = 1, kFaceMesh = 2, kFaceDbg = 3,
+       kFaceNat = 4, kFaceIris = 5, kFacePsoCount = 6 };
 static id<MTLRenderPipelineState> g_face_pso[kFacePsoCount] = { nil, nil, nil };
 static bool g_face_tried = false;
 
@@ -1104,6 +1171,61 @@ struct FaceMkUniCPU { float dim[2]; float opacity, adapt;
 
 // Makeup PNGs (models/face/, canonical-UV space) → RGBA8 textures, by name.
 static std::map<std::string, id<MTLTexture>> g_face_mk_tex;
+
+// ── Native ARKit path helpers (docs/ARKIT_NATIVE_PLAN.md) ────────────────
+// out = a*b for column-major 4x4 (simd_float4x4 memory layout).
+static void mat4_mul(const float* a, const float* b, float* out) {
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) {
+            float acc = 0.f;
+            for (int k = 0; k < 4; ++k) acc += a[k * 4 + r] * b[c * 4 + k];
+            out[c * 4 + r] = acc;
+        }
+}
+static void mat4_xform(const float* m, const float* v3, float w, float* out4) {
+    for (int r = 0; r < 4; ++r)
+        out4[r] = m[0 * 4 + r] * v3[0] + m[1 * 4 + r] * v3[1]
+                + m[2 * 4 + r] * v3[2] + m[3 * 4 + r] * w;
+}
+
+static id<MTLTexture> g_face_stencil = nil;
+static id<MTLDepthStencilState> g_dss_swrite = nil;   // write 1, no test
+static id<MTLDepthStencilState> g_dss_seq0 = nil;     // pass only where 0
+static id<MTLBuffer> g_arkit_uv_buf = nil;            // constant topology
+static id<MTLBuffer> g_arkit_idx_buf = nil;
+
+static bool face_native_resources(int sw, int sh) {
+    if (!g_dss_swrite) {
+        MTLDepthStencilDescriptor* d = [MTLDepthStencilDescriptor new];
+        MTLStencilDescriptor* st = [MTLStencilDescriptor new];
+        st.stencilCompareFunction = MTLCompareFunctionAlways;
+        st.depthStencilPassOperation = MTLStencilOperationReplace;
+        d.frontFaceStencil = st; d.backFaceStencil = st;
+        g_dss_swrite = [g_dev newDepthStencilStateWithDescriptor:d];
+        MTLStencilDescriptor* se = [MTLStencilDescriptor new];
+        se.stencilCompareFunction = MTLCompareFunctionEqual;
+        d.frontFaceStencil = se; d.backFaceStencil = se;
+        g_dss_seq0 = [g_dev newDepthStencilStateWithDescriptor:d];
+    }
+    if (!g_arkit_uv_buf) {
+        g_arkit_uv_buf = [g_dev newBufferWithBytes:&k_arkit_uv[0][0]
+                                            length:sizeof(k_arkit_uv)
+                                           options:MTLResourceStorageModeShared];
+        g_arkit_idx_buf = [g_dev newBufferWithBytes:&k_arkit_tris[0][0]
+                                             length:sizeof(k_arkit_tris)
+                                            options:MTLResourceStorageModeShared];
+    }
+    if (!g_face_stencil || (int)g_face_stencil.width != sw
+                        || (int)g_face_stencil.height != sh) {
+        MTLTextureDescriptor* td = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatStencil8
+            width:sw height:sh mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget;
+        td.storageMode = MTLStorageModePrivate;
+        g_face_stencil = [g_dev newTextureWithDescriptor:td];
+    }
+    return g_dss_swrite && g_arkit_uv_buf && g_arkit_idx_buf && g_face_stencil;
+}
 
 static id<MTLTexture> face_makeup_texture(const char* name) {
     auto it = g_face_mk_tex.find(name);
@@ -1284,6 +1406,21 @@ static id<MTLRenderPipelineState> get_face_pso(int which) {
                 if (mv) make(kFaceMesh, @"face_mk_f", mv);
                 id<MTLFunction> dv = [lib newFunctionWithName:@"face_dbg_v"];
                 if (dv) make(kFaceDbg, @"face_dbg_f", dv);
+                // Native passes carry a stencil attachment (iris clipping).
+                auto make_s = [&](int slot, NSString* vname, NSString* fname) {
+                    id<MTLFunction> vf = [lib newFunctionWithName:vname];
+                    id<MTLFunction> ff = [lib newFunctionWithName:fname];
+                    if (!vf || !ff) { NSLog(@"[face_fx] %@/%@ not found", vname, fname); return; }
+                    MTLRenderPipelineDescriptor* rd = [MTLRenderPipelineDescriptor new];
+                    rd.vertexFunction = vf; rd.fragmentFunction = ff;
+                    rd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+                    rd.stencilAttachmentPixelFormat = MTLPixelFormatStencil8;
+                    NSError* err = nil;
+                    g_face_pso[slot] = [g_dev newRenderPipelineStateWithDescriptor:rd error:&err];
+                    if (!g_face_pso[slot]) NSLog(@"[face_fx] %@ pso: %@", fname, err);
+                };
+                make_s(kFaceNat,  @"face_nat_v",  @"face_nat_f");
+                make_s(kFaceIris, @"face_iris_v", @"face_iris_f");
             }
         }
     }
@@ -1450,18 +1587,20 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
             // Tier 1: TrueDepth front camera → ARKit face mesh (zero latency).
             // Tier 2: rear camera → CoreML EP synchronous tracking on this thread.
             // Tier 3: fallback → async MediaPipe worker (non-TrueDepth / desktop).
+            ARKitFace3D f3;
+            bool native3d = arkit_face3d_take(&f3);
             ARKitFaceObs arkit_faces[4];
-            int n_arkit = arkit_face_take(arkit_faces, 4);
-            if (n_arkit < 1 && !face_track_available()) {
+            int n_arkit = native3d ? 0 : arkit_face_take(arkit_faces, 4);
+            if (!native3d && n_arkit < 1 && !face_track_available()) {
                 set_status(i, "face_models_missing"); continue;
             }
             FaceObs faces[4];
             int n_faces = 0;
-            if (n_arkit < 1) {
+            if (!native3d && n_arkit < 1) {
                 face_track_run_sync_live();       // synchronous rear-camera path
                 n_faces = face_track_latest_all(faces, 4);
             }
-            if (n_arkit < 1 && n_faces < 1) { set_status(i, "no_face"); continue; }
+            if (!native3d && n_arkit < 1 && n_faces < 1) { set_status(i, "no_face"); continue; }
             id<MTLRenderPipelineState> warp_pso   = get_face_pso(kFaceWarp);
             id<MTLRenderPipelineState> beauty_pso = get_face_pso(kFaceBeauty);
             id<MTLRenderPipelineState> mesh_pso   = get_face_pso(kFaceMesh);
@@ -1476,7 +1615,9 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
             // (positions in plan.mesh_pts — from the tracker directly, or
             // evaluated from the ARKit mesh via the barycentric bridge).
             auto apply_plan = [&](auto& plan, const float* uv, const unsigned short* tris,
-                                  int npts, int ntri) {
+                                  int npts, int ntri,
+                                  const std::function<void(id<MTLTexture>, id<MTLTexture>)>&
+                                      native_hook = {}) {
                 // 1. beauty (skin + procedural makeup) — fullscreen.
                 if (plan.has_beauty) {
                     MTLRenderPassDescriptor* rp1 = [MTLRenderPassDescriptor new];
@@ -1572,6 +1713,14 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                     }
                     cur = target; dst ^= 1;
                 }
+                // 2.5 native ARKit pigment + iris (tier-1 rewrite): renders
+                //     the ARKit mesh itself; drawn before the warp so bumps
+                //     deform frame and pigment together.
+                if (native_hook) {
+                    id<MTLTexture> target = ping[dst];
+                    native_hook(cur, target);
+                    cur = target; dst ^= 1;
+                }
                 // 3. shape warp — fullscreen, last so it deforms skin + pigment.
                 if (plan.n_bumps > 0) {
                     FaceWarpUniCPU wu = {};
@@ -1632,7 +1781,159 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                 }
                 ++applied_faces;
             };
-            if (n_arkit > 0) {
+            native3d = native3d
+                    && get_face_pso(kFaceNat) && get_face_pso(kFaceIris)
+                    && face_native_resources(sw, sh);
+            if (native3d) {
+                // ── Native tier-1 path (docs/ARKIT_NATIVE_PLAN.md) ────────
+                // Pigment: the ARKit mesh itself, MVP = proj*view*model,
+                // textured by the look's ARKit-UV atlas. Iris: discs at the
+                // eye-transform pupils, stencil-clipped to the mesh's eye
+                // holes. Beauty/warp: the existing passes, their landmark
+                // uniforms from CPU-projected vertices (the bridge table
+                // feeds ONLY the fullscreen beauty mask now — pigment and
+                // iris never touch it).
+                float mv[16], mvp[16];
+                mat4_mul(f3.view, f3.model, mv);
+                mat4_mul(f3.proj, mv, mvp);
+                static ARKitFaceObs obs2d;
+                obs2d = ARKitFaceObs{};
+                obs2d.valid = true; obs2d.score = 1.f;
+                obs2d.w = f3.w; obs2d.h = f3.h;
+                obs2d.has_blend = f3.has_blend;
+                memcpy(obs2d.blend, f3.blend, sizeof(obs2d.blend));
+                for (int v = 0; v < ARKIT_NPTS; ++v) {
+                    float c4[4];
+                    mat4_xform(mvp, f3.verts[v], 1.f, c4);
+                    float iw2 = 1.f / (fabsf(c4[3]) > 1e-6f ? c4[3] : 1e-6f);
+                    obs2d.pts[v][0] = (c4[0] * iw2 * 0.5f + 0.5f) * (float)f3.w;
+                    obs2d.pts[v][1] = (1.f - (c4[1] * iw2 * 0.5f + 0.5f)) * (float)f3.h;
+                }
+                // Pigment lives in the atlas: zero the procedural elements
+                // the beauty shader would double-draw.
+                BeautyLook lookn = look;
+                lookn.lash = lookn.liner = lookn.lash_wing = 0.f;
+                lookn.shadow = lookn.lip = lookn.blush = 0.f;
+                lookn.freckles = lookn.nose_blush = 0.f;
+                lookn.iris_tint = 0.f;   // native iris pass handles it
+                FaceRenderPlan plan;
+                if (face_filter_build_plan_from_arkit(lookn, famt, obs2d, sw, sh, plan)
+                    && plan.valid) {
+                    int filter_id = 0;
+                    { auto p = fx.params.find("face_filter");
+                      if (p != fx.params.end()) filter_id = (int)p->second; }
+                    std::string nat_name = std::string("arkit/")
+                        + (look.makeup_tex ? look.makeup_tex
+                           : ("look_" + std::to_string(filter_id) + ".png"));
+                    if (const char* ov = getenv("PMS_NATIVE_ATLAS"))
+                        nat_name = std::string("arkit/") + ov;   // replay QA
+                    id<MTLTexture> atlas = face_makeup_texture(nat_name.c_str());
+                    float iris_amt = look.iris_tint * famt;
+                    auto hook = [&](id<MTLTexture> src, id<MTLTexture> target) {
+                        id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+                        [bl copyFromTexture:src sourceSlice:0 sourceLevel:0
+                               sourceOrigin:MTLOriginMake(0, 0, 0)
+                                 sourceSize:MTLSizeMake(sw, sh, 1)
+                                  toTexture:target destinationSlice:0
+                           destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+                        [bl endEncoding];
+                        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor new];
+                        rp.colorAttachments[0].texture     = target;
+                        rp.colorAttachments[0].loadAction  = MTLLoadActionLoad;
+                        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+                        rp.stencilAttachment.texture       = g_face_stencil;
+                        rp.stencilAttachment.loadAction    = MTLLoadActionClear;
+                        rp.stencilAttachment.clearStencil  = 0;
+                        rp.stencilAttachment.storeAction   = MTLStoreActionDontCare;
+                        id<MTLRenderCommandEncoder> e =
+                            [cb renderCommandEncoderWithDescriptor:rp];
+                        // mesh: writes stencil 1 wherever the face covers
+                        struct { float mvp[16]; float dim[2]; float opacity, adapt; } nu;
+                        memcpy(nu.mvp, mvp, sizeof(nu.mvp));
+                        nu.dim[0] = (float)sw; nu.dim[1] = (float)sh;
+                        nu.opacity = atlas ? fminf(famt, 1.5f) : 0.f;
+                        nu.adapt = 1.f;
+                        id<MTLBuffer> vb = [g_dev newBufferWithBytes:&f3.verts[0][0]
+                                                              length:sizeof(f3.verts)
+                                                             options:MTLResourceStorageModeShared];
+                        [e setRenderPipelineState:get_face_pso(kFaceNat)];
+                        [e setDepthStencilState:g_dss_swrite];
+                        [e setStencilReferenceValue:1];
+                        [e setCullMode:MTLCullModeBack];
+                        [e setFrontFacingWinding:MTLWindingCounterClockwise];
+                        [e setVertexBuffer:vb offset:0 atIndex:0];
+                        [e setVertexBuffer:g_arkit_uv_buf offset:0 atIndex:1];
+                        [e setVertexBytes:&nu length:sizeof(nu) atIndex:2];
+                        [e setFragmentBytes:&nu length:sizeof(nu) atIndex:0];
+                        if (atlas) [e setFragmentTexture:atlas atIndex:0];
+                        [e setFragmentTexture:src atIndex:1];
+                        [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                      indexCount:ARKIT_NTRI * 3
+                                       indexType:MTLIndexTypeUInt16
+                                     indexBuffer:g_arkit_idx_buf
+                               indexBufferOffset:0];
+                        // iris discs: only through the eye holes (stencil 0)
+                        bool has_eyes = false;
+                        for (int k2 = 0; k2 < 16; ++k2)
+                            if (f3.eye_l[k2] != 0.f) { has_eyes = true; break; }
+                        if (iris_amt > 0.001f && has_eyes) {
+                            struct IrisVCPU { float clip[4]; float loc[2]; float pad[2]; };
+                            IrisVCPU iv[12];
+                            int n_iv = 0;
+                            const float* eyes3d[2] = {f3.eye_l, f3.eye_r};
+                            for (int e2 = 0; e2 < 2; ++e2) {
+                                const float* em = eyes3d[e2];
+                                // pupil = eyeball center + gaze * r_eye.
+                                // ARKit eye transforms: -Z is the gaze
+                                // direction (SceneKit convention).
+                                const float R_EYE = 0.0122f, R_IRIS = 0.0062f;
+                                float cx2 = em[12], cy2 = em[13], cz2 = em[14];
+                                float gx = -em[8], gy = -em[9], gz = -em[10];
+                                float px2 = cx2 + gx * R_EYE;
+                                float py2 = cy2 + gy * R_EYE;
+                                float pz2 = cz2 + gz * R_EYE;
+                                float axx = em[0] * R_IRIS, axy = em[1] * R_IRIS,
+                                      axz = em[2] * R_IRIS;
+                                float ayx = em[4] * R_IRIS, ayy = em[5] * R_IRIS,
+                                      ayz = em[6] * R_IRIS;
+                                float corner[4][3]; float locs[4][2] = {
+                                    {-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+                                for (int c2 = 0; c2 < 4; ++c2) {
+                                    corner[c2][0] = px2 + locs[c2][0] * axx + locs[c2][1] * ayx;
+                                    corner[c2][1] = py2 + locs[c2][0] * axy + locs[c2][1] * ayy;
+                                    corner[c2][2] = pz2 + locs[c2][0] * axz + locs[c2][1] * ayz;
+                                }
+                                int quad[6] = {0, 1, 2, 0, 2, 3};
+                                for (int q = 0; q < 6; ++q) {
+                                    float c4b[4];
+                                    mat4_xform(mvp, corner[quad[q]], 1.f, c4b);
+                                    IrisVCPU& o = iv[n_iv++];
+                                    o.clip[0] = c4b[0]; o.clip[1] = c4b[1];
+                                    o.clip[2] = c4b[2]; o.clip[3] = c4b[3];
+                                    o.loc[0] = locs[quad[q]][0];
+                                    o.loc[1] = locs[quad[q]][1];
+                                }
+                            }
+                            struct { float dim[2]; float amount, pad0; float color[4]; } iu;
+                            iu.dim[0] = (float)sw; iu.dim[1] = (float)sh;
+                            iu.amount = fminf(iris_amt, 1.f);
+                            iu.color[0] = look.iris_col[0]; iu.color[1] = look.iris_col[1];
+                            iu.color[2] = look.iris_col[2]; iu.color[3] = 1.f;
+                            [e setRenderPipelineState:get_face_pso(kFaceIris)];
+                            [e setDepthStencilState:g_dss_seq0];
+                            [e setStencilReferenceValue:0];
+                            [e setCullMode:MTLCullModeNone];
+                            [e setVertexBytes:iv length:sizeof(IrisVCPU) * n_iv atIndex:0];
+                            [e setFragmentBytes:&iu length:sizeof(iu) atIndex:0];
+                            [e setFragmentTexture:src atIndex:1];
+                            [e drawPrimitives:MTLPrimitiveTypeTriangle
+                                  vertexStart:0 vertexCount:(NSUInteger)n_iv];
+                        }
+                        [e endEncoding];
+                    };
+                    apply_plan(plan, nullptr, nullptr, 0, 0, hook);
+                }
+            } else if (n_arkit > 0) {
                 // Render the MediaPipe topology positioned by the exact
                 // ARKit→MP barycentric bridge (plan.mesh_pts) — NOT the raw
                 // ARKit mesh: ARKit's eye cutouts extend ~5mm below the

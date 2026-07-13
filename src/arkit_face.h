@@ -40,3 +40,22 @@ void arkit_face_clear();
 // stalled anchor stream (fast motion, tracking loss) must never keep
 // painting frozen landmarks onto fresh video.
 void arkit_face_note_camera_time(double host_time);
+
+// ── Native 3D path (tier-1 rewrite) ─────────────────────────────────────
+// Full ARKit face state: model-space vertices + the transform chain + eye
+// poses. The engine renders the ARKit mesh itself with these matrices —
+// no 2D projection in Swift, no landmark correspondence in the render.
+struct ARKitFace3D {
+    bool  valid = false;
+    bool  has_blend = false;
+    float verts[ARKIT_NPTS][3];   // face-anchor model space (meters)
+    float model[16];              // anchor transform  (column-major)
+    float view[16];               // camera view matrix
+    float proj[16];               // projection for the portrait viewport
+    float eye_l[16], eye_r[16];   // eyeball transforms (anchor space)
+    float blend[ARKIT_NBLEND];
+    int   w = 0, h = 0;           // viewport the projection targets
+};
+
+void arkit_face3d_submit(const ARKitFace3D* f);   // null/!valid clears
+bool arkit_face3d_take(ARKitFace3D* out);         // false when empty/stale
