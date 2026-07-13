@@ -80,6 +80,7 @@ static void write_png(const std::string& path, const Img& im) {
 }
 
 // Flat skin-tone camera frame (pigment shows on it like on skin).
+static uint8_t g_skin[3] = {205, 170, 150};   // r,g,b — override with --skin
 static CVPixelBufferRef skin_frame() {
     NSDictionary* attrs = @{ (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
                              (id)kCVPixelBufferMetalCompatibilityKey: @YES };
@@ -92,7 +93,7 @@ static CVPixelBufferRef skin_frame() {
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
             uint8_t* q = dst + (size_t)y * bpr + (size_t)x * 4;
-            q[0] = 150; q[1] = 170; q[2] = 205; q[3] = 255;   // BGRA skin
+            q[0] = g_skin[2]; q[1] = g_skin[1]; q[2] = g_skin[0]; q[3] = 255;
         }
     CVPixelBufferUnlockBaseAddress(pb, 0);
     return pb;
@@ -126,6 +127,13 @@ int main(int argc, char** argv) {
     const std::string obj_path = argv[1], prefix = argv[2];
     const double filter_id = argc > 3 ? atof(argv[3]) : 13.0;
     const double amount    = argc > 4 ? atof(argv[4]) : 1.0;
+    if (argc > 5) {   // --skin support: "r,g,b" as the 5th arg
+        int r2, g2, b2;
+        if (sscanf(argv[5], "%d,%d,%d", &r2, &g2, &b2) == 3) {
+            g_skin[0] = (uint8_t)r2; g_skin[1] = (uint8_t)g2;
+            g_skin[2] = (uint8_t)b2;
+        }
+    }
 
     // canonical mesh (mm) -> meters
     static float verts[1220][3];

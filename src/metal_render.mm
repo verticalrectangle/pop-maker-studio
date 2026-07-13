@@ -848,18 +848,36 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
     float2 srcuv = in.pos.xy / u.dim;
     float3 base = srct.sample(s, srcuv).rgb;
     float4 mkc = mk.sample(s, in.mkuv);
-    float base_lum = f_lum(base);
-    float3 tintn = base / max(base_lum, 0.04);
-    float3 lit = mkc.rgb
-               * mix(float3(1.0), clamp(tintn, 0.55, 1.0), u.adapt * 0.65)
-               * mix(1.0, clamp(base_lum * 1.9, 0.20, 1.0), u.adapt * 0.85);
+    // ── Skin-tone-aware blend ─────────────────────────────────────────────
+    // Real cosmetics are translucent tints over living skin. Estimate the
+    // LOCAL skin color (9-tap blur — live, so it tracks the wearer's
+    // undertone and the lighting), split off the fine detail (pores,
+    // shadows, strands), blend the pigment multiplicatively like a tint,
+    // let dark inks keep coverage, and re-add the detail THROUGH the
+    // makeup so it never reads as a sticker.
+    float2 r1 = 6.0 / u.dim;
+    float3 skin = float3(0.0);
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+            skin += srct.sample(s, srcuv + float2(dx, dy) * r1).rgb;
+    skin *= (1.0 / 9.0);
+    float3 detail = base - skin;
+    float slum = f_lum(skin);
+    // tint: atlas colors are authored on mid grey — multiply onto skin
+    float3 tinted = clamp(skin * mkc.rgb * 2.0, 0.0, 1.0);
+    // coverage: pigment lit by the skin's own shading
+    float3 covered = mkc.rgb * (0.30 + 1.05 * slum);
+    float plum = f_lum(mkc.rgb);
+    float coverage = mix(0.35, 0.92, smoothstep(0.45, 0.10, plum));
+    float3 mkcol = mix(tinted, covered, coverage);
+    mkcol = clamp(mkcol + detail * (1.0 - 0.55 * coverage), 0.0, 1.0);
     float a = clamp(mkc.a * u.opacity, 0.0, 1.0);
     // Grazing-angle fade: ARKit's geometry is approximate at the
     // silhouette — where the surface turns edge-on the mesh can stick out
     // past the real face ("mask edge"), so pigment fades there instead of
     // painting the background.
     a *= smoothstep(0.18, 0.46, fabs(in.facing));
-    return float4(mix(base, lit, a), 1.0);
+    return float4(mix(base, mkcol, a), 1.0);
 }
 
 struct FaceIrisUni { float2 dim; float amount; float pad0; float4 color; };
@@ -884,7 +902,7 @@ fragment float4 face_iris_f(IrisVOut in [[stage_in]],
     col *= (1.0 - 0.55 * ring);
     col *= (1.0 - 0.85 * pupil);
     float a = u.amount * (1.0 - smoothstep(0.92, 1.0, r));
-    a *= 1.0 - smoothstep(0.75, 0.90, lum);       // keep catchlights white
+    a *= 1.0 - smoothstep(0.88, 0.97, lum);       // keep catchlights white
     return float4(mix(base, col, a), 1.0);
 }
 
