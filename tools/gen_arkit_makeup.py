@@ -169,10 +169,12 @@ def build_warp_map(cache_path):
     dist, idx = tree.query(q, workers=-1)
     warp = np.zeros((SIZE, SIZE, 2), np.float32)
     warp[ak_mask] = mp_yx[idx][:, ::-1]  # store as (x, y)
-    # Texels whose skin is far from any MP surface (ears/neck extremes) stay
-    # unmapped -> transparent in every atlas.
+    # Texels whose skin is far from any MP surface stay unmapped ->
+    # transparent in every atlas. Tight tolerance: nearest-surface lookups
+    # past the MP mesh edge SMEAR edge pixels (liner ink!) sideways across
+    # the temple — on device that read as a rigid wing spike at 3/4 views.
     far = np.zeros((SIZE, SIZE), bool)
-    far[ak_mask] = dist > 12.0  # mm
+    far[ak_mask] = dist > 5.0  # mm
     mask = ak_mask & ~far
     np.savez_compressed(cache_path, warp=warp, mask=mask)
     print(f"cached {cache_path}")
@@ -439,43 +441,57 @@ def paint_eyes_arkit(lk, ak_uv):
             img = Image.alpha_composite(img, layer)
             dr = ImageDraw.Draw(img)
 
-        # liner: hugs the INSIDE of the rim and stops short of the corners —
-        # the hole corners extend ~4mm past the visible canthi (painting the
-        # full rim reads as a droopy temple wing), and on hooded/downcast
-        # lids the anatomical rim sits slightly above the visible lash edge.
+        # Smooth rim curve: quadratic fit through the rim points in the
+        # corner-to-corner frame. Drawing vertex-to-vertex bent into hooks
+        # at the ends where the rim verts stack near the corners.
+        u_ax = rim_np[-1] - rim_np[0]
+        u_len = np.linalg.norm(u_ax) + 1e-6
+        u_ax = u_ax / u_len
+        v_ax = np.array([-u_ax[1], u_ax[0]])
+        us = (rim_np - rim_np[0]) @ u_ax
+        vs = (rim_np - rim_np[0]) @ v_ax
+        qa, qb, qc = np.polyfit(us, vs, 2)
+
+        def rim_curve(t):
+            uu = t * u_len
+            vv = qa * uu * uu + qb * uu + qc
+            return rim_np[0] + u_ax * uu + v_ax * vv
+
+        def rim_tangent(t):
+            uu = t * u_len
+            d = u_ax + v_ax * (2 * qa * uu + qb)
+            return d / (np.linalg.norm(d) + 1e-6)
+
+        # liner: along the fitted curve, inset toward the hole, trimmed
+        # short of the oversized corners; the wing is the curve's own
+        # tangent continued past the outer end — no separate segment, so
+        # no kink.
         liner = lk.get("liner", 0.0)
         if liner > 0.01:
-            w = max(3, int(SIZE * 0.0044 * (0.7 + 0.6 * min(liner, 2.0))))
-            trimmed = rim_np[1:-1]
-            inset = [tuple(p2 - outward(p2) * w * 0.45) for p2 in trimmed]
-            dr.line(inset, fill=(12, 8, 12, int(235 * min(liner, 1.0))),
+            w = max(4, int(SIZE * 0.005 * (0.7 + 0.6 * min(liner, 2.0))))
+            pts2 = []
+            wing = lk.get("lash_wing", 0.0)
+            if wing > 0.01:
+                tip = rim_curve(0.08) - rim_tangent(0.08) * SIZE * 0.014 * wing
+                tip = tip + outward(rim_curve(0.08)) * SIZE * 0.004 * wing
+                pts2.append(tuple(tip))
+            for t in np.linspace(0.08, 0.92, 22):
+                p2 = rim_curve(t) - outward(rim_curve(t)) * w * 0.45
+                pts2.append(tuple(p2))
+            dr.line(pts2, fill=(12, 8, 12, int(235 * min(liner, 1.0))),
                     width=w, joint="curve")
 
         # wing: from the outer corner, along the rim tangent, gentle lift
-        wing = lk.get("lash_wing", 0.0)
-        if wing > 0.01:
-            o = rim_np[1]
-            tangent = rim_np[1] - rim_np[3]
-            tangent = tangent / (np.linalg.norm(tangent) + 1e-6)
-            lift = outward(o)
-            tip = o + tangent * SIZE * 0.012 * wing + lift * SIZE * 0.004 * wing
-            dr.line([tuple(o), tuple(tip)], fill=(12, 8, 12, 225),
-                    width=max(2, int(SIZE * 0.0035)))
-
-        # lash fringe: strokes rooted on the rim, fanning outward
+        # lash fringe: strokes rooted on the fitted curve, fanning outward
         lash = lk.get("lash", 0.0)
         if lash > 0.01:
             rng = np.random.default_rng(11)
             n = int(12 + 9 * min(lash, 2.0))
             for k2 in range(n):
-                t = (k2 + 0.5) / n
-                seg = t * (len(rim_np) - 1)
-                i0 = min(int(seg), len(rim_np) - 2)
-                f = seg - i0
-                base = rim_np[i0] * (1 - f) + rim_np[i0 + 1] * f
+                t = 0.08 + 0.84 * (k2 + 0.5) / n
+                base = rim_curve(t)
                 d = outward(base)
-                tangent = rim_np[i0 + 1] - rim_np[i0]
-                tangent = tangent / (np.linalg.norm(tangent) + 1e-6)
+                tangent = rim_tangent(t)
                 ln = SIZE * (0.008 + 0.006 * min(lash, 1.6)) \
                     * rng.uniform(0.7, 1.25)
                 base = base - d * SIZE * 0.0015
@@ -527,15 +543,45 @@ def main():
     brow_mask = brow_mask.filter(ImageFilter.GaussianBlur(SIZE * 0.008))
     brow_np = np.asarray(brow_mask, np.float32) / 255.0
 
+    # Wing limiter: plate wing art that extends far past the outer eye
+    # corner rides temple geometry that folds at yaw — the tip juts off the
+    # face as a rigid spike. Fade plate alpha laterally beyond the corners.
+    wing_mask = np.ones((SIZE, SIZE), np.float32)
+    yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float32)
+    for outer_i, sgn in ((33, -1.0), (263, 1.0)):
+        cx2, cy2 = px(mp_uv[outer_i])
+        beyond = (xx - cx2) * sgn - SIZE * 0.022
+        band = np.exp(-((yy - cy2) ** 2) / (2 * (SIZE * 0.060) ** 2))
+        fade = np.clip(beyond / (SIZE * 0.020), 0.0, 1.0) * band
+        wing_mask *= (1.0 - fade)
+
+    # Post-warp limiter in ARKIT UV: eye-corner ink lands on the temple-side
+    # vertex rows THROUGH the warp (traced from an on-device fixture — the
+    # rigid "wing spike" at 3/4 views), so it must be erased on the output
+    # side, laterally beyond the hole corners. Corner UVs are topology
+    # constants: R outer 1101 (0.272, 0.651), L outer 1069 (0.728, 0.651).
+    out_mask = np.ones((SIZE, SIZE), np.float32)
+    yy2, xx2 = np.mgrid[0:SIZE, 0:SIZE].astype(np.float32)
+    for (cu, cv), sgn in (((0.272, 0.651), -1.0), ((0.728, 0.651), 1.0)):
+        cx3, cy3 = cu * SIZE, cv * SIZE
+        beyond = (xx2 - cx3) * sgn - SIZE * 0.012
+        band = np.exp(-((yy2 - cy3) ** 2) / (2 * (SIZE * 0.10) ** 2))
+        fade = np.clip(beyond / (SIZE * 0.018), 0.0, 1.0) * band
+        out_mask *= (1.0 - fade)
+
     plates = sorted(f for f in os.listdir(face_dir)
                     if f.startswith("makeup_") and f.endswith(".png"))
     for f in plates:
         img = Image.open(os.path.join(face_dir, f)).convert("RGBA")
         arr = np.asarray(img.resize((SIZE, SIZE)), np.uint8).astype(np.float32)
-        arr[..., 3] *= (1.0 - brow_np)
+        arr[..., 3] *= (1.0 - brow_np) * wing_mask
         img = Image.fromarray(arr.astype(np.uint8))
-        warp_image(img, warp, mask).save(os.path.join(out_dir, f))
-    print(f"{len(plates)} plates warped (brow art erased)")
+        out = warp_image(img, warp, mask)
+        oarr = np.asarray(out, np.uint8).astype(np.float32)
+        oarr[..., 3] *= out_mask
+        Image.fromarray(oarr.astype(np.uint8)).save(os.path.join(out_dir, f))
+    print(f"{len(plates)} plates warped (brow erased, wings limited, "
+          f"corner spill cut)")
 
     # builtin looks
     looks = parse_looks(os.path.join(here, "..", "src", "face_filters.cpp"))
@@ -549,7 +595,10 @@ def main():
         mp_img = paint_look_mp(lk, mp_uv)
         atlas = warp_image(mp_img, warp, mask)
         atlas = Image.alpha_composite(atlas, paint_eyes_arkit(lk, ak_uv_g))
-        atlas.save(os.path.join(out_dir, f"look_{fid}.png"))
+        aarr = np.asarray(atlas, np.uint8).astype(np.float32)
+        aarr[..., 3] *= out_mask
+        Image.fromarray(aarr.astype(np.uint8)).save(
+            os.path.join(out_dir, f"look_{fid}.png"))
         n += 1
     print(f"{n} builtin looks baked")
 
