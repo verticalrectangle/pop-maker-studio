@@ -858,7 +858,7 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
     // silhouette — where the surface turns edge-on the mesh can stick out
     // past the real face ("mask edge"), so pigment fades there instead of
     // painting the background.
-    a *= smoothstep(0.10, 0.32, fabs(in.facing));
+    a *= smoothstep(0.18, 0.46, fabs(in.facing));
     return float4(mix(base, lit, a), 1.0);
 }
 

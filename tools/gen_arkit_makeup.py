@@ -511,13 +511,31 @@ def main():
     checker().save(os.path.join(out_dir, "checker.png"))
     print("checker.png")
 
-    # plates
+    # plates — with the brow art ERASED first: ARKit fits the face's 3D
+    # shape, not where the eyebrow hair sits, so painted brows always fight
+    # the user's real brows by a per-person offset. The user has eyebrows.
+    brow_mask = Image.new("L", (SIZE, SIZE), 0)
+    bd = ImageDraw.Draw(brow_mask)
+    for ring in ([70, 63, 105, 66, 107, 55, 65, 52, 53, 46],
+                 [300, 293, 334, 296, 336, 285, 295, 282, 283, 276]):
+        pts = [px(mp_uv[i]) for i in ring]
+        cx = sum(p2[0] for p2 in pts) / len(pts)
+        cy = sum(p2[1] for p2 in pts) / len(pts)
+        grown = [(cx + (p2[0] - cx) * 1.55, cy + (p2[1] - cy) * 1.9)
+                 for p2 in pts]
+        bd.polygon(grown, fill=255)
+    brow_mask = brow_mask.filter(ImageFilter.GaussianBlur(SIZE * 0.008))
+    brow_np = np.asarray(brow_mask, np.float32) / 255.0
+
     plates = sorted(f for f in os.listdir(face_dir)
                     if f.startswith("makeup_") and f.endswith(".png"))
     for f in plates:
         img = Image.open(os.path.join(face_dir, f)).convert("RGBA")
+        arr = np.asarray(img.resize((SIZE, SIZE)), np.uint8).astype(np.float32)
+        arr[..., 3] *= (1.0 - brow_np)
+        img = Image.fromarray(arr.astype(np.uint8))
         warp_image(img, warp, mask).save(os.path.join(out_dir, f))
-    print(f"{len(plates)} plates warped")
+    print(f"{len(plates)} plates warped (brow art erased)")
 
     # builtin looks
     looks = parse_looks(os.path.join(here, "..", "src", "face_filters.cpp"))
