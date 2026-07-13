@@ -121,13 +121,32 @@ def _eye_sets(kind):
     return [(LID_L, -1), (LID_R, +1)]
 
 def _draw_eye_line(d, lid, color, alpha, width, raise_amt, blur, offset):
+    """Filled lid/crease wash: a soft band from the lash line upward.
+
+    Line strokes read as flat decals; a tapered polygon band with denser
+    outer pigment matches real eyeshadow packing much more closely.
+    """
     l = layer()
     dl = ImageDraw.Draw(l)
     for lidpts, sign in lid:
         ox, oy = offset()
-        pts = [(P(i)[0] + ox, P(i)[1] - ed * raise_amt + oy) for i in lidpts]
-        w = max(1, int(ed * width))
-        dl.line(pts, fill=_clamp(color) + (alpha,), width=w, joint='curve')
+        base = [(P(i)[0] + ox, P(i)[1] + oy) for i in lidpts]
+        n = len(base)
+        upper = []
+        for i, (x, y) in enumerate(base):
+            t = i / max(1, n - 1)
+            # outer corner taller; inner corner feathered shorter
+            lift = raise_amt + width * (0.55 + 0.70 * (1.0 - t))
+            # slight outer flare toward the temple
+            flare = sign * ed * width * 0.18 * (1.0 - t)
+            upper.append((x + flare, y - ed * lift))
+        # denser core strip hugging the lash line, then a sheerer wash above
+        core = []
+        for i, (x, y) in enumerate(base):
+            t = i / max(1, n - 1)
+            core.append((x, y - ed * (raise_amt * 0.35 + width * 0.22 * (1.0 - 0.4 * t))))
+        dl.polygon(base + upper[::-1], fill=_clamp(color) + (max(0, int(alpha * 0.55)),))
+        dl.polygon(base + core[::-1], fill=_clamp(color) + (alpha,))
     return l.filter(ImageFilter.GaussianBlur(ed * blur))
 
 def _draw_outer_v(d, lid, color, alpha, extent, raise_amt, blur, offset):
@@ -137,10 +156,16 @@ def _draw_outer_v(d, lid, color, alpha, extent, raise_amt, blur, offset):
         ox, oy = offset()
         outer = P(lidpts[0])
         p1 = P(lidpts[1])
+        p2 = P(lidpts[min(2, len(lidpts) - 1)])
         tip = (outer[0] + sign * ed * extent + ox, outer[1] - ed * raise_amt + oy)
+        mid = (outer[0] + sign * ed * extent * 0.45 + ox,
+               outer[1] - ed * (raise_amt + 0.06) + oy)
         o = (outer[0] + ox, outer[1] + oy)
         p1 = (p1[0] + ox, p1[1] + oy)
+        p2 = (p2[0] + ox, p2[1] + oy)
+        # layered outer-V: deep tip + softer body into the crease
         dl.polygon([tip, o, p1], fill=_clamp(color) + (alpha,))
+        dl.polygon([mid, o, p2], fill=_clamp(_lighten(color, (255, 255, 255), 0.12)) + (int(alpha * 0.65),))
     return l.filter(ImageFilter.GaussianBlur(ed * blur))
 
 def _side_offset(rng, mx=0.015, my=0.008):
@@ -343,7 +368,7 @@ def el_freckles(img, density=1.0, color=(150, 92, 66), alpha=110, seed=0):
 
 LIP_FINISH = {
     'satin':        {'blur': 0.018, 'base_alpha': 1.0, 'base_scale': 1.0,   'liner_scale': 1.03, 'liner_alpha': 0.55, 'center': 'satin',   'center_color': (255, 250, 245), 'center_alpha': 0.40, 'center_scale': (0.12, 0.04), 'upper': False},
-    'gloss':        {'blur': 0.018, 'base_alpha': 1.0, 'base_scale': 1.0,   'liner_scale': 1.03, 'liner_alpha': 0.60, 'center': 'gloss',   'center_color': (255, 255, 255), 'center_alpha': 0.55, 'center_scale': (0.18, 0.04), 'upper': True},
+    'gloss':        {'blur': 0.016, 'base_alpha': 0.95, 'base_scale': 1.0,   'liner_scale': 1.03, 'liner_alpha': 0.55, 'center': 'gloss',   'center_color': (255, 255, 255), 'center_alpha': 0.72, 'center_scale': (0.20, 0.035), 'upper': True},
     'matte':        {'blur': 0.024, 'base_alpha': 1.0, 'base_scale': 1.0,   'liner_scale': 1.03, 'liner_alpha': 0.65, 'center': 'none',    'center_color': None,           'center_alpha': 0.0,  'center_scale': (0.0, 0.0),    'upper': False},
     'full':         {'blur': 0.020, 'base_alpha': 1.0, 'base_scale': 1.0,   'liner_scale': 1.03, 'liner_alpha': 0.55, 'center': 'satin',   'center_color': (255, 250, 245), 'center_alpha': 0.30, 'center_scale': (0.10, 0.04), 'upper': False},
     'velvet':       {'blur': 0.026, 'base_alpha': 1.0, 'base_scale': 1.0,   'liner_scale': 1.03, 'liner_alpha': 0.65, 'center': 'dark',    'center_color': None,           'center_alpha': 0.55, 'center_scale': (0.12, 0.04), 'upper': False},
@@ -602,34 +627,61 @@ def S(lid, crease=None, outer=None, inner=None, shimmer=None, lower=None):
 # ── the LOOKS table — 32 retuned + 20 new ──────────────────────────────────
 
 LOOKS = {
+    # Makeup ARKit heroes — richer pigment, explicit lashes (ARKit zeros
+    # procedural lash/liner/blush; the atlas must carry them).
+    'douyin': [
+        ('blush', dict(style='band', color=(255, 118, 138), alpha=52)),
+        ('aegyo', dict(alpha=18)),
+        ('shadow', S(lid=((210, 125, 135), 58), crease=((190, 100, 115), 42),
+                     outer=((175, 85, 100), 36), inner=((255, 240, 245), 42),
+                     shimmer=((255, 245, 250), 28))),
+        ('liner', dict(style='wing', alpha=220)),
+        ('lashes', dict(strength=0.85, style='doll')),
+        ('lashes', dict(strength=0.35, style='wispy', lower=True)),
+        ('brow', dict(color=(70, 48, 42), alpha=88, width=0.055, density=0.55)),
+        ('lip', dict(style='bitten', color=(175, 40, 65), alpha=105)),
+        ('highlight', dict(style='glass', color=(255, 245, 248), alpha=48)),
+    ],
     'doll_pink': [
-        ('contour', dict(style='soft', alpha=30, areas=['cheek', 'jaw'])),
-        ('blush', dict(style='cheeks', color=(255, 120, 160), alpha=50)),
-        ('aegyo', dict(alpha=20)),
-        ('shadow', S(lid=((235, 130, 160), 55), crease=((220, 100, 135), 45), outer=((200, 80, 120), 40), inner=((255, 240, 245), 45), shimmer=((255, 245, 250), 30))),
-        ('liner', dict(style='wing', alpha=200)),
-        ('brow', dict(color=(75, 45, 40), alpha=95, width=0.065)),
-        ('lip', dict(style='gloss', color=(235, 70, 120), alpha=95)),
-        ('highlight', dict(style='pearl', color=(255, 245, 245), alpha=50)),
+        ('contour', dict(style='soft', alpha=28, areas=['cheek', 'jaw'])),
+        ('blush', dict(style='cheeks', color=(255, 125, 165), alpha=48)),
+        ('aegyo', dict(alpha=18)),
+        ('shadow', S(lid=((240, 145, 175), 62), crease=((225, 110, 145), 52),
+                     outer=((205, 85, 130), 46), inner=((255, 245, 250), 48),
+                     shimmer=((255, 248, 252), 36))),
+        ('liner', dict(style='wing', alpha=205)),
+        ('lashes', dict(strength=1.05, style='doll')),
+        ('lashes', dict(strength=0.4, style='wispy', lower=True)),
+        ('brow', dict(color=(75, 45, 40), alpha=92, width=0.062, density=0.55)),
+        ('lip', dict(style='gloss', color=(235, 75, 125), alpha=100)),
+        ('highlight', dict(style='pearl', color=(255, 245, 248), alpha=52)),
     ],
     'egirl': [
-        ('blush', dict(style='band', color=(255, 96, 110), alpha=60)),
-        ('freckles', dict(density=1.4, color=(160, 90, 70), alpha=100)),
-        ('shadow', S(lid=((235, 130, 150), 45), crease=((220, 95, 125), 40), outer=((200, 70, 100), 38), inner=((255, 240, 245), 40))),
-        ('liner', dict(style='wing', alpha=210)),
+        ('blush', dict(style='band', color=(255, 96, 110), alpha=58)),
+        ('freckles', dict(density=1.55, color=(155, 88, 68), alpha=105)),
+        ('shadow', S(lid=((235, 135, 155), 52), crease=((220, 95, 125), 46),
+                     outer=((200, 70, 105), 44), inner=((255, 240, 245), 42))),
+        ('liner', dict(style='wing', alpha=220)),
+        ('lashes', dict(strength=0.9, style='doll')),
+        ('lashes', dict(strength=0.35, style='wispy', lower=True)),
         ('aegyo', dict(alpha=12)),
-        ('lip', dict(style='gloss', color=(220, 85, 105), alpha=90)),
+        ('lip', dict(style='gloss', color=(220, 85, 105), alpha=95)),
         ('highlight', dict(style='satin', color=(255, 250, 245), alpha=40)),
     ],
     'glam_contour': [
-        ('contour', dict(style='warm', alpha=45)),
-        ('blush', dict(style='lifted', color=(225, 160, 145), alpha=42)),
-        ('shadow', S(lid=((195, 145, 115), 55), crease=((165, 115, 85), 45), outer=((145, 95, 70), 40), inner=((235, 215, 195), 35), shimmer=((255, 245, 235), 25))),
-        ('liner', dict(style='wing', alpha=215)),
-        ('brow', dict(color=(70, 45, 38), alpha=110, width=0.070)),
-        ('lip', dict(style='overline', color=(172, 110, 96), alpha=120)),
-        ('highlight', dict(style='satin', color=(255, 245, 235), alpha=55)),
-        ('aegyo', dict(alpha=15)),
+        ('contour', dict(style='warm', alpha=48)),
+        ('blush', dict(style='lifted', color=(225, 155, 140), alpha=40)),
+        ('shadow', S(lid=((200, 150, 120), 62), crease=((165, 112, 82), 52),
+                     outer=((140, 90, 65), 48), inner=((240, 220, 200), 40),
+                     shimmer=((255, 245, 235), 32))),
+        ('liner', dict(style='siren', alpha=220)),
+        ('lashes', dict(strength=0.95, style='stage')),
+        ('lashes', dict(strength=0.3, style='wispy', lower=True)),
+        ('brow', dict(color=(68, 42, 35), alpha=115, width=0.072, density=0.75)),
+        ('lip', dict(style='lined_gloss', color=(172, 110, 96), alpha=115,
+                     liner_color=(120, 70, 58))),
+        ('highlight', dict(style='satin', color=(255, 245, 235), alpha=58)),
+        ('aegyo', dict(alpha=12)),
     ],
     'coquette': [
         ('blush', dict(style='cheeks', color=(255, 140, 160), alpha=48)),
@@ -707,21 +759,27 @@ LOOKS = {
         ('highlight', dict(style='satin', color=(255, 250, 245), alpha=45)),
     ],
     'clean_girl': [
-        ('blush', dict(style='lifted', color=(255, 170, 165), alpha=38)),
-        ('brow', dict(color=(75, 55, 50), alpha=85, width=0.055, density=0.5)),
-        ('shadow', S(lid=((210, 190, 180), 35))),
-        ('liner', dict(style='tightline', alpha=150)),
-        ('lip', dict(style='balm', color=(225, 140, 135), alpha=70)),
-        ('highlight', dict(style='satin', color=(255, 250, 245), alpha=45)),
+        ('blush', dict(style='lifted', color=(255, 170, 165), alpha=34)),
+        ('brow', dict(color=(75, 55, 50), alpha=82, width=0.052, density=0.55)),
+        ('shadow', S(lid=((215, 195, 185), 32), crease=((195, 175, 165), 22),
+                     inner=((245, 235, 225), 28))),
+        ('liner', dict(style='tightline', alpha=155)),
+        ('lashes', dict(strength=0.45, style='wispy')),
+        ('lip', dict(style='satin_balm', color=(225, 145, 140), alpha=68)),
+        ('highlight', dict(style='glass', color=(255, 250, 245), alpha=48)),
     ],
     'soft_glam_nude': [
-        ('contour', dict(style='soft', alpha=40)),
-        ('blush', dict(style='lifted', color=(215, 165, 150), alpha=42)),
-        ('shadow', S(lid=((185, 155, 135), 55), crease=((160, 130, 110), 45), outer=((140, 110, 90), 38), inner=((230, 215, 200), 35), shimmer=((255, 245, 235), 25))),
-        ('liner', dict(style='soft', alpha=180)),
-        ('brow', dict(color=(75, 55, 50), alpha=100, width=0.065)),
-        ('lip', dict(style='gloss', color=(190, 120, 105), alpha=90)),
-        ('highlight', dict(style='satin', color=(255, 245, 235), alpha=50)),
+        ('contour', dict(style='soft', alpha=42)),
+        ('blush', dict(style='lifted', color=(215, 165, 150), alpha=40)),
+        ('shadow', S(lid=((190, 160, 140), 60), crease=((160, 130, 110), 50),
+                     outer=((140, 108, 88), 42), inner=((235, 220, 205), 40),
+                     shimmer=((255, 248, 238), 30))),
+        ('liner', dict(style='soft', alpha=185)),
+        ('lashes', dict(strength=0.75, style='wispy')),
+        ('lashes', dict(strength=0.25, style='wispy', lower=True)),
+        ('brow', dict(color=(75, 55, 50), alpha=100, width=0.065, density=0.65)),
+        ('lip', dict(style='gloss', color=(195, 125, 110), alpha=95)),
+        ('highlight', dict(style='satin', color=(255, 245, 235), alpha=52)),
     ],
     'bronze_sculpt': [
         ('contour', dict(style='warm', alpha=50)),
@@ -775,22 +833,30 @@ LOOKS = {
         ('brow', dict(color=(75, 50, 55), alpha=85, width=0.060)),
     ],
     'cherry_gloss': [
-        ('contour', dict(style='soft', alpha=35, areas=['cheek'])),
-        ('blush', dict(style='lifted', color=(235, 100, 105), alpha=48)),
-        ('shadow', S(lid=((215, 90, 95), 55), crease=((190, 70, 75), 45), outer=((160, 50, 55), 40), inner=((255, 230, 230), 40), shimmer=((255, 240, 240), 30))),
-        ('liner', dict(style='wing', alpha=210)),
-        ('brow', dict(color=(70, 45, 45), alpha=95, width=0.065)),
-        ('lip', dict(style='gloss', color=(225, 55, 70), alpha=100)),
-        ('highlight', dict(style='satin', color=(255, 240, 235), alpha=50)),
+        ('contour', dict(style='soft', alpha=32, areas=['cheek'])),
+        ('blush', dict(style='lifted', color=(235, 100, 105), alpha=44)),
+        ('shadow', S(lid=((220, 95, 100), 58), crease=((195, 70, 78), 48),
+                     outer=((165, 50, 58), 44), inner=((255, 232, 232), 42),
+                     shimmer=((255, 245, 245), 34))),
+        ('liner', dict(style='wing', alpha=215)),
+        ('lashes', dict(strength=0.85, style='cat')),
+        ('lashes', dict(strength=0.28, style='wispy', lower=True)),
+        ('brow', dict(color=(70, 45, 45), alpha=95, width=0.065, density=0.6)),
+        ('lip', dict(style='gloss', color=(230, 50, 68), alpha=115)),
+        ('highlight', dict(style='glass', color=(255, 240, 235), alpha=52)),
     ],
     'terracotta_smoke': [
-        ('contour', dict(style='warm', alpha=45)),
-        ('blush', dict(style='sunkissed', color=(235, 130, 90), alpha=48)),
-        ('shadow', S(lid=((205, 95, 60), 68), crease=((175, 75, 45), 58), outer=((145, 55, 30), 50), inner=((255, 225, 205), 40), shimmer=((255, 235, 210), 30))),
-        ('liner', dict(style='smudged', alpha=200)),
-        ('lip', dict(style='satin', color=(205, 110, 85), alpha=100)),
-        ('highlight', dict(style='satin', color=(255, 230, 195), alpha=50)),
-        ('brow', dict(color=(70, 50, 40), alpha=100, width=0.070)),
+        ('contour', dict(style='warm', alpha=48)),
+        ('blush', dict(style='sunkissed', color=(235, 130, 90), alpha=46)),
+        ('shadow', S(lid=((210, 100, 65), 78), crease=((175, 75, 45), 68),
+                     outer=((145, 55, 30), 58), lower=((160, 90, 65), 32),
+                     inner=((255, 225, 205), 42), shimmer=((255, 235, 210), 34))),
+        ('liner', dict(style='smudged', alpha=205)),
+        ('lashes', dict(strength=0.8, style='cat')),
+        ('lashes', dict(strength=0.35, style='wispy', lower=True)),
+        ('lip', dict(style='satin', color=(205, 110, 85), alpha=105)),
+        ('highlight', dict(style='satin', color=(255, 230, 195), alpha=52)),
+        ('brow', dict(color=(70, 50, 40), alpha=105, width=0.072, density=0.7)),
     ],
     'emerald_smoke': [
         ('contour', dict(style='soft', alpha=35, areas=['cheek', 'nose'])),
@@ -865,13 +931,17 @@ LOOKS = {
         ('highlight', dict(style='satin', color=(220, 215, 215), alpha=35)),
     ],
     'midnight_goth': [
-        ('contour', dict(style='cool', alpha=50)),
-        ('blush', dict(style='cheeks', color=(130, 65, 80), alpha=35)),
-        ('shadow', S(lid=((35, 25, 40), 100), crease=((25, 15, 28), 90), outer=((15, 8, 18), 80), inner=((140, 120, 145), 30), shimmer=((180, 160, 175), 25))),
-        ('liner', dict(style='graphic', alpha=240)),
-        ('brow', dict(color=(55, 40, 50), alpha=100, width=0.080)),
-        ('lip', dict(style='satin', color=(75, 15, 35), alpha=140)),
-        ('highlight', dict(style='pearl', color=(200, 185, 195), alpha=40)),
+        ('contour', dict(style='cool', alpha=52)),
+        ('blush', dict(style='cheeks', color=(130, 65, 80), alpha=32)),
+        ('shadow', S(lid=((40, 28, 48), 110), crease=((25, 15, 30), 98),
+                     outer=((12, 6, 16), 88), lower=((50, 35, 55), 40),
+                     inner=((145, 125, 150), 32), shimmer=((185, 165, 180), 28))),
+        ('liner', dict(style='graphic', alpha=245)),
+        ('lashes', dict(strength=1.1, style='stage')),
+        ('lashes', dict(strength=0.45, style='wispy', lower=True)),
+        ('brow', dict(color=(50, 35, 45), alpha=110, width=0.082, density=0.8)),
+        ('lip', dict(style='velvet', color=(80, 18, 40), alpha=145)),
+        ('highlight', dict(style='pearl', color=(200, 185, 195), alpha=38)),
     ],
     'opal_fantasy': [
         ('blush', dict(style='lifted', color=(215, 180, 210), alpha=38)),
@@ -1272,9 +1342,19 @@ EL = {'blush': el_blush, 'shadow': el_shadow, 'aegyo': el_aegyo,
       'contour': el_contour}
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--only', nargs='*', default=None,
+                    help='Regenerate only these look ids (default: all)')
+    args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(PMS_IOS_OUT, exist_ok=True)
-    for look_id, recipe in LOOKS.items():
+    selected = args.only or list(LOOKS.keys())
+    missing = [k for k in selected if k not in LOOKS]
+    if missing:
+        raise SystemExit(f'unknown look ids: {missing}')
+    for look_id in selected:
+        recipe = LOOKS[look_id]
         img = Image.new('RGBA', (SZ, SZ), (0, 0, 0, 0))
         for name, kw in recipe:
             kw = dict(kw)
@@ -1284,7 +1364,7 @@ def main():
         img.save(path, optimize=True)
         shutil.copy2(path, PMS_IOS_OUT)
         print(f'  wrote {os.path.relpath(path, os.path.join(HERE, ".."))} ({os.path.getsize(path)//1024} KB)')
-    print(f'done — {len(LOOKS)} look textures')
+    print(f'done — {len(selected)} look textures')
 
 if __name__ == '__main__':
     main()
