@@ -863,8 +863,12 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
     skin *= (1.0 / 9.0);
     float3 detail = base - skin;
     float slum = f_lum(skin);
-    // tint: atlas colors are authored on mid grey — multiply onto skin
-    float3 tinted = clamp(skin * mkc.rgb * 2.0, 0.0, 1.0);
+    // tint: keep the PRODUCT's hue/saturation, take BRIGHTNESS from the
+    // skin (luminance transfer). The old mid-grey multiply (x2) brightened
+    // skin by ~1.6 under light pigments — foundation washes read as
+    // whitening on anyone darker than the pigment.
+    float plum0 = max(f_lum(mkc.rgb), 0.05);
+    float3 tinted = clamp(mkc.rgb * (slum / plum0), 0.0, 1.0);
     // coverage: pigment lit by the skin's own shading
     float3 covered = mkc.rgb * (0.30 + 1.05 * slum);
     float plum = f_lum(mkc.rgb);
@@ -1835,6 +1839,41 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                 // uniforms from CPU-projected vertices (the bridge table
                 // feeds ONLY the fullscreen beauty mask now — pigment and
                 // iris never touch it).
+                // One-euro filter on the anchor-space vertices: raw ARKit
+                // per-vertex noise shimmered as twitching lids at the
+                // high-contrast liner/shadow edges. Velocity-adaptive:
+                // sub-mm jitter smooths hard, real blinks pass unlagged.
+                // Head motion lives in the transform, not the vertices, so
+                // it is never smoothed.
+                {
+                    static float flt[ARKIT_NPTS][3];
+                    static float dflt[ARKIT_NPTS][3];
+                    static bool flt_init = false;
+                    static double flt_last = 0.0;
+                    double now = g_content_time;
+                    float dt = (flt_init && now > flt_last)
+                             ? (float)fminf((float)(now - flt_last), 0.1f)
+                             : (1.f / 60.f);
+                    flt_last = now;
+                    if (!flt_init || dt >= 0.1f) {
+                        memcpy(flt, f3.verts, sizeof(flt));
+                        memset(dflt, 0, sizeof(dflt));
+                        flt_init = true;
+                    } else {
+                        const float fs = 1.f / fmaxf(dt, 1e-3f);
+                        const float min_fc = 1.2f, beta = 240.f, d_fc = 8.f;
+                        const float ad = 1.f / (1.f + fs / (6.2832f * d_fc));
+                        for (int v = 0; v < ARKIT_NPTS; ++v)
+                            for (int c2 = 0; c2 < 3; ++c2) {
+                                float dx2 = (f3.verts[v][c2] - flt[v][c2]) * fs;
+                                dflt[v][c2] += ad * (dx2 - dflt[v][c2]);
+                                float fc = min_fc + beta * fabsf(dflt[v][c2]);
+                                float al = 1.f / (1.f + fs / (6.2832f * fc));
+                                flt[v][c2] += al * (f3.verts[v][c2] - flt[v][c2]);
+                            }
+                        memcpy(f3.verts, flt, sizeof(f3.verts));
+                    }
+                }
                 float mv[16], mvp[16];
                 mat4_mul(f3.view, f3.model, mv);
                 mat4_mul(f3.proj, mv, mvp);
