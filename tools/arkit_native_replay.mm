@@ -28,7 +28,7 @@
 
 using json = nlohmann::json;
 
-static const int W = 720, H = 1280;
+static int W = 720, H = 1280;   // fixture mode adopts the capture viewport
 
 static pms_engine*         g_e = nullptr;
 static id<MTLDevice>       g_dev = nil;
@@ -125,6 +125,8 @@ int main(int argc, char** argv) {
         return 2;
     }
     const std::string obj_path = argv[1], prefix = argv[2];
+    const bool fixture_mode = obj_path.size() > 6 &&
+        obj_path.substr(obj_path.size() - 6) == ".jsonl";
     const double filter_id = argc > 3 ? atof(argv[3]) : 13.0;
     const double amount    = argc > 4 ? atof(argv[4]) : 1.0;
     if (argc > 5) {   // --skin support: "r,g,b" as the 5th arg
@@ -135,23 +137,25 @@ int main(int argc, char** argv) {
         }
     }
 
-    // canonical mesh (mm) -> meters
+    // canonical mesh (mm) -> meters (synthetic mode only)
     static float verts[1220][3];
-    int nv = 0;
-    FILE* f = fopen(obj_path.c_str(), "r");
-    if (!f) fail("open " + obj_path);
-    char line[256];
-    while (fgets(line, sizeof line, f)) {
-        if (line[0] == 'v' && line[1] == ' ' && nv < 1220) {
-            float x, y, z;
-            sscanf(line + 2, "%f %f %f", &x, &y, &z);
-            verts[nv][0] = x * 0.001f; verts[nv][1] = y * 0.001f;
-            verts[nv][2] = z * 0.001f;
-            ++nv;
+    if (!fixture_mode) {
+        int nv = 0;
+        FILE* f = fopen(obj_path.c_str(), "r");
+        if (!f) fail("open " + obj_path);
+        char line[256];
+        while (fgets(line, sizeof line, f)) {
+            if (line[0] == 'v' && line[1] == ' ' && nv < 1220) {
+                float x, y, z;
+                sscanf(line + 2, "%f %f %f", &x, &y, &z);
+                verts[nv][0] = x * 0.001f; verts[nv][1] = y * 0.001f;
+                verts[nv][2] = z * 0.001f;
+                ++nv;
+            }
         }
+        fclose(f);
+        if (nv != 1220) fail("verts");
     }
-    fclose(f);
-    if (nv != 1220) fail("verts");
 
     @autoreleasepool {
         const char* sd = getenv("PMS_SHADER_DIR");
@@ -173,6 +177,79 @@ int main(int argc, char** argv) {
         td.storageMode = MTLStorageModeManaged;
         g_target = [g_dev newTextureWithDescriptor:td];
         g_rq = [g_dev newCommandQueue];
+
+        if (fixture_mode) {
+            // Real-face replay: render recorded per-frame geometry/matrices
+            // (docs/ARKIT_NATIVE_PLAN.md Phase 0) and write PNGs every 45
+            // frames for eyes-on art review on the wearer's true
+            // proportions. Assertions don't apply — this is a review tool.
+            cmd("set_live_fx",
+                {{"fx", json::array({ {{"fx_type", "face_fx"},
+                   {"params", {{"face_filter", filter_id},
+                               {"face_amount", amount}}}} })}});
+            FILE* jf = fopen(obj_path.c_str(), "r");
+            if (!jf) fail("open " + obj_path);
+            std::string linebuf;
+            int ch2, fidx = 0, written = 0;
+            CVPixelBufferRef fpb = nullptr;
+            double t2 = 1.0;
+            while ((ch2 = fgetc(jf)) != EOF) {
+                if (ch2 != '\n') { linebuf.push_back((char)ch2); continue; }
+                if (linebuf.empty()) continue;
+                json rec = json::parse(linebuf, nullptr, false);
+                linebuf.clear();
+                if (rec.is_discarded()) continue;
+                if (!fpb) {
+                    int vw = rec.value("w", 1080), vh = rec.value("h", 1440);
+                    W = vw / 2; H = vh / 2;
+                    [g_target release];
+                    MTLTextureDescriptor* td2 = [MTLTextureDescriptor
+                        texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                        width:W height:H mipmapped:NO];
+                    td2.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                    td2.storageMode = MTLStorageModeManaged;
+                    g_target = [g_dev newTextureWithDescriptor:td2];
+                    fpb = skin_frame();
+                }
+                static float fv[1220 * 3];
+                auto& jv = rec["verts"];
+                for (int k = 0; k < 1220 * 3 && k < (int)jv.size(); ++k)
+                    fv[k] = (float)jv[k].get<double>();
+                float fm[16], fvw[16], fpj[16], fel[16], fer[16];
+                auto getm = [&](const char* key, float* out) {
+                    auto& a2 = rec[key];
+                    for (int k = 0; k < 16; ++k)
+                        out[k] = (float)a2[k].get<double>();
+                };
+                getm("model", fm); getm("view", fvw); getm("proj", fpj);
+                getm("eye_l", fel); getm("eye_r", fer);
+                static float fb[52];
+                auto& jb = rec["blend"];
+                for (int k = 0; k < 52 && k < (int)jb.size(); ++k)
+                    fb[k] = (float)jb[k].get<double>();
+                pms_submit_camera_frame(g_e, fpb, 0, t2);
+                pms_submit_arkit_face_3d(g_e, fv, fm, fvw, fpj, fel, fer,
+                                         fb, 1, rec.value("w", 1080),
+                                         rec.value("h", 1440));
+                int rc2 = pms_render(g_e, (__bridge void*)g_target, W, H);
+                if (rc2 != 0) fail("render rc (fixture)");
+                pms_render_wait(g_e);
+                if (fidx % 45 == 0) {
+                    Img im2 = read_target();
+                    char nm[64];
+                    snprintf(nm, sizeof nm, "_f%03d.png", fidx);
+                    write_png(prefix + nm, im2);
+                    ++written;
+                }
+                ++fidx; t2 += 0.017;
+            }
+            fclose(jf);
+            CVPixelBufferRelease(fpb);
+            pms_destroy(g_e);
+            printf("arkit native replay (fixture): %d frames, %d PNGs\n",
+                   fidx, written);
+            return 0;
+        }
 
         CVPixelBufferRef pb = skin_frame();
 
