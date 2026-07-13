@@ -1,6 +1,7 @@
 #include "arkit_face.h"
 #include "face_filters.h"
 #include "generated/arkit_mp_map.h"
+#include <cmath>
 #include <mutex>
 
 struct ARKitFaceSlot {
@@ -119,6 +120,71 @@ bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
             for (int k = 0; k < 5; ++k) {
                 mp_obs.pts[e.iris0 + k][0] += dx;
                 mp_obs.pts[e.iris0 + k][1] += dy;
+            }
+        }
+    }
+
+    // Lash-line coherence: the bridged chains ride ARKit's hole-arc verts
+    // exactly, which is right on average but passes through ARKit's
+    // per-vertex tracking noise — each chain point wiggled independently,
+    // so lash strokes anchored along the chain dropped one by one instead
+    // of moving as a fringe. Fit each lid chain to a quadratic in the
+    // eye's corner-to-corner frame and snap the interior points onto the
+    // fit: the chain moves as one smooth curve, corners stay exact, and no
+    // temporal filtering means no added latency.
+    {
+        static const int kChains[4][7] = {
+            {33, 161, 160, 159, 158, 157, 133},    // R upper
+            {263, 388, 387, 386, 385, 384, 362},   // L upper
+            {33, 163, 144, 145, 153, 154, 133},    // R lower
+            {263, 390, 373, 374, 380, 381, 362},   // L lower
+        };
+        for (const int* ch : kChains) {
+            float ox = mp_obs.pts[ch[0]][0], oy = mp_obs.pts[ch[0]][1];
+            float ax = mp_obs.pts[ch[6]][0] - ox, ay = mp_obs.pts[ch[6]][1] - oy;
+            float al = sqrtf(ax * ax + ay * ay);
+            if (al < 1e-3f) continue;
+            ax /= al; ay /= al;
+            float u[7], v[7];
+            for (int k = 0; k < 7; ++k) {
+                float px = mp_obs.pts[ch[k]][0] - ox;
+                float py = mp_obs.pts[ch[k]][1] - oy;
+                u[k] = px * ax + py * ay;
+                v[k] = -px * ay + py * ax;
+            }
+            // Least-squares v = a + b*u + c*u^2 over the 7 points.
+            double S0 = 7, S1 = 0, S2 = 0, S3 = 0, S4 = 0;
+            double T0 = 0, T1 = 0, T2 = 0;
+            for (int k = 0; k < 7; ++k) {
+                double uu = u[k];
+                S1 += uu; S2 += uu * uu; S3 += uu * uu * uu;
+                S4 += uu * uu * uu * uu;
+                T0 += v[k]; T1 += v[k] * uu; T2 += v[k] * uu * uu;
+            }
+            double m[3][4] = {{S0, S1, S2, T0},
+                              {S1, S2, S3, T1},
+                              {S2, S3, S4, T2}};
+            // Gaussian elimination (3x3, well-conditioned: u spans the eye).
+            for (int c2 = 0; c2 < 3; ++c2) {
+                int piv = c2;
+                for (int r2 = c2 + 1; r2 < 3; ++r2)
+                    if (fabs(m[r2][c2]) > fabs(m[piv][c2])) piv = r2;
+                for (int c3 = 0; c3 < 4; ++c3) {
+                    double t2 = m[c2][c3]; m[c2][c3] = m[piv][c3]; m[piv][c3] = t2;
+                }
+                if (fabs(m[c2][c2]) < 1e-9) { m[c2][c2] = 1e-9; }
+                for (int r2 = 0; r2 < 3; ++r2) {
+                    if (r2 == c2) continue;
+                    double f = m[r2][c2] / m[c2][c2];
+                    for (int c3 = c2; c3 < 4; ++c3) m[r2][c3] -= f * m[c2][c3];
+                }
+            }
+            double A = m[0][3] / m[0][0], B = m[1][3] / m[1][1],
+                   C = m[2][3] / m[2][2];
+            for (int k = 1; k < 6; ++k) {   // interior points only
+                float vf = (float)(A + B * u[k] + C * u[k] * u[k]);
+                mp_obs.pts[ch[k]][0] = ox + ax * u[k] - ay * vf;
+                mp_obs.pts[ch[k]][1] = oy + ay * u[k] + ax * vf;
             }
         }
     }

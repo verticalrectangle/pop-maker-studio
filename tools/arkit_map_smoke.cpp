@@ -171,15 +171,18 @@ int main(int argc, char** argv) {
     {
         ARKitFaceObs g = obs;
         g.has_blend = true;
+        BeautyLook lk{};
+        lk.smooth = 0.5f;   // any beauty element so the plan builds
+        FaceRenderPlan p0{};
+        expect(face_filter_build_plan_from_arkit(lk, 1.f, g, W, H, p0),
+               "baseline plan builds");
         g.blend[FB_EYE_LOOK_DOWN_L] = 1.f;
         g.blend[FB_EYE_LOOK_DOWN_R] = 1.f;
         FaceRenderPlan pd{};
-        BeautyLook lk{};
-        lk.smooth = 0.5f;   // any beauty element so the plan builds
         expect(face_filter_build_plan_from_arkit(lk, 1.f, g, W, H, pd),
                "gaze plan builds");
-        expect(pd.beauty.eyeL_y > plan.beauty.eyeL_y + 5.f &&
-               pd.beauty.eyeR_y > plan.beauty.eyeR_y + 5.f,
+        expect(pd.beauty.eyeL_y > p0.beauty.eyeL_y + 5.f &&
+               pd.beauty.eyeR_y > p0.beauty.eyeR_y + 5.f,
                "irises follow look-down");
         g.blend[FB_EYE_LOOK_DOWN_L] = g.blend[FB_EYE_LOOK_DOWN_R] = 0.f;
         g.blend[FB_EYE_LOOK_IN_L] = 1.f;   // person's left eye looks nose-ward (-x)
@@ -188,9 +191,40 @@ int main(int argc, char** argv) {
         expect(face_filter_build_plan_from_arkit(lk, 1.f, g, W, H, pi),
                "gaze-in plan builds");
         // eyeA = person's right iris (MP 468), eyeB = left (473)
-        expect(pi.beauty.eyeL_x > plan.beauty.eyeL_x + 5.f &&
-               pi.beauty.eyeR_x < plan.beauty.eyeR_x - 5.f,
+        expect(pi.beauty.eyeL_x > p0.beauty.eyeL_x + 5.f &&
+               pi.beauty.eyeR_x < p0.beauty.eyeR_x - 5.f,
                "irises converge on look-in");
+
+        // Coherence: alternating +/-3px noise on the arc verts (per-vertex
+        // ARKit tracking noise) must be rejected by the quadratic chain fit
+        // — riding raw verts made lash strokes wobble one by one.
+        static const int kArcR2[10] = {1100, 1099, 1098, 1097, 1096,
+                                       1095, 1094, 1093, 1092, 1091};
+        static const int kArcL2[10] = {1079, 1078, 1077, 1076, 1075,
+                                       1074, 1073, 1072, 1071, 1070};
+        ARKitFaceObs nz = obs;
+        nz.has_blend = false;
+        for (int e = 0; e < 2; ++e) {
+            const int* arc = e == 0 ? kArcR2 : kArcL2;
+            for (int k = 0; k < 10; ++k)
+                nz.pts[arc[k]][1] += (k & 1) ? 3.f : -3.f;
+        }
+        FaceRenderPlan pz{};
+        FaceRenderPlan pb{};
+        ARKitFaceObs ob2 = obs; ob2.has_blend = false;
+        expect(face_filter_build_plan_from_arkit(lk, 1.f, ob2, W, H, pb) &&
+               face_filter_build_plan_from_arkit(lk, 1.f, nz, W, H, pz),
+               "noise plans build");
+        float worst = 0.f;
+        for (int k = 0; k < 7; ++k) {
+            worst = fmaxf(worst, fabsf(pz.beauty.lidL[k][1] - pb.beauty.lidL[k][1]));
+            worst = fmaxf(worst, fabsf(pz.beauty.lidR[k][1] - pb.beauty.lidR[k][1]));
+        }
+        char msg2[80];
+        snprintf(msg2, sizeof msg2,
+                 "lash chain rejects per-vertex noise (worst %.1fpx of 3px)",
+                 worst);
+        expect(worst < 1.8f, msg2);
     }
 
     // Everything on-frame and face-sized.
