@@ -174,7 +174,7 @@ def build_warp_map(cache_path):
     # past the MP mesh edge SMEAR edge pixels (liner ink!) sideways across
     # the temple — on device that read as a rigid wing spike at 3/4 views.
     far = np.zeros((SIZE, SIZE), bool)
-    far[ak_mask] = dist > 5.0  # mm
+    far[ak_mask] = dist > 9.0  # mm
     mask = ak_mask & ~far
     np.savez_compressed(cache_path, warp=warp, mask=mask)
     print(f"cached {cache_path}")
@@ -564,9 +564,18 @@ def main():
     yy2, xx2 = np.mgrid[0:SIZE, 0:SIZE].astype(np.float32)
     for (cu, cv), sgn in (((0.272, 0.651), -1.0), ((0.728, 0.651), 1.0)):
         cx3, cy3 = cu * SIZE, cv * SIZE
-        beyond = (xx2 - cx3) * sgn - SIZE * 0.012
-        band = np.exp(-((yy2 - cy3) ** 2) / (2 * (SIZE * 0.10) ** 2))
-        fade = np.clip(beyond / (SIZE * 0.018), 0.0, 1.0) * band
+        # Start past the legitimate wing zone (~20px) with a NARROW band:
+        # v1 of this cut started at corner-12px with a +/-100px band and
+        # erased real foundation/wings around the outer eyes (pale patches,
+        # cheek seams, amputated CatEye wing) — the regression of 2026-07-13.
+        # Most aggressive setting with ZERO foundation cost (offline sweep):
+        # the smeared corner ink that isn't laterally-beyond in UV can't be
+        # caught here anyway (it only projects outward at 3/4 views — that
+        # residual is plate wing length, a per-look art choice), so push the
+        # cut as far as the sweep allows without eating foundation.
+        beyond = (xx2 - cx3) * sgn - SIZE * 0.008
+        band = np.exp(-((yy2 - cy3) ** 2) / (2 * (SIZE * 0.045) ** 2))
+        fade = np.clip(beyond / (SIZE * 0.010), 0.0, 1.0) * band
         out_mask *= (1.0 - fade)
 
     plates = sorted(f for f in os.listdir(face_dir)
