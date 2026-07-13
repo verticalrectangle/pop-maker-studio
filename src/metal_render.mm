@@ -822,16 +822,22 @@ vertex MkVOut face_mk_v(uint vid [[vertex_id]],
 // them geometrically, closing the eye hides the iris).
 struct FaceNatUni {
     float4x4 mvp;
+    float4 mvn[3];    // model-view rotation columns (normal transform)
     float2 dim; float opacity; float adapt;
 };
-struct NatVOut { float4 pos [[position]]; float2 mkuv; };
+struct NatVOut { float4 pos [[position]]; float2 mkuv; float facing; };
 vertex NatVOut face_nat_v(uint vid [[vertex_id]],
                           device const packed_float3* pos [[buffer(0)]],
                           device const float2* uv [[buffer(1)]],
+                          device const packed_float3* nrm [[buffer(3)]],
                           constant FaceNatUni& u [[buffer(2)]]) {
     NatVOut o;
     o.pos = u.mvp * float4(float3(pos[vid]), 1.0);
     o.mkuv = uv[vid];
+    float3 n = float3(nrm[vid]);
+    float3 nv = normalize(u.mvn[0].xyz * n.x + u.mvn[1].xyz * n.y
+                          + u.mvn[2].xyz * n.z);
+    o.facing = nv.z;   // camera looks down -z in view space
     return o;
 }
 fragment float4 face_nat_f(NatVOut in [[stage_in]],
@@ -848,6 +854,11 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
                * mix(float3(1.0), clamp(tintn, 0.55, 1.0), u.adapt * 0.65)
                * mix(1.0, clamp(base_lum * 1.9, 0.20, 1.0), u.adapt * 0.85);
     float a = clamp(mkc.a * u.opacity, 0.0, 1.0);
+    // Grazing-angle fade: ARKit's geometry is approximate at the
+    // silhouette — where the surface turns edge-on the mesh can stick out
+    // past the real face ("mask edge"), so pigment fades there instead of
+    // painting the background.
+    a *= smoothstep(0.10, 0.32, fabs(in.facing));
     return float4(mix(base, lit, a), 1.0);
 }
 
@@ -1189,19 +1200,27 @@ static void mat4_xform(const float* m, const float* v3, float w, float* out4) {
 }
 
 static id<MTLTexture> g_face_stencil = nil;
-static id<MTLDepthStencilState> g_dss_swrite = nil;   // write 1, no test
-static id<MTLDepthStencilState> g_dss_seq0 = nil;     // pass only where 0
+static id<MTLTexture> g_face_depth = nil;
+static id<MTLDepthStencilState> g_dss_swrite = nil;   // depth test+write, stencil 1
+static id<MTLDepthStencilState> g_dss_seq0 = nil;     // depth test, stencil==0
 static id<MTLBuffer> g_arkit_uv_buf = nil;            // constant topology
 static id<MTLBuffer> g_arkit_idx_buf = nil;
 
 static bool face_native_resources(int sw, int sh) {
     if (!g_dss_swrite) {
+        // Depth: folded lids self-overlap in screen space; without a depth
+        // test the paint order is arbitrary and back-surface pigment shows
+        // through the fold ("mask clips through").
         MTLDepthStencilDescriptor* d = [MTLDepthStencilDescriptor new];
+        d.depthCompareFunction = MTLCompareFunctionLessEqual;
+        d.depthWriteEnabled = YES;
         MTLStencilDescriptor* st = [MTLStencilDescriptor new];
         st.stencilCompareFunction = MTLCompareFunctionAlways;
         st.depthStencilPassOperation = MTLStencilOperationReplace;
         d.frontFaceStencil = st; d.backFaceStencil = st;
         g_dss_swrite = [g_dev newDepthStencilStateWithDescriptor:d];
+        d.depthCompareFunction = MTLCompareFunctionLess;
+        d.depthWriteEnabled = NO;
         MTLStencilDescriptor* se = [MTLStencilDescriptor new];
         se.stencilCompareFunction = MTLCompareFunctionEqual;
         d.frontFaceStencil = se; d.backFaceStencil = se;
@@ -1217,14 +1236,18 @@ static bool face_native_resources(int sw, int sh) {
     }
     if (!g_face_stencil || (int)g_face_stencil.width != sw
                         || (int)g_face_stencil.height != sh) {
+        // One combined depth+stencil texture: Metal validation requires
+        // matching depth/stencil attachment formats.
         MTLTextureDescriptor* td = [MTLTextureDescriptor
-            texture2DDescriptorWithPixelFormat:MTLPixelFormatStencil8
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float_Stencil8
             width:sw height:sh mipmapped:NO];
         td.usage = MTLTextureUsageRenderTarget;
         td.storageMode = MTLStorageModePrivate;
         g_face_stencil = [g_dev newTextureWithDescriptor:td];
+        g_face_depth = g_face_stencil;
     }
-    return g_dss_swrite && g_arkit_uv_buf && g_arkit_idx_buf && g_face_stencil;
+    return g_dss_swrite && g_arkit_uv_buf && g_arkit_idx_buf && g_face_stencil
+        && g_face_depth;
 }
 
 static id<MTLTexture> face_makeup_texture(const char* name) {
@@ -1414,7 +1437,8 @@ static id<MTLRenderPipelineState> get_face_pso(int which) {
                     MTLRenderPipelineDescriptor* rd = [MTLRenderPipelineDescriptor new];
                     rd.vertexFunction = vf; rd.fragmentFunction = ff;
                     rd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-                    rd.stencilAttachmentPixelFormat = MTLPixelFormatStencil8;
+                    rd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+                    rd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
                     NSError* err = nil;
                     g_face_pso[slot] = [g_dev newRenderPipelineStateWithDescriptor:rd error:&err];
                     if (!g_face_pso[slot]) NSLog(@"[face_fx] %@ pso: %@", fname, err);
@@ -1845,14 +1869,48 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                         rp.stencilAttachment.loadAction    = MTLLoadActionClear;
                         rp.stencilAttachment.clearStencil  = 0;
                         rp.stencilAttachment.storeAction   = MTLStoreActionDontCare;
+                        rp.depthAttachment.texture         = g_face_depth;
+                        rp.depthAttachment.loadAction      = MTLLoadActionClear;
+                        rp.depthAttachment.clearDepth      = 1.0;
+                        rp.depthAttachment.storeAction     = MTLStoreActionDontCare;
                         id<MTLRenderCommandEncoder> e =
                             [cb renderCommandEncoderWithDescriptor:rp];
                         // mesh: writes stencil 1 wherever the face covers
-                        struct { float mvp[16]; float dim[2]; float opacity, adapt; } nu;
+                        struct { float mvp[16]; float mvn[12];
+                                 float dim[2]; float opacity, adapt; } nu;
                         memcpy(nu.mvp, mvp, sizeof(nu.mvp));
+                        // normal transform = MV rotation columns (uniform
+                        // scale assumed; normalized in the shader)
+                        for (int c2 = 0; c2 < 3; ++c2) {
+                            nu.mvn[c2 * 4 + 0] = mv[c2 * 4 + 0];
+                            nu.mvn[c2 * 4 + 1] = mv[c2 * 4 + 1];
+                            nu.mvn[c2 * 4 + 2] = mv[c2 * 4 + 2];
+                            nu.mvn[c2 * 4 + 3] = 0.f;
+                        }
                         nu.dim[0] = (float)sw; nu.dim[1] = (float)sh;
                         nu.opacity = atlas ? fminf(famt, 1.5f) : 0.f;
                         nu.adapt = 1.f;
+                        // per-vertex normals (accumulated face normals) —
+                        // feeds the grazing-angle silhouette fade
+                        static float nrm[ARKIT_NPTS][3];
+                        memset(nrm, 0, sizeof(nrm));
+                        for (int t2 = 0; t2 < ARKIT_NTRI; ++t2) {
+                            const unsigned short* tr = k_arkit_tris[t2];
+                            const float* a2 = f3.verts[tr[0]];
+                            const float* b2 = f3.verts[tr[1]];
+                            const float* c3 = f3.verts[tr[2]];
+                            float u2[3] = {b2[0]-a2[0], b2[1]-a2[1], b2[2]-a2[2]};
+                            float v2[3] = {c3[0]-a2[0], c3[1]-a2[1], c3[2]-a2[2]};
+                            float n2[3] = {u2[1]*v2[2]-u2[2]*v2[1],
+                                           u2[2]*v2[0]-u2[0]*v2[2],
+                                           u2[0]*v2[1]-u2[1]*v2[0]};
+                            for (int k2 = 0; k2 < 3; ++k2)
+                                for (int d2 = 0; d2 < 3; ++d2)
+                                    nrm[tr[k2]][d2] += n2[d2];
+                        }
+                        id<MTLBuffer> nb = [g_dev newBufferWithBytes:&nrm[0][0]
+                                                              length:sizeof(nrm)
+                                                             options:MTLResourceStorageModeShared];
                         id<MTLBuffer> vb = [g_dev newBufferWithBytes:&f3.verts[0][0]
                                                               length:sizeof(f3.verts)
                                                              options:MTLResourceStorageModeShared];
@@ -1863,6 +1921,7 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                         [e setFrontFacingWinding:MTLWindingCounterClockwise];
                         [e setVertexBuffer:vb offset:0 atIndex:0];
                         [e setVertexBuffer:g_arkit_uv_buf offset:0 atIndex:1];
+                        [e setVertexBuffer:nb offset:0 atIndex:3];
                         [e setVertexBytes:&nu length:sizeof(nu) atIndex:2];
                         [e setFragmentBytes:&nu length:sizeof(nu) atIndex:0];
                         if (atlas) [e setFragmentTexture:atlas atIndex:0];

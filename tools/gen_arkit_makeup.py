@@ -84,6 +84,15 @@ def build_correspondence():
     ]
     src_ctrl = [mp_w[mi]]
     dst_ctrl = [ak_v[ai]]
+    # Identity pins on the brows: the rim pinning below must stay LOCAL to
+    # the eyes — without these the TPS drags the whole brow region up with
+    # the upper lash correction and plate brow art rendered ~1cm above the
+    # real brows on device. (The similarity fit places brows about right:
+    # the live overlay's brow landmarks sat on the user's brows.)
+    BROWS = [70, 63, 105, 66, 107, 46, 53, 52, 65, 55,
+             300, 293, 334, 296, 336, 276, 283, 282, 295, 285]
+    src_ctrl.append(mp_w[BROWS])
+    dst_ctrl.append(mp_w[BROWS])
     for mring, ak_t, mp_c, ak_c in pairs:
         aring = G.ring_near(ak_rings, ak_v, ak_v[list(ak_t)].mean(0))
         mring = G.orient_ring(list(mring), mp_w, mp_w[mp_c])
