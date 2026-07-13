@@ -516,6 +516,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--assets", default=os.path.expanduser(
         "~/dev/pms-ios/Engine/EngineAssets"))
+    ap.add_argument("--only", nargs="*", default=None,
+                    help="Warp only these makeup_<id>.png basenames (or ids)")
     args = ap.parse_args()
     face_dir = os.path.join(args.assets, "models", "face")
     out_dir = os.path.join(face_dir, "arkit")
@@ -580,6 +582,17 @@ def main():
 
     plates = sorted(f for f in os.listdir(face_dir)
                     if f.startswith("makeup_") and f.endswith(".png"))
+    if args.only:
+        want = set()
+        for x in args.only:
+            x = x.strip()
+            if not x.endswith(".png"):
+                x = f"makeup_{x}.png" if not x.startswith("makeup_") else f"{x}.png"
+            want.add(x)
+        plates = [f for f in plates if f in want]
+        missing = want - set(plates)
+        if missing:
+            raise SystemExit(f"missing plates: {sorted(missing)}")
     for f in plates:
         img = Image.open(os.path.join(face_dir, f)).convert("RGBA")
         arr = np.asarray(img.resize((SIZE, SIZE)), np.uint8).astype(np.float32)
@@ -589,8 +602,13 @@ def main():
         oarr = np.asarray(out, np.uint8).astype(np.float32)
         oarr[..., 3] *= out_mask
         Image.fromarray(oarr.astype(np.uint8)).save(os.path.join(out_dir, f))
+        print(f"  warped {f}")
     print(f"{len(plates)} plates warped (brow erased, wings limited, "
           f"corner spill cut)")
+
+    if args.only:
+        print("skipping builtin looks (--only)")
+        return
 
     # builtin looks
     looks = parse_looks(os.path.join(here, "..", "src", "face_filters.cpp"))
