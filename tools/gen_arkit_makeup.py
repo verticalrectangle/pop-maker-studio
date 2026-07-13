@@ -50,13 +50,50 @@ NOSE_BRIDGE = 6
 
 
 def build_correspondence():
-    """MP verts warped into ARKit space (same fit as gen_arkit_mp_map)."""
+    """MP verts warped into ARKit space.
+
+    Similarity fit + TPS with the MP lash contours PINNED to the ARKit
+    eye-hole rims and the inner-lip ring pinned to the mouth hole. For the
+    live RENDER that pinning was wrong (the hole edge is not the moving
+    lash line) — but for a STATIC atlas bake it is exactly right: plate art
+    authored along the MP lash line must land on the rim, which is where
+    the lash roots live on the mesh. Similarity-only left ~5mm RMS and
+    plate eyeliner floated above the lash line on device.
+    """
     ak_v = G.parse_obj(os.path.join(here, "arkit_face_canonical.obj"))
     mp_v = G.parse_obj(os.path.join(here, "canonical_face_model.obj"))
+    ak_tris = G.parse_header_array(
+        os.path.join(SRC_GEN, "arkit_face_mesh.h"),
+        "k_arkit_tris", (2304, 3)).astype(int)
     mi = [m for m, _ in G.ANCHORS]
     ai = [a for _, a in G.ANCHORS]
     s, R, t = G.umeyama(mp_v[mi], ak_v[ai])
     mp_w = s * (R @ mp_v.T).T + t
+
+    ak_rings = G.boundary_rings(ak_tris, 1220)
+    MP_EYE_R = [33, 246, 161, 160, 159, 158, 157, 173, 133,
+                155, 154, 153, 145, 144, 163, 7]
+    MP_EYE_L = [263, 466, 388, 387, 386, 385, 384, 398, 362,
+                382, 381, 380, 374, 373, 390, 249]
+    MP_LIPS_IN = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308,
+                  324, 318, 402, 317, 14, 87, 178, 88, 95]
+    pairs = [
+        (MP_EYE_R, (1101, 1090), 33, 1101),
+        (MP_EYE_L, (1069, 1080), 263, 1069),
+        (MP_LIPS_IN, (249, 684), 78, 249),
+    ]
+    src_ctrl = [mp_w[mi]]
+    dst_ctrl = [ak_v[ai]]
+    for mring, ak_t, mp_c, ak_c in pairs:
+        aring = G.ring_near(ak_rings, ak_v, ak_v[list(ak_t)].mean(0))
+        mring = G.orient_ring(list(mring), mp_w, mp_w[mp_c])
+        aring = G.orient_ring(aring, ak_v, ak_v[ak_c])
+        mpts = mp_w[mring]
+        seg = np.sqrt(((np.roll(mpts, -1, 0) - mpts) ** 2).sum(1))
+        ts = np.concatenate([[0.0], np.cumsum(seg)[:-1]]) / seg.sum()
+        src_ctrl.append(mpts)
+        dst_ctrl.append(G.ring_resample(ak_v[aring], ts))
+    mp_w = G.tps_warp(np.vstack(src_ctrl), np.vstack(dst_ctrl), mp_w)
     return ak_v, mp_w
 
 
@@ -134,14 +171,20 @@ def build_warp_map(cache_path):
 
 
 def warp_image(img_rgba, warp, mask):
-    src = np.asarray(img_rgba, np.uint8)
+    src = np.asarray(img_rgba, np.uint8).astype(np.float32)
     if src.shape[0] != SIZE:
-        src = np.asarray(img_rgba.resize((SIZE, SIZE)), np.uint8)
-    out = np.zeros((SIZE, SIZE, 4), np.uint8)
-    xy = warp[mask].astype(int)
-    out[mask] = src[np.clip(xy[:, 1], 0, SIZE - 1),
-                    np.clip(xy[:, 0], 0, SIZE - 1)]
-    return Image.fromarray(out)
+        src = np.asarray(img_rgba.resize((SIZE, SIZE)), np.uint8).astype(np.float32)
+    out = np.zeros((SIZE, SIZE, 4), np.float32)
+    xy = warp[mask]
+    x0 = np.clip(np.floor(xy[:, 0]).astype(int), 0, SIZE - 2)
+    y0 = np.clip(np.floor(xy[:, 1]).astype(int), 0, SIZE - 2)
+    fx = np.clip(xy[:, 0] - x0, 0, 1)[:, None]
+    fy = np.clip(xy[:, 1] - y0, 0, 1)[:, None]
+    out[mask] = (src[y0, x0] * (1 - fx) * (1 - fy)
+                 + src[y0, x0 + 1] * fx * (1 - fy)
+                 + src[y0 + 1, x0] * (1 - fx) * fy
+                 + src[y0 + 1, x0 + 1] * fx * fy)
+    return Image.fromarray(out.astype(np.uint8))
 
 
 # ── builtin-look parsing ────────────────────────────────────────────────────
@@ -155,8 +198,12 @@ def parse_looks(face_filters_cpp):
     hdr = open(face_filters_cpp.replace(".cpp", ".h")).read()
     enum = re.search(r"enum class FaceFilter \{(.*?)\};", hdr, re.S).group(1)
     ids, i = {}, 0
-    for tok in re.split(r"[,\n]", enum):
-        tok = re.sub(r"//.*", "", tok).strip()
+    # strip comments LINE-WISE first: enum comments contain commas and a
+    # comma-split would mint phantom entries ("bronze contour"), shifting
+    # every id after them.
+    clean = "\n".join(re.sub(r"//.*", "", ln) for ln in enum.splitlines())
+    for tok in clean.split(","):
+        tok = tok.strip()
         if not tok:
             continue
         if "=" in tok:
@@ -241,8 +288,8 @@ def paint_look_mp(lk, mp_uv):
         for _ in range(55):
             fx = nx + rng.normal(0, SIZE * 0.062)
             fy = ny + rng.normal(0, SIZE * 0.026) + SIZE * 0.015
-            r = rng.uniform(0.7, 1.6)
-            a = 0.38 * lk["freckles"] * rng.uniform(0.4, 1.0)
+            r = rng.uniform(0.5, 1.1)
+            a = 0.30 * lk["freckles"] * rng.uniform(0.4, 1.0)
             d2.ellipse([fx - r, fy - r, fx + r, fy + r],
                        fill=col([0.45, 0.28, 0.18], a))
         layer = layer.filter(ImageFilter.GaussianBlur(0.8))
@@ -324,7 +371,7 @@ def paint_look_mp(lk, mp_uv):
         d2.polygon([px(mp_uv[i]) for i in LIP_OUT],
                    fill=col(c, min(0.80 * lip, 0.9)))
         d2.polygon([px(mp_uv[i]) for i in LIP_IN], fill=(0, 0, 0, 0))
-        layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.004))
+        layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.0022))
         img = Image.alpha_composite(img, layer)
 
     return img
@@ -383,21 +430,26 @@ def paint_eyes_arkit(lk, ak_uv):
             img = Image.alpha_composite(img, layer)
             dr = ImageDraw.Draw(img)
 
-        # liner: crisp stroke ON the rim
+        # liner: hugs the INSIDE of the rim and stops short of the corners —
+        # the hole corners extend ~4mm past the visible canthi (painting the
+        # full rim reads as a droopy temple wing), and on hooded/downcast
+        # lids the anatomical rim sits slightly above the visible lash edge.
         liner = lk.get("liner", 0.0)
         if liner > 0.01:
             w = max(3, int(SIZE * 0.0044 * (0.7 + 0.6 * min(liner, 2.0))))
-            dr.line(rim, fill=(12, 8, 12, int(235 * min(liner, 1.0))),
+            trimmed = rim_np[1:-1]
+            inset = [tuple(p2 - outward(p2) * w * 0.45) for p2 in trimmed]
+            dr.line(inset, fill=(12, 8, 12, int(235 * min(liner, 1.0))),
                     width=w, joint="curve")
 
         # wing: from the outer corner, along the rim tangent, gentle lift
         wing = lk.get("lash_wing", 0.0)
         if wing > 0.01:
-            o = rim_np[0]
-            tangent = rim_np[0] - rim_np[2]
+            o = rim_np[1]
+            tangent = rim_np[1] - rim_np[3]
             tangent = tangent / (np.linalg.norm(tangent) + 1e-6)
             lift = outward(o)
-            tip = o + tangent * SIZE * 0.020 * wing + lift * SIZE * 0.006 * wing
+            tip = o + tangent * SIZE * 0.012 * wing + lift * SIZE * 0.004 * wing
             dr.line([tuple(o), tuple(tip)], fill=(12, 8, 12, 225),
                     width=max(2, int(SIZE * 0.0035)))
 
@@ -415,8 +467,9 @@ def paint_eyes_arkit(lk, ak_uv):
                 d = outward(base)
                 tangent = rim_np[i0 + 1] - rim_np[i0]
                 tangent = tangent / (np.linalg.norm(tangent) + 1e-6)
-                ln = SIZE * (0.009 + 0.007 * min(lash, 1.6)) \
+                ln = SIZE * (0.008 + 0.006 * min(lash, 1.6)) \
                     * rng.uniform(0.7, 1.25)
+                base = base - d * SIZE * 0.0015
                 tip = base + d * ln + tangent * ln * rng.uniform(-0.25, 0.25)
                 dr.line([tuple(base), tuple(tip)],
                         fill=(10, 7, 10, int(210 * min(lash, 1.0))), width=3)
