@@ -207,11 +207,15 @@ def paint_look_mp(lk, mp_uv):
         raise_f = lk.get("blush_raise", 0.40)
         layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
         d2 = ImageDraw.Draw(layer)
-        for cheek, under in ((CHEEK_R, UNDEREYE_R), (CHEEK_L, UNDEREYE_L)):
-            cx, cy = px(mp_uv[cheek])
-            ux, uy = px(mp_uv[under])
-            bx, by = cx + (ux - cx) * raise_f, cy + (uy - cy) * raise_f
-            r = SIZE * 0.085
+        # blush apple: between the outer eye corner and the mouth corner,
+        # pushed laterally outward — the cheek-center landmark sat too
+        # medial on real faces (blobs hugged the nose).
+        for eye_c, mouth_c, sgn in ((33, 61, -1.0), (263, 291, 1.0)):
+            ex, ey = px(mp_uv[eye_c])
+            mx2, my2 = px(mp_uv[mouth_c])
+            bx = ex * 0.52 + mx2 * 0.48 + sgn * SIZE * 0.045
+            by = ey * 0.55 + my2 * 0.45 - SIZE * 0.01 * raise_f
+            r = SIZE * 0.075
             d2.ellipse([bx - r, by - r, bx + r, by + r],
                        fill=col(c, min(0.62 * blush, 0.75)))
         layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.035))
@@ -234,19 +238,22 @@ def paint_look_mp(lk, mp_uv):
         layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
         d2 = ImageDraw.Draw(layer)
         nx, ny = px(mp_uv[NOSE_BRIDGE])
-        for _ in range(90):
-            fx = nx + rng.normal(0, SIZE * 0.10)
-            fy = ny + rng.normal(0, SIZE * 0.045) + SIZE * 0.02
-            r = rng.uniform(1.2, 3.0)
-            a = 0.55 * lk["freckles"] * rng.uniform(0.4, 1.0)
+        for _ in range(55):
+            fx = nx + rng.normal(0, SIZE * 0.062)
+            fy = ny + rng.normal(0, SIZE * 0.026) + SIZE * 0.015
+            r = rng.uniform(0.7, 1.6)
+            a = 0.38 * lk["freckles"] * rng.uniform(0.4, 1.0)
             d2.ellipse([fx - r, fy - r, fx + r, fy + r],
                        fill=col([0.45, 0.28, 0.18], a))
         layer = layer.filter(ImageFilter.GaussianBlur(0.8))
         img = Image.alpha_composite(img, layer)
         dr = ImageDraw.Draw(img)
 
-    # eyeshadow: band from the lash chain toward the brow
-    shadow = lk.get("shadow", 0.0)
+    # (eyeshadow/liner/lash/wing are painted DIRECTLY in ARKit UV along the
+    # real eye-hole rim — see paint_eyes_arkit — so the precision-critical
+    # elements never pass through the warp map.)
+    shadow = 0.0
+    _unused_shadow = lk.get("shadow", 0.0)
     if shadow > 0.01:
         c = lk.get("shadow_col", [0.35, 0.22, 0.30])
         layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
@@ -263,15 +270,16 @@ def paint_look_mp(lk, mp_uv):
         img = Image.alpha_composite(img, layer)
         dr = ImageDraw.Draw(img)
 
-    # eyeliner + wing along the lash chain
-    liner = lk.get("liner", 0.0)
+    liner = 0.0
+    _unused_liner = lk.get("liner", 0.0)
     if liner > 0.01:
         wpx = max(2.0, SIZE * 0.004 * (0.7 + 0.6 * min(liner, 2.0)))
         for chain in (LASH_R, LASH_L):
             pts = [px(mp_uv[i]) for i in chain]
             dr.line(pts, fill=(12, 8, 12, int(240 * min(liner, 1.0))),
                     width=int(wpx), joint="curve")
-    wing = lk.get("lash_wing", 0.0)
+    wing = 0.0
+    _unused_wing = lk.get("lash_wing", 0.0)
     if wing > 0.01:
         for chain, sgn in ((LASH_R, -1.0), (LASH_L, 1.0)):
             o = np.array(px(mp_uv[chain[0]]))
@@ -282,8 +290,8 @@ def paint_look_mp(lk, mp_uv):
             dr.line([tuple(o), tuple(tip)],
                     fill=(12, 8, 12, 235), width=max(2, int(SIZE * 0.005)))
 
-    # lash fringe: short strokes fanning up from the chain
-    lash = lk.get("lash", 0.0)
+    lash = 0.0
+    _unused_lash = lk.get("lash", 0.0)
     if lash > 0.01:
         rng = np.random.default_rng(3)
         for chain in (LASH_R, LASH_L):
@@ -322,6 +330,99 @@ def paint_look_mp(lk, mp_uv):
     return img
 
 
+# ── ARKit-direct eye painter ────────────────────────────────────────────────
+# The eye-hole rims ARE the lash lines on the live mesh; painting along them
+# in ARKit UV puts liner/lash/shadow exactly at the roots with zero warp
+# error. Arc indices are constants of ARKit topology (x-ordered outer→inner
+# per eye; see arkit_map_smoke.cpp).
+# Arcs listed OUTER -> INNER to match the (outer, inner) corner pairs — the
+# x-sorted list runs the other way for the left eye, and a mismatched rim
+# order draws the liner as a diagonal slice across the eye.
+ARC_UP_R = [1100, 1099, 1098, 1097, 1096, 1095, 1094, 1093, 1092, 1091]
+ARC_UP_L = [1070, 1071, 1072, 1073, 1074, 1075, 1076, 1077, 1078, 1079]
+CORNERS_R = (1101, 1090)   # outer, inner
+CORNERS_L = (1069, 1080)
+
+
+def paint_eyes_arkit(lk, ak_uv):
+    img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(img)
+
+    def puv(i):
+        return (float(ak_uv[i][0]) * (SIZE - 1), float(ak_uv[i][1]) * (SIZE - 1))
+
+    def col(c, a):
+        return (int(c[0] * 255), int(c[1] * 255), int(c[2] * 255),
+                int(np.clip(a, 0, 1) * 255))
+
+    for arc, corners in ((ARC_UP_R, CORNERS_R), (ARC_UP_L, CORNERS_L)):
+        rim = [puv(corners[0])] + [puv(i) for i in arc] + [puv(corners[1])]
+        rim_np = np.array(rim, float)
+        center = rim_np.mean(0)
+        # "up" in UV = away from the hole center at the rim (per point)
+        def outward(p):
+            d = p - center
+            n = np.linalg.norm(d) + 1e-6
+            return d / n
+
+        # eyeshadow: soft band hugging the rim, taller mid-eye
+        shadow = lk.get("shadow", 0.0)
+        if shadow > 0.01:
+            c = lk.get("shadow_col", [0.35, 0.22, 0.30])
+            layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+            d2 = ImageDraw.Draw(layer)
+            band = SIZE * (0.028 + 0.020 * min(shadow, 2.0))
+            upper = []
+            for k2, p2 in enumerate(rim_np):
+                t = k2 / (len(rim_np) - 1)
+                lift = np.sin(np.pi * t) * band + band * 0.25
+                upper.append(tuple(p2 + outward(p2) * lift))
+            d2.polygon([tuple(p2) for p2 in rim_np] + upper[::-1],
+                       fill=col(c, min(0.62 * shadow, 0.80)))
+            layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.011))
+            img = Image.alpha_composite(img, layer)
+            dr = ImageDraw.Draw(img)
+
+        # liner: crisp stroke ON the rim
+        liner = lk.get("liner", 0.0)
+        if liner > 0.01:
+            w = max(3, int(SIZE * 0.0044 * (0.7 + 0.6 * min(liner, 2.0))))
+            dr.line(rim, fill=(12, 8, 12, int(235 * min(liner, 1.0))),
+                    width=w, joint="curve")
+
+        # wing: from the outer corner, along the rim tangent, gentle lift
+        wing = lk.get("lash_wing", 0.0)
+        if wing > 0.01:
+            o = rim_np[0]
+            tangent = rim_np[0] - rim_np[2]
+            tangent = tangent / (np.linalg.norm(tangent) + 1e-6)
+            lift = outward(o)
+            tip = o + tangent * SIZE * 0.020 * wing + lift * SIZE * 0.006 * wing
+            dr.line([tuple(o), tuple(tip)], fill=(12, 8, 12, 225),
+                    width=max(2, int(SIZE * 0.0035)))
+
+        # lash fringe: strokes rooted on the rim, fanning outward
+        lash = lk.get("lash", 0.0)
+        if lash > 0.01:
+            rng = np.random.default_rng(11)
+            n = int(12 + 9 * min(lash, 2.0))
+            for k2 in range(n):
+                t = (k2 + 0.5) / n
+                seg = t * (len(rim_np) - 1)
+                i0 = min(int(seg), len(rim_np) - 2)
+                f = seg - i0
+                base = rim_np[i0] * (1 - f) + rim_np[i0 + 1] * f
+                d = outward(base)
+                tangent = rim_np[i0 + 1] - rim_np[i0]
+                tangent = tangent / (np.linalg.norm(tangent) + 1e-6)
+                ln = SIZE * (0.009 + 0.007 * min(lash, 1.6)) \
+                    * rng.uniform(0.7, 1.25)
+                tip = base + d * ln + tangent * ln * rng.uniform(-0.25, 0.25)
+                dr.line([tuple(base), tuple(tip)],
+                        fill=(10, 7, 10, int(210 * min(lash, 1.0))), width=3)
+    return img
+
+
 def checker():
     img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     a = np.zeros((SIZE, SIZE, 4), np.uint8)
@@ -343,7 +444,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     warp, mask = build_warp_map(os.path.join(here, "arkit_uv_warp.npz"))
-    _, _, mp_uv, _ = parse_uvs()
+    ak_uv_g, _, mp_uv, _ = parse_uvs()
 
     checker().save(os.path.join(out_dir, "checker.png"))
     print("checker.png")
@@ -366,8 +467,9 @@ def main():
         if not pigment:
             continue
         mp_img = paint_look_mp(lk, mp_uv)
-        warp_image(mp_img, warp, mask).save(
-            os.path.join(out_dir, f"look_{fid}.png"))
+        atlas = warp_image(mp_img, warp, mask)
+        atlas = Image.alpha_composite(atlas, paint_eyes_arkit(lk, ak_uv_g))
+        atlas.save(os.path.join(out_dir, f"look_{fid}.png"))
         n += 1
     print(f"{n} builtin looks baked")
 
