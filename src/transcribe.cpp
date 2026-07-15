@@ -429,28 +429,39 @@ static void do_transcribe(
     wp.print_realtime             = false;
     wp.print_timestamps           = false;
     wp.print_special              = false;
-    // Prevent hallucination loops. `no_context` only suppresses the *initial*
-    // prompt carried over from a *prior* whisper_full call (per whisper.h:
-    // "do not use past transcription as initial prompt") — we call whisper_full
-    // once, so on its own it does nothing here. The real loop driver is
-    // `n_max_text_ctx`: decoded tokens from one 30 s window are fed back as the
-    // decoder prompt for the next window (default cap 16384 tokens). On a
-    // repetitive outro (Ween "Transdermal Celebration": the sung "I'm growing
-    // with the land…" / "lay on the lawn…" refrains) that feedback snowballs
-    // into a 1-segment-per-second loop that swallows the rest of the song.
-    // Capping the past-text prompt to 0 tokens severs the carryover and the
-    // loop disappears — verified end-to-end on that track. (Temperature
-    // fallback alone does NOT fix it, and can even feed the loop.)
+    // Condition each 30 s decode window on the previously-decoded text — this is
+    // whisper's default and what a plain python `whisper` pass does. Turning it
+    // off is what made us miss words: `n_max_text_ctx = 0` severs ALL past-text
+    // carryover, so every window decodes in isolation, which drops real words and
+    // degrades word/segment boundaries. Measured on a clean spoken stem: mc=0
+    // loses ~4% of words vs the default (isolated to this one param — the logprob
+    // threshold made no difference); on quiet/sung material whole trailing lines
+    // vanish.
+    //
+    // mc=0 was originally a sledgehammer against a repetition loop (Ween
+    // "Transdermal Celebration": a repetitive outro feeds its own decoded tokens
+    // back and snowballs into a ~1-seg/sec loop that eats the rest of the song).
+    // Modern whisper.cpp breaks that loop WITHOUT severing context: degenerate,
+    // repetitive output trips `entropy_thold`, which forces temperature fallback,
+    // and history conditioning is auto-disabled once the temperature climbs past
+    // 0.5 (WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF) — so a loop starves its own
+    // context while ordinary speech keeps it. We therefore leave n_max_text_ctx
+    // at whisper's default (~224 after the internal n_text_ctx/2 clamp).
+    // `no_context` only clears a carried-over *initial* prompt; we make a single
+    // whisper_full call so it is a no-op here, kept for clarity.
     wp.no_context      = true;
-    wp.n_max_text_ctx  = 0;
     wp.no_speech_thold = 0.6f;
     wp.entropy_thold   = 2.4f;
-    // Temperature fallback breaks intra-chunk repetition loops: when greedy
-    // decoding produces high-entropy/low-logprob output, whisper retries with
-    // T += 0.2 up to 1.0, and ultimately drops the segment if all attempts fail.
+    // Temperature fallback breaks intra-chunk repetition loops: high-entropy /
+    // low-logprob output retries at T += 0.2 up to 1.0 (and, per the note above,
+    // past-text conditioning switches off above T=0.5, cutting the loop's fuel).
     wp.temperature     = 0.0f;
     wp.temperature_inc = 0.2f;
-    wp.logprob_thold   = -0.5f;
+    // Match python whisper's default (-1.0). A segment is deleted as "no speech"
+    // only when no_speech_prob > no_speech_thold AND avg_logprob < logprob_thold;
+    // the old -0.5 met that AND on ordinary low-confidence lines (sung vocals,
+    // quiet or reverberant speech) and silently dropped them. -1.0 restores recall.
+    wp.logprob_thold   = -1.0f;
 
     if (whisper_full(ctx, wp, pcm.data(), (int)pcm.size()) != 0) {
         whisper_free(ctx);
@@ -732,16 +743,16 @@ TranscribeSearchResult transcribe_search(
     wp.print_realtime             = false;
     wp.print_timestamps           = false;
     wp.print_special              = false;
-    // n_max_text_ctx = 0: sever decoded-token carryover between 30 s windows.
-    // See the main pipeline site above — without this, repetitive material
-    // drives a self-reinforcing repetition loop. no_context alone is insufficient.
+    // Keep past-text conditioning ON (whisper's default) so we don't drop words,
+    // and use python-whisper's default logprob threshold (-1.0). See the
+    // do_transcribe site above for why n_max_text_ctx = 0 / logprob -0.5 were
+    // removed and how repetition loops are handled without them.
     wp.no_context      = true;
-    wp.n_max_text_ctx  = 0;
     wp.no_speech_thold = 0.6f;
     wp.entropy_thold   = 2.4f;
     wp.temperature     = 0.0f;
     wp.temperature_inc = 0.2f;
-    wp.logprob_thold   = -0.5f;
+    wp.logprob_thold   = -1.0f;
 
     MediaFileInfo info = video_probe_file(path);
     if (!info.error.empty()) {
