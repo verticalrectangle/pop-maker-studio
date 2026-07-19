@@ -3217,6 +3217,23 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
         if (!g_shape_fill_pso) return;
         if (geom.fill.empty() && geom.stroke.empty()) return;
 
+        // Helper: upload a vertex vector as an MTLBuffer and draw it.
+        // setVertexBytes has a ~4KB limit — shape tessellation can produce
+        // thousands of vertices (16 bytes each), so we must use a real buffer
+        // (same pattern as the face mesh path at line ~1817).
+        auto draw_verts = [&](id<MTLRenderCommandEncoder> enc,
+                              const std::vector<ShapeVertex>& verts,
+                              const ShapeUniCPU& su) {
+            if (verts.empty()) return;
+            id<MTLBuffer> vb = [g_dev newBufferWithBytes:verts.data()
+                    length:(NSUInteger)(verts.size() * sizeof(ShapeVertex))
+                options:MTLResourceStorageModeShared];
+            [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
+            [enc setVertexBuffer:vb offset:0 atIndex:0];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                      vertexCount:(NSUInteger)verts.size()];
+        };
+
         // ── Glow pass ──────────────────────────────────────────────────────
         if (style.glow_on && style.glow_radius > 0.f && style.glow_intensity > 0.f
             && g_shape_glow_pso) {
@@ -3244,12 +3261,7 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
                                        style.fill_col[2], style.fill_col[3],
                                        style.grad_col2[0], style.grad_col2[1],
                                        style.grad_col2[2], style.grad_col2[3] };
-                    [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
-                    [enc setVertexBytes:geom.fill.data()
-                               length:geom.fill.size() * sizeof(ShapeVertex)
-                              atIndex:0];
-                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
-                              vertexCount:(NSUInteger)geom.fill.size()];
+                    draw_verts(enc, geom.fill, su);
                 }
                 if (style.stroke_on && !geom.stroke.empty()) {
                     ShapeUniCPU su = { (float)w, (float)h, 1, style.grad_mode,
@@ -3258,12 +3270,7 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
                                        style.stroke_col[2], style.stroke_col[3],
                                        style.grad_col2[0], style.grad_col2[1],
                                        style.grad_col2[2], style.grad_col2[3] };
-                    [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
-                    [enc setVertexBytes:geom.stroke.data()
-                               length:geom.stroke.size() * sizeof(ShapeVertex)
-                              atIndex:0];
-                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
-                              vertexCount:(NSUInteger)geom.stroke.size()];
+                    draw_verts(enc, geom.stroke, su);
                 }
                 [enc endEncoding];
             }
@@ -3302,12 +3309,7 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
                                style.fill_col[2], style.fill_col[3],
                                style.grad_col2[0], style.grad_col2[1],
                                style.grad_col2[2], style.grad_col2[3] };
-            [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
-            [enc setVertexBytes:geom.fill.data()
-                       length:geom.fill.size() * sizeof(ShapeVertex)
-                      atIndex:0];
-            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
-                      vertexCount:(NSUInteger)geom.fill.size()];
+            draw_verts(enc, geom.fill, su);
         }
         if (style.stroke_on && !geom.stroke.empty()) {
             ShapeUniCPU su = { (float)w, (float)h, 1, style.grad_mode,
@@ -3316,12 +3318,7 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
                                style.stroke_col[2], style.stroke_col[3],
                                style.grad_col2[0], style.grad_col2[1],
                                style.grad_col2[2], style.grad_col2[3] };
-            [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
-            [enc setVertexBytes:geom.stroke.data()
-                       length:geom.stroke.size() * sizeof(ShapeVertex)
-                      atIndex:0];
-            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
-                      vertexCount:(NSUInteger)geom.stroke.size()];
+            draw_verts(enc, geom.stroke, su);
         }
         [enc endEncoding];
     };
