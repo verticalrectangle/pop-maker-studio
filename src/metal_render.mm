@@ -14,6 +14,7 @@
 #include "arkit_face.h"   // 2D bridge slot + native 3D observation (tier 1)
 #include "paths.h"        // app_models_dir() — makeup PNGs live in models/face
 #include "stb_image.h"    // makeup texture load (impl compiled in video.cpp)
+#include "shape.h"        // ShapePath/ShapeStyle/ShapeGeometry/shape_tessellate
 // ARKit face mesh topology (1220 verts, 2304 tris) for the TrueDepth front-camera path
 #include "generated/arkit_face_mesh.h"
 #include <functional>
@@ -185,7 +186,95 @@ kernel void bgra_to_rgb_downscale(texture2d<float, access::read> bgra [[texture(
     rgb[idx + 1] = (uint8_t)(px[1] * 255.0);   // G
     rgb[idx + 2] = (uint8_t)(px[0] * 255.0);   // B
 }
+
+// (6) Shape clip — fill / stroke / glow. Port of fx_shader.cpp k_shape_vert /
+// k_shape_frag / k_shape_glow_frag. Vertices carry canvas-space (x,y) and
+// local [0,1] (u,v) for gradient/glow shading; the vertex shader converts to
+// NDC with a y-flip (canvas y-down → NDC y-up), matching the GL path.
+struct ShapeVOut { float4 pos [[position]]; float2 v_uv; };
+struct ShapeUni {
+    float u_res_w;        // canvas w
+    float u_res_h;        // canvas h
+    int   u_mode;         // 0=fill, 1=stroke
+    int   u_grad_mode;    // 0=none 1=linear 2=radial 3=hue-cycle
+    float u_grad_angle;   // degrees (linear mode)
+    float u_fill_alpha;   // draw-on fade for fill (0..1)
+    float u_alpha;        // global layer alpha
+    float u_pad0;
+    float u_cr, u_cg, u_cb, u_ca;   // base color
+    float u_c2r, u_c2g, u_c2b, u_c2a; // gradient stop 2
+};
+vertex ShapeVOut shape_v(uint vid [[vertex_id]],
+                         device const float* vbuf [[buffer(0)]],
+                         constant ShapeUni& u [[buffer(1)]]) {
+    // vbuf layout: x, y, u, v per vertex (ShapeVertex)
+    float x = vbuf[vid * 4 + 0];
+    float y = vbuf[vid * 4 + 1];
+    float uu = vbuf[vid * 4 + 2];
+    float vv = vbuf[vid * 4 + 3];
+    ShapeVOut o;
+    o.pos = float4(x / u.u_res_w * 2.0 - 1.0,
+                   1.0 - y / u.u_res_h * 2.0, 0.0, 1.0);
+    o.v_uv = float2(uu, vv);
+    return o;
+}
+float3 shape_hsv2rgb(float3 c) {
+    float4 K = float4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+    float3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+fragment float4 shape_f(ShapeVOut in [[stage_in]],
+                        constant ShapeUni& u [[buffer(1)]]) {
+    float4 col = float4(u.u_cr, u.u_cg, u.u_cb, u.u_ca);
+    float4 col2 = float4(u.u_c2r, u.u_c2g, u.u_c2b, u.u_c2a);
+    if (u.u_grad_mode == 1) {
+        float a = radians(u.u_grad_angle);
+        float2 dir = float2(cos(a), -sin(a));
+        float tt = clamp(dot(in.v_uv - 0.5, dir) * 2.0 + 0.5, 0.0, 1.0);
+        col = mix(col, col2, tt);
+    } else if (u.u_grad_mode == 2) {
+        float tt = clamp(length(in.v_uv - 0.5) * 2.0, 0.0, 1.0);
+        col = mix(col, col2, tt);
+    } else if (u.u_grad_mode == 3) {
+        float h = fract(in.v_uv.x * 0.7 + in.v_uv.y * 0.3);
+        col = float4(shape_hsv2rgb(float3(h, 0.8, 1.0)), u.u_ca);
+    }
+    float a = col.a * u.u_alpha;
+    if (u.u_mode == 0) a *= u.u_fill_alpha;
+    return float4(col.rgb * a, a);   // premultiplied for scene-over blend
+}
+// Glow composite: 2D multi-tap box blur of the shape alpha texture, output as
+// premultiplied glow color for additive blending. u_glow_step is the pixel
+// offset (1/canvas_w * radius_px, 1/canvas_h * radius_px) — the kernel is a
+// (2*taps+1)² box centred on the fragment. Single-pass (no separable temp
+// texture needed) — moderate tap counts are cheap on tile-based GPUs.
+struct GlowUni {
+    float u_step_x;      // per-tap x offset (radius_px / canvas_w)
+    float u_step_y;      // per-tap y offset (radius_px / canvas_h)
+    int   u_taps;        // taps per side (kernel = (2*taps+1)²)
+    float u_intensity;
+    float u_pad0;
+    float u_gr, u_gg, u_gb, u_ga;  // glow color
+};
+fragment float4 shape_glow_f(FSOut in [[stage_in]],
+                             texture2d<float> tex [[texture(0)]],
+                             constant GlowUni& u [[buffer(0)]],
+                             sampler s [[sampler(0)]]) {
+    float a = 0.0;
+    int taps = u.u_taps;
+    float w = 0.0;
+    for (int j = -taps; j <= taps; ++j)
+        for (int i = -taps; i <= taps; ++i) {
+            float2 off = float2(float(i) * u.u_step_x, float(j) * u.u_step_y);
+            a += tex.sample(s, in.v_uv + off).a;
+            w += 1.0;
+        }
+    a /= max(w, 1.0);
+    a *= u.u_intensity;
+    return float4(float3(u.u_gr, u.u_gg, u.u_gb) * a, a);   // premultiplied, additive blend
+}
 )";
+
 
 // ── Body FX MSL ──────────────────────────────────────────────────────────────
 // Hand-written matte-consuming passes (live-FX entries with fx_type "body_fx").
@@ -1020,6 +1109,11 @@ static id<MTLRenderPipelineState> g_layer_matte_pso = nil;  // + person-matte cu
 static id<MTLRenderPipelineState> g_solid_pso       = nil;  // DipWhite veil
 static id<MTLTexture>             g_scene[2]        = { nil, nil };
 static int                        g_scene_w = 0, g_scene_h = 0;
+// Shape clip pipelines + temp glow target (port of fx_shader.cpp shape rendering).
+static id<MTLRenderPipelineState> g_shape_fill_pso = nil;  // fill + stroke (premul over)
+static id<MTLRenderPipelineState> g_shape_glow_pso = nil;  // glow composite (additive)
+static id<MTLTexture>             g_shape_temp     = nil;  // shape alpha for glow blur
+static int                        g_shape_temp_w = 0, g_shape_temp_h = 0;
 // Scene diagnostics of the last rendered frame (fx_debug), guarded by g_stack_mu.
 static nlohmann::json             g_scene_debug;
 // ── FX runner ────────────────────────────────────────────────────────────────
@@ -2434,6 +2528,25 @@ void metal_render_init(void* mtl_device) {
     g_opaque_pso = [g_dev newRenderPipelineStateWithDescriptor:op error:&err];
     if (!g_opaque_pso) NSLog(@"[metal_render] opaque pipeline: %@", err);
 
+    // Shape clip pipelines — fill/stroke (premul over) + glow (additive).
+    MTLRenderPipelineDescriptor* sh = [MTLRenderPipelineDescriptor new];
+    sh.vertexFunction   = [lib newFunctionWithName:@"shape_v"];
+    sh.fragmentFunction = [lib newFunctionWithName:@"shape_f"];
+    premul(sh);
+    g_shape_fill_pso = [g_dev newRenderPipelineStateWithDescriptor:sh error:&err];
+    if (!g_shape_fill_pso) NSLog(@"[metal_render] shape-fill pipeline: %@", err);
+    MTLRenderPipelineDescriptor* gl = [MTLRenderPipelineDescriptor new];
+    gl.vertexFunction   = g_fs_v;
+    gl.fragmentFunction = [lib newFunctionWithName:@"shape_glow_f"];
+    gl.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    gl.colorAttachments[0].blendingEnabled             = YES;
+    gl.colorAttachments[0].sourceRGBBlendFactor        = MTLBlendFactorOne;        // additive
+    gl.colorAttachments[0].destinationRGBBlendFactor   = MTLBlendFactorOne;
+    gl.colorAttachments[0].sourceAlphaBlendFactor      = MTLBlendFactorOne;
+    gl.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+    g_shape_glow_pso = [g_dev newRenderPipelineStateWithDescriptor:gl error:&err];
+    if (!g_shape_glow_pso) NSLog(@"[metal_render] shape-glow pipeline: %@", err);
+
     MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
     sd.minFilter = MTLSamplerMinMagFilterLinear; sd.magFilter = MTLSamplerMinMagFilterLinear;
     sd.sAddressMode = MTLSamplerAddressModeClampToEdge; sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
@@ -2907,6 +3020,20 @@ struct LayerUniCPU {
     float cx, cy, hw, hh, cs, sn, cw, ch;
     float u0, v0, u1, v1, opacity, quarters, pad0, pad1;
 };
+// CPU mirror of the MSL ShapeUni / GlowUni (plain floats, no alignment traps).
+struct ShapeUniCPU {
+    float u_res_w, u_res_h;
+    int   u_mode, u_grad_mode;
+    float u_grad_angle, u_fill_alpha, u_alpha, u_pad0;
+    float u_cr, u_cg, u_cb, u_ca;
+    float u_c2r, u_c2g, u_c2b, u_c2a;
+};
+struct GlowUniCPU {
+    float u_step_x, u_step_y;
+    int   u_taps;
+    float u_intensity, u_pad0;
+    float u_gr, u_gg, u_gb, u_ga;
+};
 
 // ── Scene compositor — the desktop canvas.cpp Pass-1 track loop ──────────────
 // Tracks walk LAST→0 (bottom lane = deepest). Per track: background clip,
@@ -3081,6 +3208,124 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
         [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         [enc endEncoding];
     };
+    // Shape clip renderer (port of fx_shader.cpp shape_render_to_fbo / scene_add_shape).
+    // Renders fill + stroke + glow into g_scene[cur] using the pre-tessellated
+    // ShapeGeometry. Glow: render shape alpha to g_shape_temp, then single-pass
+    // 2D box blur + additive composite over the scene.
+    auto draw_shape = [&](const ShapeGeometry& geom, const ShapeStyle& style,
+                          float alpha, float fill_alpha) {
+        if (!g_shape_fill_pso) return;
+        if (geom.fill.empty() && geom.stroke.empty()) return;
+
+        // ── Glow pass ──────────────────────────────────────────────────────
+        if (style.glow_on && style.glow_radius > 0.f && style.glow_intensity > 0.f
+            && g_shape_glow_pso) {
+            if (!g_shape_temp || g_shape_temp_w != w || g_shape_temp_h != h) {
+                MTLTextureDescriptor* td = [MTLTextureDescriptor
+                    texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                    width:w height:h mipmapped:NO];
+                td.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+                g_shape_temp = [g_dev newTextureWithDescriptor:td];
+                g_shape_temp_w = w; g_shape_temp_h = h;
+            }
+            // Render shape (fill + stroke) to temp at full opacity.
+            {
+                MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor new];
+                rp.colorAttachments[0].texture     = g_shape_temp;
+                rp.colorAttachments[0].loadAction  = MTLLoadActionClear;
+                rp.colorAttachments[0].clearColor  = MTLClearColorMake(0, 0, 0, 0);
+                rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+                [enc setRenderPipelineState:g_shape_fill_pso];
+                if (style.fill_on && !geom.fill.empty()) {
+                    ShapeUniCPU su = { (float)w, (float)h, 0, style.grad_mode,
+                                       style.grad_angle, 1.f, 1.f, 0.f,
+                                       style.fill_col[0], style.fill_col[1],
+                                       style.fill_col[2], style.fill_col[3],
+                                       style.grad_col2[0], style.grad_col2[1],
+                                       style.grad_col2[2], style.grad_col2[3] };
+                    [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
+                    [enc setVertexBytes:geom.fill.data()
+                               length:geom.fill.size() * sizeof(ShapeVertex)
+                              atIndex:0];
+                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                              vertexCount:(NSUInteger)geom.fill.size()];
+                }
+                if (style.stroke_on && !geom.stroke.empty()) {
+                    ShapeUniCPU su = { (float)w, (float)h, 1, style.grad_mode,
+                                       style.grad_angle, 1.f, 1.f, 0.f,
+                                       style.stroke_col[0], style.stroke_col[1],
+                                       style.stroke_col[2], style.stroke_col[3],
+                                       style.grad_col2[0], style.grad_col2[1],
+                                       style.grad_col2[2], style.grad_col2[3] };
+                    [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
+                    [enc setVertexBytes:geom.stroke.data()
+                               length:geom.stroke.size() * sizeof(ShapeVertex)
+                              atIndex:0];
+                    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                              vertexCount:(NSUInteger)geom.stroke.size()];
+                }
+                [enc endEncoding];
+            }
+            // 2D box blur + additive composite over the scene.
+            float radius_px = style.glow_radius * (float)h;
+            int taps = (int)fminf(radius_px, 12.f);
+            if (taps < 1) taps = 1;
+            MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor new];
+            rp.colorAttachments[0].texture     = g_scene[cur];
+            rp.colorAttachments[0].loadAction  = MTLLoadActionLoad;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+            [enc setRenderPipelineState:g_shape_glow_pso];
+            GlowUniCPU gu = { radius_px / (float)w, radius_px / (float)h,
+                              taps, style.glow_intensity * alpha, 0.f,
+                              style.glow_col[0], style.glow_col[1],
+                              style.glow_col[2], style.glow_col[3] };
+            [enc setFragmentBytes:&gu length:sizeof(gu) atIndex:0];
+            [enc setFragmentTexture:g_shape_temp atIndex:0];
+            [enc setFragmentSamplerState:g_fx_sampler atIndex:0];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            [enc endEncoding];
+        }
+
+        // ── Fill + stroke passes (premul over into the scene) ──────────────
+        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor new];
+        rp.colorAttachments[0].texture     = g_scene[cur];
+        rp.colorAttachments[0].loadAction  = MTLLoadActionLoad;
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+        [enc setRenderPipelineState:g_shape_fill_pso];
+        if (style.fill_on && !geom.fill.empty()) {
+            ShapeUniCPU su = { (float)w, (float)h, 0, style.grad_mode,
+                               style.grad_angle, fill_alpha, alpha, 0.f,
+                               style.fill_col[0], style.fill_col[1],
+                               style.fill_col[2], style.fill_col[3],
+                               style.grad_col2[0], style.grad_col2[1],
+                               style.grad_col2[2], style.grad_col2[3] };
+            [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
+            [enc setVertexBytes:geom.fill.data()
+                       length:geom.fill.size() * sizeof(ShapeVertex)
+                      atIndex:0];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                      vertexCount:(NSUInteger)geom.fill.size()];
+        }
+        if (style.stroke_on && !geom.stroke.empty()) {
+            ShapeUniCPU su = { (float)w, (float)h, 1, style.grad_mode,
+                               style.grad_angle, 1.f, alpha, 0.f,
+                               style.stroke_col[0], style.stroke_col[1],
+                               style.stroke_col[2], style.stroke_col[3],
+                               style.grad_col2[0], style.grad_col2[1],
+                               style.grad_col2[2], style.grad_col2[3] };
+            [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
+            [enc setVertexBytes:geom.stroke.data()
+                       length:geom.stroke.size() * sizeof(ShapeVertex)
+                      atIndex:0];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
+                      vertexCount:(NSUInteger)geom.stroke.size()];
+        }
+        [enc endEncoding];
+    };
+
 
     for (int ti = (int)st.tracks.size() - 1; ti >= 0; --ti) {
         const Track& track = st.tracks[ti];
@@ -3184,6 +3429,37 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
                 cl.clip_type != ClipType::Subtitle) continue;
             if (t < cl.start || t >= cl.end) continue;
             draw_layer(ti, ci, cl, t, 1.f, /*glass=*/false);
+        }
+        // ── Shape clips (tessellate + render fill/stroke/glow) ─────────────
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            const Clip& cl = track.clips[ci];
+            if (cl.clip_type != ClipType::Shape) continue;
+            if (t < cl.start || t >= cl.end) continue;
+
+            float px    = cl.eval_prop("pos_x",    t);
+            float py    = cl.eval_prop("pos_y",    t);
+            float sx    = cl.eval_prop("scale_x",  t);
+            float sy    = cl.eval_prop("scale_y",  t);
+            float rot   = cl.eval_prop("rotation", t);
+            float alpha = cl.eval_prop("opacity",  t);
+            float stroke_len = cl.eval_prop("shape_stroke_length", t);
+            float width_mul  = cl.eval_prop("shape_stroke_width_mul", t);
+
+            float base = (w < h) ? (float)w : (float)h;
+            float cx = px * (float)w, cy = py * (float)h;
+            float hw = base * sx * 0.5f, hh = base * sy * 0.5f;
+            float rad = rot * 3.14159265f / 180.f;
+
+            ShapePath path = cl.eval_path(t);
+            ShapeGeometry geom = shape_tessellate(path, stroke_len, width_mul,
+                                                  cl.shape_style.stroke_width,
+                                                  w, h,
+                                                  cx, cy, hw, hh,
+                                                  cosf(rad), sinf(rad));
+            float fill_alpha = stroke_len >= 1.f ? 1.f
+                             : stroke_len <= 0.6f ? 0.f
+                             : (stroke_len - 0.6f) / 0.4f;
+            draw_shape(geom, cl.shape_style, alpha, fill_alpha);
         }
 
         // ── Bus FX: uncoupled bricks filter the accumulated scene ───────────
@@ -3354,7 +3630,25 @@ int metal_render_frame(void* mtl_texture, int w, int h, double t, const AppState
 
     id<MTLCommandBuffer> cb = [g_queue commandBuffer];
     int rc;
-    if (state && !layers.empty()) {
+    // Use the scene compositor when there are submitted layers OR shape clips
+    // (shapes tessellate + render entirely on the GPU side — no layer frame
+    // needed). For shape-only projects during export, no layers are submitted,
+    // so we must also seed the scene clock from this frame's time (normally
+    // set by metal_render_submit_layer) or shape keyframes freeze at t=0.
+    bool has_shapes = false;
+    if (state) {
+        for (const Track& tr : state->tracks) {
+            if (!tr.visible) continue;
+            for (const Clip& cl : tr.clips)
+                if (cl.clip_type == ClipType::Shape) { has_shapes = true; break; }
+            if (has_shapes) break;
+        }
+    }
+    if (state && (!layers.empty() || has_shapes)) {
+        if (has_shapes && layers.empty() && !g_scene_clock_valid) {
+            g_scene_clock = t;
+            g_scene_clock_valid = true;
+        }
         rc = render_scene(cb, target, w, h, t, *state, layers, matte);
     } else {
         rc = render_legacy(cb, target, w, h, t, source, sw, sh, matte);
