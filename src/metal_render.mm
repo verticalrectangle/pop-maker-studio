@@ -3457,10 +3457,9 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
             float fill_alpha = stroke_len >= 1.f ? 1.f
                              : stroke_len <= 0.6f ? 0.f
                              : (stroke_len - 0.6f) / 0.4f;
-            NSLog(@"[shape] fill=%zu stroke=%zu fill_on=%d stroke_on=%d alpha=%.2f fill_alpha=%.2f cx=%.0f cy=%.0f hw=%.0f hh=%.0f pso=%d",
+            NSLog(@"[shape] fill=%zu stroke=%zu fill_on=%d alpha=%.2f pso=%d",
                   geom.fill.size(), geom.stroke.size(), (int)cl.shape_style.fill_on,
-                  (int)cl.shape_style.stroke_on, alpha, fill_alpha, cx, cy, hw, hh,
-                  (int)(g_shape_fill_pso != nil));
+                  alpha, (int)(g_shape_fill_pso != nil));
             draw_shape(geom, cl.shape_style, alpha, fill_alpha);
         }
 
