@@ -3642,7 +3642,12 @@ int metal_render_frame(void* mtl_texture, int w, int h, double t, const AppState
         }
     }
     if (state && (!layers.empty() || has_shapes)) {
-        if (has_shapes && layers.empty() && !g_scene_clock_valid) {
+        // Shape-only projects (no submitted layers) must still advance the
+        // scene clock every frame — normally set by metal_render_submit_layer,
+        // but shapes don't submit layers. Without this, g_scene_clock freezes
+        // at the first frame's value and shape keyframes never animate
+        // (preview shows a static shape, export stalls at the first frame).
+        if (has_shapes && layers.empty()) {
             g_scene_clock = t;
             g_scene_clock_valid = true;
         }

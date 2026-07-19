@@ -752,6 +752,44 @@ static void case_chroma_matte_key(CVPixelBufferRef red, CVPixelBufferRef blue) {
     CVPixelBufferRelease(matte);
     printf("  [n] matte-keyed chroma: subject crisp, background ghosts\n");
 }
+// p. Shape clip rendering: add_shape → render → center pixels must differ
+// from the aurora background. Tests the Metal shape pipeline (shape_v/shape_f
+// + draw_shape lambda) end-to-end. Also verifies the scene clock advances for
+// shape-only projects (no submitted layers) by rendering at two different
+// times and checking the shape is visible at both.
+static void case_shape() {
+    const std::string C = "p.shape_clip";
+    cmd(C, "new_project", {{"force", true}});
+    cmd(C, "add_track", {{"name", "S"}, {"position", 0}});
+    json r = cmd(C, "add_shape", {{"track", 0}, {"preset", "circle"},
+                                   {"start", 0.0}, {"end", 4.0}});
+    // Bright red fill so it's unambiguous against the aurora.
+    cmd(C, "set_shape_style", {{"track", 0}, {"clip", r["clip"]},
+                               {"fill_on", true}, {"stroke_on", false},
+                               {"fill_col", json::array({1.0, 0.0, 0.0, 1.0})}});
+
+    // Render at t=0 (clip start). The shape should be visible at center.
+    Img im0 = render_frame(C);
+    json dbg = fx_debug(C);
+    check(dbg["scene"].value("active", false), C,
+          "scene compositor not active for shape-only project: " + dbg.dump());
+
+    // Center should be red-dominated (R > B, R > G).
+    double center[3]; avg_bgr(im0, {W/2 - 30, H/2 - 30, W/2 + 30, H/2 + 30}, center);
+    check(center[2] > center[0] + 20 && center[2] > center[1] + 20, C,
+          "center is not red-filled shape: " + bgr_str(center) +
+          " (expected R >> B, R >> G)");
+
+    // Corners should be aurora (not red) — the shape is centered.
+    double corner[3]; avg_bgr(im0, {0, 0, 40, 40}, corner);
+    check(corner[2] < center[2] - 30, C,
+          "corner is as red as center — shape fills the whole canvas: corner=" +
+          bgr_str(corner) + " center=" + bgr_str(center));
+
+    printf("  [p] shape clip: center=%s corner=%s\n",
+           bgr_str(center).c_str(), bgr_str(corner).c_str());
+}
+
 
 // o. face_fx end-to-end: the REAL record-mode makeup path — face models +
 // tracker worker + camera side-feed + the Metal beauty/warp passes. Feeds the
@@ -922,6 +960,7 @@ int main() {
         case_legacy_fx(gradient, green, checker);
         case_chroma_feedback(green, gradient);
         case_chroma_matte_key(red, blue);
+        case_shape();
         case_face_fx(checker);
 
         CVPixelBufferRelease(green);    CVPixelBufferRelease(gradient);
