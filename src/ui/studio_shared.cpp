@@ -879,6 +879,7 @@ ImVec4 clip_type_badge_color(ClipType ct) {
         case ClipType::Subtitle:   return {40.f/255,190.f/255,190.f/255,1.f};
         case ClipType::Video:      return {140.f/255,60.f/255,220.f/255,1.f};
         case ClipType::Audio:      return {50.f/255,180.f/255,100.f/255,1.f};
+        case ClipType::Shape:      return {180.f/255,80.f/255,220.f/255,1.f};
         case ClipType::Background: return {180.f/255,60.f/255,160.f/255,1.f};
         case ClipType::BodyFX:     return {255.f/255,80.f/255,160.f/255,1.f};
         case ClipType::Record:     return {220.f/255,50.f/255,50.f/255,1.f};
@@ -894,6 +895,7 @@ const char* clip_type_name(ClipType ct) {
         case ClipType::Subtitle:   return "SUBTITLE";
         case ClipType::Video:      return "VIDEO";
         case ClipType::Audio:      return "AUDIO";
+        case ClipType::Shape:      return "SHAPE";
         case ClipType::Background: return "BG";
         case ClipType::BodyFX:     return "BODY FX";
         case ClipType::Record:     return "REC";

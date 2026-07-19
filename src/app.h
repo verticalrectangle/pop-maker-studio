@@ -3,6 +3,7 @@
 #include "audio_fx.h"
 #include "body_fx.h"
 #include "keyframe.h"
+#include "shape.h"
 #include <string>
 #include <vector>
 #include <deque>
@@ -94,7 +95,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord, AudioMultiFX, Bus };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord, AudioMultiFX, Bus, Shape };
 
 // A clip that composites as video: a Video clip, or a VideoRecord brick whose
 // selected take is mirrored into `text` (path consumers stay unchanged).
@@ -439,6 +440,26 @@ struct Clip {
     // Per-effect (set on each fx_chain sub-effect): expand this effect's lane into
     // per-PARAM keyframe sub-rows on the timeline. View state, not exported.
     bool  params_expanded = false;
+    // ── Shape clip (ClipType::Shape) ──────────────────────────────────────────
+    // A shape is a content layer (composites like Text/Background, NOT an FX
+    // brick). The path lives in local [0,1]² space; the clip transform places
+    // it on the canvas. Three keyframable animation axes:
+    //   - transform: pos_x/pos_y/scale_x/scale_y/rotation/opacity (shared
+    //     scalar ktracks, same as every other clip type).
+    //   - draw-on reveal: stroke_length (0..1) — keyframable scalar, shows
+    //     the first fraction of the stroke arc length; fill fades in over the
+    //     last 40% of the reveal.
+    //   - path morph: path_ktracks holds full ShapePath snapshots at times;
+    //     eval_path() resamples + lerps between them. The base path
+    //     (shape_path) is the fallback when no path keys exist.
+    ShapePath        shape_path;            // base / fallback path
+    ShapeStyle       shape_style;           // fill / stroke / gradient / glow
+    PathPropTrack    shape_path_keys;       // morph keyframes (time → ShapePath)
+    float            shape_stroke_length = 1.f;  // 0..1 reveal (keyframable)
+    float            shape_stroke_width_mul = 1.f; // global width multiplier (keyframable)
+    // Evaluate the effective path at absolute timeline time `playhead`:
+    // morph keys if present, else the base path.
+    ShapePath eval_path(float playhead) const;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.

@@ -231,6 +231,7 @@ static std::string clip_type_str(ClipType t) {
         case ClipType::Record:     return "record";
         case ClipType::VideoRecord: return "video_record";
         case ClipType::Bus:        return "bus";
+        case ClipType::Shape:      return "shape";
         default: break;
     }
     return "unknown";
@@ -748,6 +749,47 @@ static json clip_to_json(int idx, const Clip& c) {
         j["body_fx_params"]        = {c.body_fx_params[0], c.body_fx_params[1],
                                       c.body_fx_params[2], c.body_fx_params[3]};
     }
+    if (c.clip_type == ClipType::Shape) {
+        json path;
+        path["closed"] = c.shape_path.closed;
+        json pts = json::array();
+        for (auto& p : c.shape_path.pts)
+            pts.push_back({{"x", p.x}, {"y", p.y}, {"w", p.width}});
+        path["points"] = pts;
+        j["shape_path"] = path;
+        const ShapeStyle& s = c.shape_style;
+        json style;
+        style["fill_col"]    = {s.fill_col[0], s.fill_col[1], s.fill_col[2], s.fill_col[3]};
+        style["fill_on"]     = s.fill_on;
+        style["stroke_col"]  = {s.stroke_col[0], s.stroke_col[1], s.stroke_col[2], s.stroke_col[3]};
+        style["stroke_on"]   = s.stroke_on;
+        style["stroke_width"]= s.stroke_width;
+        style["grad_mode"]   = s.grad_mode;
+        style["grad_col2"]   = {s.grad_col2[0], s.grad_col2[1], s.grad_col2[2], s.grad_col2[3]};
+        style["grad_angle"]  = s.grad_angle;
+        style["glow_col"]    = {s.glow_col[0], s.glow_col[1], s.glow_col[2], s.glow_col[3]};
+        style["glow_on"]     = s.glow_on;
+        style["glow_radius"] = s.glow_radius;
+        style["glow_intensity"] = s.glow_intensity;
+        j["shape_style"]     = style;
+        j["shape_stroke_length"]    = c.shape_stroke_length;
+        j["shape_stroke_width_mul"] = c.shape_stroke_width_mul;
+        if (!c.shape_path_keys.empty()) {
+            json keys = json::array();
+            for (auto& k : c.shape_path_keys.keys) {
+                json kp;
+                kp["t"] = k.time;
+                json kpts = json::array();
+                for (auto& p : k.path.pts)
+                    kpts.push_back({{"x", p.x}, {"y", p.y}, {"w", p.width}});
+                kp["points"] = kpts;
+                kp["closed"] = k.path.closed;
+                kp["interp"] = interp_str(k.interp);
+                keys.push_back(kp);
+            }
+            j["shape_path_keys"] = keys;
+        }
+    }
     if (c.grade_brightness != 0.f || c.grade_contrast != 1.f ||
         c.grade_saturation != 1.f || c.grade_hue      != 0.f) {
         j["grade_brightness"] = c.grade_brightness;
@@ -963,8 +1005,8 @@ static ClipType parse_clip_type(const std::string& s) {
     if (s == "background") return ClipType::Background;
     if (s == "body_fx")   return ClipType::BodyFX;
     if (s == "record")    return ClipType::Record;
-    if (s == "video_record") return ClipType::VideoRecord;
     if (s == "bus")       return ClipType::Bus;
+    if (s == "shape")     return ClipType::Shape;
     return ClipType::Text;
 }
 
@@ -3494,6 +3536,152 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (params.contains("bg_pad_y"))       ts.bg_pad_y       = params["bg_pad_y"].get<float>();
         if (params.contains("bg_corner"))      ts.bg_corner      = params["bg_corner"].get<float>();
         return json::object();
+    }
+
+    // ── Shape clip levers (ClipType::Shape) ──────────────────────────────────
+    if (method == "add_shape") {
+        int ti = track_by_name_or_index(state, params);
+        if (!check_track(state, ti, err)) return {};
+        if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
+        if (is_group_head(state.tracks[ti])) { err = "that track is a group folder row — it holds no clips; target a member track"; return {}; }
+        float start = snap_to_frame(params.value("start", 0.f), state.fps);
+        float end   = snap_end_to_frame(params.value("end", start + 3.f), state.fps);
+        std::string preset_s = params.value("preset", "circle");
+        ShapePreset preset;
+        if (!shape_preset_from_name(preset_s, preset)) {
+            err = "unknown preset '" + preset_s + "' (circle/square/triangle/star/heart/polygon/hexagon/burst/arrow/lightning/diamond/cross)";
+            return {};
+        }
+        std::vector<float> pparams;
+        if (params.contains("params") && params["params"].is_array())
+            for (auto& v : params["params"]) pparams.push_back(v.get<float>());
+
+        Clip cl;
+        cl.clip_type = ClipType::Shape;
+        cl.start = start;
+        cl.end   = end;
+        cl.shape_path = shape_preset_bake(preset, pparams);
+        // Default style: fill on, stroke off, no glow — the user turns on what
+        // they want from the inspector. Presets that read better as outlines
+        // (lightning, arrow) get stroke on + fill off.
+        if (preset == ShapePreset::Lightning || preset == ShapePreset::Arrow ||
+            preset == ShapePreset::Burst) {
+            cl.shape_style.fill_on = false;
+            cl.shape_style.stroke_on = true;
+        }
+        if (row_overlap_on_track(state, ti, cl.clip_type, cl.start, cl.end, -1, err))
+            return {};
+        state.tracks[ti].clips.push_back(cl);
+        int new_ci = (int)state.tracks[ti].clips.size() - 1;
+        clip_flash(state, ti, new_ci, /*reveal=*/true);
+        json r; r["clip"] = new_ci; r["preset"] = preset_s;
+        return r;
+    }
+
+    if (method == "set_shape_path") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (cl.clip_type != ClipType::Shape) { err = "clip is not a shape"; return {}; }
+        if (!params.contains("points") || !params["points"].is_array()) {
+            err = "points must be an array of {x, y, w?} (x,y in 0..1 local space)";
+            return {};
+        }
+        ShapePath path;
+        path.closed = params.value("closed", false);
+        for (auto& p : params["points"]) {
+            ShapePoint pt;
+            pt.x = p.value("x", 0.5f);
+            pt.y = p.value("y", 0.5f);
+            pt.width = p.value("w", 0.008f);
+            path.pts.push_back(pt);
+        }
+        if (path.pts.size() < 2) { err = "need at least 2 points"; return {}; }
+        cl.shape_path = std::move(path);
+        return json::object();
+    }
+
+    if (method == "set_shape_style") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (cl.clip_type != ClipType::Shape) { err = "clip is not a shape"; return {}; }
+        ShapeStyle& s = cl.shape_style;
+        auto get4 = [&](const char* key, float* dst) {
+            if (params.contains(key) && params[key].is_array() && params[key].size() == 4)
+                for (int i = 0; i < 4; ++i) dst[i] = params[key][i].get<float>();
+        };
+        if (params.contains("fill_on"))      s.fill_on      = params["fill_on"].get<bool>();
+        if (params.contains("stroke_on"))    s.stroke_on    = params["stroke_on"].get<bool>();
+        if (params.contains("stroke_width")) s.stroke_width = params["stroke_width"].get<float>();
+        if (params.contains("grad_mode"))    s.grad_mode    = params["grad_mode"].get<int>();
+        if (params.contains("grad_angle"))   s.grad_angle   = params["grad_angle"].get<float>();
+        if (params.contains("glow_on"))      s.glow_on      = params["glow_on"].get<bool>();
+        if (params.contains("glow_radius"))  s.glow_radius  = params["glow_radius"].get<float>();
+        if (params.contains("glow_intensity")) s.glow_intensity = params["glow_intensity"].get<float>();
+        get4("fill_col",   s.fill_col);
+        get4("stroke_col", s.stroke_col);
+        get4("grad_col2",  s.grad_col2);
+        get4("glow_col",   s.glow_col);
+        return json::object();
+    }
+
+    if (method == "set_shape_keyframes") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (cl.clip_type != ClipType::Shape) { err = "clip is not a shape"; return {}; }
+        if (!params.contains("keys") || !params["keys"].is_array()) {
+            err = "keys must be an array of {t, points, closed?, interp?} (empty clears)";
+            return {};
+        }
+        PathPropTrack pt;
+        for (auto& k : params["keys"]) {
+            if (!k.contains("t") || !k.contains("points")) {
+                err = "each key needs t and points"; return {};
+            }
+            float t = k["t"].get<float>();
+            if (t < 0.f || t > cl.end - cl.start + 1e-3f) {
+                err = "key t outside clip duration (t is seconds relative to clip start)";
+                return {};
+            }
+            PathKeyframe pk;
+            pk.time = t;
+            pk.path.closed = k.value("closed", cl.shape_path.closed);
+            for (auto& p : k["points"]) {
+                ShapePoint pt2;
+                pt2.x = p.value("x", 0.5f);
+                pt2.y = p.value("y", 0.5f);
+                pt2.width = p.value("w", 0.008f);
+                pk.path.pts.push_back(pt2);
+            }
+            pk.interp = interp_from_str(k.value("interp", "ease_both"));
+            pt.keys.push_back(std::move(pk));
+        }
+        std::sort(pt.keys.begin(), pt.keys.end(),
+                  [](const PathKeyframe& a, const PathKeyframe& b){ return a.time < b.time; });
+        if (pt.empty()) cl.shape_path_keys.keys.clear();
+        else            cl.shape_path_keys = std::move(pt);
+        json r;
+        r["key_count"] = (int)cl.shape_path_keys.keys.size();
+        return r;
+    }
+
+    if (method == "get_shape_path") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (cl.clip_type != ClipType::Shape) { err = "clip is not a shape"; return {}; }
+        float t = params.value("t", state.playhead);
+        ShapePath path = cl.eval_path(t);
+        json pts = json::array();
+        for (auto& p : path.pts)
+            pts.push_back({{"x", p.x}, {"y", p.y}, {"w", p.width}});
+        json r;
+        r["closed"] = path.closed;
+        r["points"] = pts;
+        r["key_count"] = (int)cl.shape_path_keys.keys.size();
+        return r;
     }
 
     if (method == "set_clip_fx") {

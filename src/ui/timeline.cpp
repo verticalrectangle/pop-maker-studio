@@ -2489,6 +2489,25 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f},
                     sel ? IM_COL32(40,0,40,255) : IM_COL32(220,150,220,255), lbl);
                 ImGui::PopClipRect();
+            } else if (clip.clip_type == ClipType::Shape) {
+                // Shape brick: magenta with a \xe2\x97\x86 icon + preset/freehand
+                // label + duration. Distinct from the Background purple so the
+                // two content layers read apart at a glance.
+                ImU32 sh_fill   = sel ? IM_COL32(200,110,235,255) : IM_COL32( 70, 25, 90,255);
+                ImU32 sh_border = sel ? IM_COL32(235,170,255,255) : IM_COL32(170, 80,210,200);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, sh_fill, 2.f);
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, sh_border, 2.f, 0, 1.5f);
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                {
+                    const char* icon = "\xe2\x97\x86";  // \xe2\x97\x86 U+25C6
+                    const char* name = clip.text.empty() ? "Freehand" : clip.text.c_str();
+                    char lbl[80];
+                    float dur = clip.end - clip.start;
+                    snprintf(lbl, sizeof(lbl), "%s %s  %.1fs", icon, name, dur);
+                    ImU32 ltcol = sel ? IM_COL32(30,0,40,255) : IM_COL32(225,180,235,255);
+                    dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ltcol, lbl);
+                }
+                ImGui::PopClipRect();
             } else if (clip.clip_type == ClipType::BodyFX) {
                 // Solid BodyFX brick: teal/cyan accent
                 ImU32 bfx_fill   = sel ? IM_COL32( 20,180,160,255) : IM_COL32(10, 80, 75, 255);

@@ -3271,6 +3271,53 @@ void render_tick_gl(AppState& state) {
             break;  // one BG clip per track per frame
         }
 
+        // ── Shape clips ────────────────────────────────────────────────────────
+        // Rendered directly into the export FBO (not via ImDrawList) because the
+        // shape shader writes triangles with custom UVs for gradient/glow. The
+        // flush_dl() below would submit any pending draw commands first, but
+        // shapes don't use the draw list — they bind the FBO directly. We flush
+        // before and after so ImDrawList content and shape geometry don't
+        // interleave their FBO bindings.
+        bool has_shape = false;
+        for (auto& sh_cl : track.clips) {
+            if (sh_cl.clip_type != ClipType::Shape) continue;
+            if (t < sh_cl.start || t >= sh_cl.end) continue;
+            has_shape = true;
+        }
+        if (has_shape) {
+            flush_dl();  // submit pending BG/text draw commands before direct FBO writes
+            for (auto& sh_cl : track.clips) {
+                if (sh_cl.clip_type != ClipType::Shape) continue;
+                if (t < sh_cl.start || t >= sh_cl.end) continue;
+
+                float spx = sh_cl.eval_prop("pos_x",    t);
+                float spy = sh_cl.eval_prop("pos_y",    t);
+                float ssx = sh_cl.eval_prop("scale_x",  t);
+                float ssy = sh_cl.eval_prop("scale_y",  t);
+                float srot = sh_cl.eval_prop("rotation", t);
+                float salpha = sh_cl.eval_prop("opacity", t);
+                float slen = sh_cl.eval_prop("shape_stroke_length", t);
+                float swmul = sh_cl.eval_prop("shape_stroke_width_mul", t);
+
+                float base = (W < H) ? W : H;
+                float scx = spx * W, scy = spy * H;
+                float shw = base * ssx * 0.5f, shh = base * ssy * 0.5f;
+                float srad = srot * 3.14159265f / 180.f;
+
+                ShapePath spath = sh_cl.eval_path(t);
+                ShapeGeometry sgeom = shape_tessellate(spath, slen, swmul,
+                                                       sh_cl.shape_style.stroke_width,
+                                                       g_gl_ex.out_w, g_gl_ex.out_h,
+                                                       scx, scy, shw, shh,
+                                                       cosf(srad), sinf(srad));
+                float sfill = slen >= 1.f ? 1.f
+                            : slen <= 0.6f ? 0.f
+                            : (slen - 0.6f) / 0.4f;
+                shape_render_to_fbo(sgeom, sh_cl.shape_style, salpha, sfill,
+                                    g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+            }
+        }
+
         const Clip* active = nullptr;
         int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {

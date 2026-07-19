@@ -11,8 +11,8 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 64u;
-extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v64: retro_beauty + insta_2016 + glass_skin generated FX
+static const uint32_t VERSION = 65u;
+extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v65: shape clip (ClipType::Shape) — path, style, path morph keys, draw-on
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry
@@ -277,6 +277,39 @@ static void write_clip(Writer& w, const Clip& c) {
     w.pod(c.rec_pair_id);
     // v62: clip grouping (0 = ungrouped)
     w.pod(c.group_id);
+    // v65: shape clip — base path, style, path morph keys, draw-on reveal
+    {
+        uint32_t npts = (uint32_t)c.shape_path.pts.size();
+        w.pod(npts);
+        for (auto& p : c.shape_path.pts) { w.pod(p.x); w.pod(p.y); w.pod(p.width); }
+        w.pod((uint8_t)c.shape_path.closed);
+        const ShapeStyle& s = c.shape_style;
+        w.pod(s.fill_col[0]); w.pod(s.fill_col[1]); w.pod(s.fill_col[2]); w.pod(s.fill_col[3]);
+        w.pod((uint8_t)s.fill_on);
+        w.pod(s.stroke_col[0]); w.pod(s.stroke_col[1]); w.pod(s.stroke_col[2]); w.pod(s.stroke_col[3]);
+        w.pod((uint8_t)s.stroke_on);
+        w.pod(s.stroke_width);
+        w.pod(s.grad_mode);
+        w.pod(s.grad_col2[0]); w.pod(s.grad_col2[1]); w.pod(s.grad_col2[2]); w.pod(s.grad_col2[3]);
+        w.pod(s.grad_angle);
+        w.pod(s.glow_col[0]); w.pod(s.glow_col[1]); w.pod(s.glow_col[2]); w.pod(s.glow_col[3]);
+        w.pod((uint8_t)s.glow_on);
+        w.pod(s.glow_radius);
+        w.pod(s.glow_intensity);
+        w.pod(c.shape_stroke_length);
+        w.pod(c.shape_stroke_width_mul);
+        // Path morph keyframes
+        uint32_t nkeys = (uint32_t)c.shape_path_keys.keys.size();
+        w.pod(nkeys);
+        for (auto& k : c.shape_path_keys.keys) {
+            w.pod(k.time);
+            uint32_t kn = (uint32_t)k.path.pts.size();
+            w.pod(kn);
+            for (auto& p : k.path.pts) { w.pod(p.x); w.pod(p.y); w.pod(p.width); }
+            w.pod((uint8_t)k.path.closed);
+            w.pod((int32_t)k.interp);
+        }
+    }
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -553,6 +586,49 @@ static Clip read_clip(Reader& r, uint32_t version) {
     }
     if (version >= 61u) c.rec_pair_id = r.pod<int>();
     if (version >= 62u) c.group_id    = r.pod<int>();
+    if (version >= 65u) {
+        uint32_t npts = r.pod<uint32_t>();
+        c.shape_path.pts.resize(npts);
+        for (uint32_t i = 0; i < npts && r.ok; ++i) {
+            c.shape_path.pts[i].x = r.pod<float>();
+            c.shape_path.pts[i].y = r.pod<float>();
+            c.shape_path.pts[i].width = r.pod<float>();
+        }
+        c.shape_path.closed = (bool)r.pod<uint8_t>();
+        ShapeStyle& s = c.shape_style;
+        s.fill_col[0] = r.pod<float>(); s.fill_col[1] = r.pod<float>();
+        s.fill_col[2] = r.pod<float>(); s.fill_col[3] = r.pod<float>();
+        s.fill_on = (bool)r.pod<uint8_t>();
+        s.stroke_col[0] = r.pod<float>(); s.stroke_col[1] = r.pod<float>();
+        s.stroke_col[2] = r.pod<float>(); s.stroke_col[3] = r.pod<float>();
+        s.stroke_on = (bool)r.pod<uint8_t>();
+        s.stroke_width   = r.pod<float>();
+        s.grad_mode      = r.pod<int>();
+        s.grad_col2[0] = r.pod<float>(); s.grad_col2[1] = r.pod<float>();
+        s.grad_col2[2] = r.pod<float>(); s.grad_col2[3] = r.pod<float>();
+        s.grad_angle     = r.pod<float>();
+        s.glow_col[0] = r.pod<float>(); s.glow_col[1] = r.pod<float>();
+        s.glow_col[2] = r.pod<float>(); s.glow_col[3] = r.pod<float>();
+        s.glow_on        = (bool)r.pod<uint8_t>();
+        s.glow_radius    = r.pod<float>();
+        s.glow_intensity = r.pod<float>();
+        c.shape_stroke_length   = r.pod<float>();
+        c.shape_stroke_width_mul = r.pod<float>();
+        uint32_t nkeys = r.pod<uint32_t>();
+        c.shape_path_keys.keys.resize(nkeys);
+        for (uint32_t k = 0; k < nkeys && r.ok; ++k) {
+            c.shape_path_keys.keys[k].time = r.pod<float>();
+            uint32_t kn = r.pod<uint32_t>();
+            c.shape_path_keys.keys[k].path.pts.resize(kn);
+            for (uint32_t i = 0; i < kn && r.ok; ++i) {
+                c.shape_path_keys.keys[k].path.pts[i].x = r.pod<float>();
+                c.shape_path_keys.keys[k].path.pts[i].y = r.pod<float>();
+                c.shape_path_keys.keys[k].path.pts[i].width = r.pod<float>();
+            }
+            c.shape_path_keys.keys[k].path.closed = (bool)r.pod<uint8_t>();
+            c.shape_path_keys.keys[k].interp = (InterpType)r.pod<int32_t>();
+        }
+    }
     return c;
 }
 

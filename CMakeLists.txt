@@ -142,6 +142,7 @@ set(PMS_ENGINE_SOURCES
     src/presets.cpp
     src/overlay_renderer.cpp
     src/text_renderer.cpp
+    src/shape.cpp
 )
 
 
@@ -204,6 +205,13 @@ add_dependencies(pms-engine check_engine_deps)
 add_executable(engine-smoke tools/engine_smoke.cpp)
 target_link_libraries(engine-smoke PRIVATE pms-engine)
 target_include_directories(engine-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
+
+# shape-smoke: verify the shape clip engine surface (ClipType::Shape) through
+# the C ABI — preset bake, freehand path, style, morph keyframes, draw-on,
+# save/load round-trip. No GL needed (tessellation is CPU).
+add_executable(shape-smoke tools/shape_smoke.cpp)
+target_link_libraries(shape-smoke PRIVATE pms-engine)
+target_include_directories(shape-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 
 # face-smoke: functional gate for the face-tracking stack (MAKEUP_PLAN Stage 1)
 # — loads assets/test_face.png and runs the real YuNet → landmarks →

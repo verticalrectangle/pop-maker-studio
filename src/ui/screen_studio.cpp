@@ -1481,19 +1481,20 @@ void ui_studio(AppState& state) {
         const float BX     = sp.x + PAD_X;
         float       BY     = sp.y + 14.f;
 
-        struct BtnDef { const char* id; PanelView lib_view; ImU32 accent; bool sep_before; };
+        struct BtnDef { const char* id; PanelView lib_view; ImU32 accent; bool sep_before; bool action; };
         static const BtnDef btns[] = {
-            { "Bin",         PanelView::LibBin,  IM_COL32(220, 200, 120, 255), false },
-            { "Backgrounds", PanelView::LibBG,   IM_COL32(180,  60, 160, 255), true  },
-            { "Text",        PanelView::LibText, IM_COL32( 80, 140, 220, 255), false },
-            { "Lyric",       PanelView::LibLyric,IM_COL32(120, 180,  90, 255), false },
-            { "Filters",     PanelView::LibAdj,  IM_COL32(100,  80, 200, 255), false },
-            { "Video FX",    PanelView::LibFX,   IM_COL32(210, 110,  30, 255), true  },
-            { "Body FX",     PanelView::LibBFX,  IM_COL32( 20, 180, 160, 255), false },
-            { "Audio FX",    PanelView::LibAFX,  IM_COL32( 30, 200, 150, 255), false },
-            { "Video",       PanelView::LibVID,  IM_COL32(140,  60, 220, 255), true  },
-            { "Images",      PanelView::LibIMG,  IM_COL32(140,  60, 220, 255), false },
-            { "Audio",       PanelView::LibAUD,  IM_COL32( 50, 180, 100, 255), false },
+            { "Bin",         PanelView::LibBin,  IM_COL32(220, 200, 120, 255), false, false },
+            { "Backgrounds", PanelView::LibBG,   IM_COL32(180,  60, 160, 255), true,  false },
+            { "Text",        PanelView::LibText, IM_COL32( 80, 140, 220, 255), false, false },
+            { "Lyric",       PanelView::LibLyric,IM_COL32(120, 180,  90, 255), false, false },
+            { "Shape",       PanelView::Clip,    IM_COL32(180,  80, 220, 255), false, true  },
+            { "Filters",     PanelView::LibAdj,  IM_COL32(100,  80, 200, 255), false, false },
+            { "Video FX",    PanelView::LibFX,   IM_COL32(210, 110,  30, 255), true,  false },
+            { "Body FX",     PanelView::LibBFX,  IM_COL32( 20, 180, 160, 255), false, false },
+            { "Audio FX",    PanelView::LibAFX,  IM_COL32( 30, 200, 150, 255), false, false },
+            { "Video",       PanelView::LibVID,  IM_COL32(140,  60, 220, 255), true,  false },
+            { "Images",      PanelView::LibIMG,  IM_COL32(140,  60, 220, 255), false, false },
+            { "Audio",       PanelView::LibAUD,  IM_COL32( 50, 180, 100, 255), false, false },
         };
 
         for (auto& b : btns) {
@@ -1503,7 +1504,7 @@ void ui_studio(AppState& state) {
                 BY += 4.f;
             }
 
-            bool active = (s_panel_view == b.lib_view);
+            bool active = b.action ? false : (s_panel_view == b.lib_view);
             ImVec2 bmin = { BX, BY }, bmax = { BX + BTN_W, BY + BTN_H };
             bool hov = ImGui::IsMouseHoveringRect(bmin, bmax);
             ImU32 fill = active ? b.accent
@@ -1520,10 +1521,63 @@ void ui_studio(AppState& state) {
 
             ImGui::SetCursorScreenPos(bmin);
             ImGui::InvisibleButton(b.id, { BTN_W, BTN_H });
-            if (ImGui::IsItemClicked())
-                s_panel_view = active ? pv_derive(state) : b.lib_view;
+            if (ImGui::IsItemClicked()) {
+                if (b.action) {
+                    if (strcmp(b.id, "Shape") == 0) {
+                        ImGui::OpenPopup("##shape_presets");
+                    }
+                } else {
+                    s_panel_view = active ? pv_derive(state) : b.lib_view;
+                }
+            }
 
             BY += BTN_H + 6.f;
+        }
+
+        // ── Shape preset picker — opens from the "Shape" toolbox button. A
+        // small popup listing the 12 baked presets; picking one drops a Shape
+        // clip at the playhead on a free track (or a new top track) and opens
+        // the Clip inspector. Mirrors the Background "Add Track" flow.
+        if (ImGui::BeginPopup("##shape_presets")) {
+            ImGui::SeparatorText("Shape Preset");
+            static const ShapePreset s_all_presets[] = {
+                ShapePreset::Circle, ShapePreset::Square, ShapePreset::Triangle,
+                ShapePreset::Star,   ShapePreset::Heart,  ShapePreset::Polygon,
+                ShapePreset::Hexagon,ShapePreset::Burst,  ShapePreset::Arrow,
+                ShapePreset::Lightning, ShapePreset::Diamond, ShapePreset::Cross
+            };
+            for (ShapePreset sp : s_all_presets) {
+                const char* nm = shape_preset_name(sp);
+                if (ImGui::Selectable(nm)) {
+                    float dur = 5.f;
+                    Clip c;
+                    c.clip_type = ClipType::Shape;
+                    c.start = state.playhead;
+                    c.end   = c.start + dur;
+                    c.text  = nm;  // preset label (brick + inspector show it)
+                    c.shape_path = shape_preset_bake(sp, {});
+                    // Outline presets read better stroked than filled.
+                    if (sp == ShapePreset::Lightning || sp == ShapePreset::Arrow ||
+                        sp == ShapePreset::Burst) {
+                        c.shape_style.fill_on = false;
+                        c.shape_style.stroke_on = true;
+                    }
+                    int target = find_empty_track(state);
+                    if (target < 0) {
+                        Track t; t.name = "Shape";
+                        state.tracks.insert(state.tracks.begin(), std::move(t));
+                        target = 0;
+                    }
+                    state.tracks[target].clips.push_back(std::move(c));
+                    state.selected_track = target;
+                    state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+                    clip_flash(state, target, state.selected_clip, /*reveal=*/true);
+                    history_push(state, std::string("Add shape: ") + nm);
+                    s_panel_view = PanelView::Clip;
+                    s_user_nav   = false;
+                }
+            }
+            ImGui::EndPopup();
         }
 
         // ── Record actions — not library views: each drops its brick at the

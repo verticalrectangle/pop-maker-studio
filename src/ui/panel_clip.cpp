@@ -28,6 +28,7 @@
 #include "../video_recorder.h"
 #include "../av_measure.h"
 #include "../video.h"
+#include "canvas.h"   // canvas_request_shape_pen / canvas_shape_pen_active (Shape inspector)
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -2952,5 +2953,204 @@ void panel_clip(AppState& state, float w) {
         }
 
         glass_host_layout(state, clip, w);
+    }
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SHAPE CLIP
+    // ═══════════════════════════════════════════════════════════════════════════
+    else if (clip.clip_type == ClipType::Shape) {
+        float bar_w = w - 16.f;
+        float sw    = w - 16.f;
+
+        // ── Path: preset/freehand label + pen-draw entry + close toggle ──────
+        if (ImGui::CollapsingHeader("Path", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Source"); ImGui::PopStyleColor();
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::TextUnformatted(clip.text.empty() ? "Freehand" : clip.text.c_str());
+            ImGui::Dummy({0.f, 6.f});
+            // Pen tool — hands the canvas to draw_pen_mode for this clip.
+            // Pressing 'P' on the canvas does the same thing.
+            bool pen_on = canvas_shape_pen_active();
+            if (ui_btn(pen_on ? "Drawing… (right-click / Esc to finish)"
+                              : "Edit Path (Pen)",
+                       pen_on, true)) {
+                if (!pen_on) canvas_request_shape_pen();
+            }
+            ImGui::Dummy({0.f, 6.f});
+            bool closed = clip.shape_path.closed;
+            if (ImGui::Checkbox("Closed path##sh_closed", &closed)) {
+                clip.shape_path.closed = closed;
+                history_push(state, "Shape close path");
+            }
+            ImGui::SameLine(0.f, 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::Text("%d points", clip.shape_path.size());
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        // ── Position: transform keyframes (same props as every clip type) ─────
+        if (ImGui::CollapsingHeader("Position", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("pos_x", "Left \xe2\x86\x94 Right", &clip.pos_x, -1.f, 2.f, "%.2f");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("pos_y", "Up \xe2\x86\x95 Down",   &clip.pos_y, -1.f, 2.f, "%.2f");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            float size = (clip.scale_x + clip.scale_y) * 0.5f;
+            if (kf_slider("scale_x", "Size", &size, 0.f, 4.f, "%.2f", 1.f, "scale_y")) {
+                clip.scale_x = size; clip.scale_y = size;
+            }
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("rotation", "Rotation", &clip.rotation, -180.f, 180.f, "%.1f\xc2\xb0");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 6.f});
+            kf_slider("opacity", "Opacity", &clip.opacity, 0.f, 100.f, "%.0f%%", 100.f);
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        // ── Shape Style: fill / stroke / gradient / glow ──────────────────────
+        if (ImGui::CollapsingHeader("Shape Style", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Dummy({0.f, 4.f});
+            ShapeStyle& s = clip.shape_style;
+
+            bool fill = s.fill_on;
+            if (ImGui::Checkbox("Fill##sh_fill", &fill)) {
+                s.fill_on = fill; history_push(state, "Shape fill");
+            }
+            if (s.fill_on) {
+                ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(sw - 100.f);
+                if (ImGui::ColorEdit4("##sh_fillcol", s.fill_col,
+                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+                    history_push(state, "Shape fill color");
+            }
+
+            ImGui::Dummy({0.f, 2.f});
+            bool stk = s.stroke_on;
+            if (ImGui::Checkbox("Stroke##sh_stk", &stk)) {
+                s.stroke_on = stk; history_push(state, "Shape stroke");
+            }
+            if (s.stroke_on) {
+                ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
+                if (ImGui::SliderFloat("w##sh_sw", &s.stroke_width, 0.001f, 0.05f, "%.3f"))
+                    history_push(state, "Shape stroke width");
+                ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 180.f);
+                if (ImGui::ColorEdit4("##sh_stkcol", s.stroke_col,
+                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+                    history_push(state, "Shape stroke color");
+            }
+
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Gradient"); ImGui::PopStyleColor();
+            ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(110.f);
+            const char* grad_items[] = { "None", "Linear", "Radial", "Hue cycle" };
+            int gm = s.grad_mode;
+            if (ImGui::Combo("##sh_grad", &gm, grad_items, IM_ARRAYSIZE(grad_items))) {
+                s.grad_mode = gm; history_push(state, "Shape gradient mode");
+            }
+            if (s.grad_mode != 0) {
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::SetNextItemWidth(sw - 16.f);
+                if (ImGui::ColorEdit4("##sh_grad2", s.grad_col2,
+                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+                    history_push(state, "Shape gradient color");
+                if (s.grad_mode == 1) {  // angle only meaningful for linear
+                    ImGui::Dummy({0.f, 4.f});
+                    ImGui::SetNextItemWidth(sw - 16.f);
+                    if (ImGui::SliderFloat("angle##sh_ga", &s.grad_angle, 0.f, 360.f, "%.0f\xc2\xb0"))
+                        history_push(state, "Shape gradient angle");
+                }
+            }
+
+            ImGui::Dummy({0.f, 4.f});
+            bool glow = s.glow_on;
+            if (ImGui::Checkbox("Glow##sh_glow", &glow)) {
+                s.glow_on = glow; history_push(state, "Shape glow");
+            }
+            if (s.glow_on) {
+                ImGui::Dummy({0.f, 4.f});
+                ImGui::SetNextItemWidth(sw - 16.f);
+                if (ImGui::SliderFloat("radius##sh_gr", &s.glow_radius, 0.f, 0.1f, "%.3f"))
+                    history_push(state, "Shape glow radius");
+                ImGui::Dummy({0.f, 2.f});
+                ImGui::SetNextItemWidth(sw - 16.f);
+                if (ImGui::SliderFloat("intensity##sh_gi", &s.glow_intensity, 0.f, 3.f, "%.2f"))
+                    history_push(state, "Shape glow intensity");
+                ImGui::Dummy({0.f, 2.f});
+                ImGui::SetNextItemWidth(sw - 16.f);
+                if (ImGui::ColorEdit4("##sh_gcol", s.glow_col,
+                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+                    history_push(state, "Shape glow color");
+            }
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        // ── Animation: draw-on reveal + stroke width multiplier ───────────────
+        if (ImGui::CollapsingHeader("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("shape_stroke_length", "Draw-on",
+                      &clip.shape_stroke_length, 0.f, 1.f, "%.2f");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("shape_stroke_width_mul", "Stroke width",
+                      &clip.shape_stroke_width_mul, 0.1f, 5.f, "%.2f\xc3\x97");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        // ── Path morph: full-path keyframes (eval_path resamples + lerps) ─────
+        if (ImGui::CollapsingHeader("Path Morph")) {
+            ImGui::Dummy({0.f, 4.f});
+            if (ui_btn("+ Add morph key at playhead", false, true)) {
+                float t_local = state.playhead - clip.start;
+                ShapePath p = clip.eval_path(state.playhead);
+                clip.shape_path_keys.set(t_local, p);
+                history_push(state, "Add shape morph key");
+            }
+            ImGui::Dummy({0.f, 6.f});
+            if (clip.shape_path_keys.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("No morph keys \xe2\x80\x94 path is static.");
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("KEYS"); ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 4.f});
+                for (int ki = 0; ki < (int)clip.shape_path_keys.keys.size(); ++ki) {
+                    ImGui::PushID(ki);
+                    PathKeyframe& k = clip.shape_path_keys.keys[ki];
+                    char lbl[48];
+                    snprintf(lbl, sizeof(lbl), "t=%.2fs  \xc2\xb7  %d pts",
+                             k.time, k.path.size());
+                    ImGui::TextUnformatted(lbl);
+                    ImGui::SameLine(bar_w - 60.f);
+                    if (ui_btn("Delete##mkdel", false, true)) {
+                        clip.shape_path_keys.keys.erase(
+                            clip.shape_path_keys.keys.begin() + ki);
+                        history_push(state, "Delete shape morph key");
+                        ImGui::PopID();
+                        break;
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::Dummy({0.f, 4.f});
+                if (ui_btn("Clear all morph keys", false, true)) {
+                    clip.shape_path_keys.keys.clear();
+                    history_push(state, "Clear shape morph keys");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        if (ImGui::CollapsingHeader("Fade")) {
+            ImGui::Dummy({0.f, 4.f});
+            section_fade(state, clip.fade_in, clip.fade_out, w);
+            ImGui::Dummy({0.f, 4.f});
+        }
     }
 }

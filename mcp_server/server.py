@@ -93,6 +93,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "find_and_add_clip", "find_video_moment", "apply_multicam_cuts",
     ],
     "text": ["set_typography_preset", "set_text_style", "set_transcript"],
+    "shape": ["add_shape", "set_shape_path", "set_shape_style", "set_shape_keyframes", "get_shape_path"],
     "fx": [
         "add_effect_brick", "add_multifx_brick", "add_audio_multifx_brick", "add_body_fx_brick",
         "decouple_fx_brick", "set_clip_fx", "process_body_fx_masks", "remove_background",
@@ -1943,6 +1944,116 @@ async def list_tools() -> list[Tool]:
                     "bg_color":      {"type": "array",   "description": "[r,g,b,a] background color 0–1 (default semi-transparent dark)"},
                 },
                 "required": ["track", "start", "end", "text", "pos_x", "pos_y"],
+            },
+        ),
+        Tool(
+            name="add_shape",
+            description=(
+                "Add a shape clip (ClipType::Shape) to a track. Shapes are content layers that composite "
+                "like text/background, NOT FX bricks. The shape is placed at canvas center by default; "
+                "use set_clip_prop to move/scale/rotate it, set_clip_keyframes to animate the transform, "
+                "set_shape_keyframes to morph the path over time, and shape_stroke_length keyframes for "
+                "draw-on reveal.\n\n"
+                "preset: circle | square | triangle | star | heart | polygon | hexagon | burst | arrow | "
+                "lightning | diamond | cross\n"
+                "params (preset-specific): star/burst=[point_count, inner_ratio], polygon=[sides], "
+                "arrow=[stem_frac, head_frac], lightning=[jag_amplitude]. Others take no params.\n\n"
+                "Returns {track, clip, preset}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":  {"type": ["integer", "string"], "description": "Track index or name"},
+                    "start":  {"type": "number", "description": "Start time in seconds"},
+                    "end":    {"type": "number", "description": "End time in seconds (default start+3)"},
+                    "preset": {"type": "string", "description": "Shape preset name (default 'circle')"},
+                    "params": {"type": "array", "description": "Preset-specific params (floats)"},
+                },
+                "required": ["track", "start"],
+            },
+        ),
+        Tool(
+            name="set_shape_path",
+            description=(
+                "Replace the base path of a shape clip with a custom path (freehand or edited). "
+                "Points are in local [0,1]² space (the path's bbox maps to the unit square, then the "
+                "clip transform places it on the canvas). Each point: {x, y, w?} where w is per-point "
+                "stroke width (fraction canvas height, default 0.008). closed=true enables fill + "
+                "connects last point back to first."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":  {"type": "integer"},
+                    "clip":   {"type": "integer"},
+                    "points": {"type": "array", "description": "Array of {x, y, w?} in 0..1 local space"},
+                    "closed": {"type": "boolean", "description": "Close the path (enables fill)"},
+                },
+                "required": ["track", "clip", "points"],
+            },
+        ),
+        Tool(
+            name="set_shape_style",
+            description=(
+                "Set visual style on a shape clip. All fields optional — only provided fields update. "
+                "Colors are [r,g,b,a] 0..1. grad_mode: 0=none 1=linear 2=radial 3=hue-cycle. "
+                "stroke_width and glow_radius are fractions of canvas height."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track":         {"type": "integer"},
+                    "clip":          {"type": "integer"},
+                    "fill_on":       {"type": "boolean"},
+                    "fill_col":      {"type": "array"},
+                    "stroke_on":     {"type": "boolean"},
+                    "stroke_col":    {"type": "array"},
+                    "stroke_width":  {"type": "number"},
+                    "grad_mode":     {"type": "integer"},
+                    "grad_col2":     {"type": "array"},
+                    "grad_angle":    {"type": "number"},
+                    "glow_on":       {"type": "boolean"},
+                    "glow_col":      {"type": "array"},
+                    "glow_radius":   {"type": "number"},
+                    "glow_intensity":{"type": "number"},
+                },
+                "required": ["track", "clip"],
+            },
+        ),
+        Tool(
+            name="set_shape_keyframes",
+            description=(
+                "Replace the path-morph keyframe track on a shape clip. Each key is a full path snapshot "
+                "at time t (seconds relative to clip start). The engine resamples adjacent keys to a "
+                "common point count and lerps each point (x, y, width) with the same easing curves as "
+                "scalar keyframes. Pass an empty keys array to clear morph animation. "
+                "interp: linear | ease_in | ease_out | ease_both | hold."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "clip":  {"type": "integer"},
+                    "keys":  {"type": "array", "description": "Array of {t, points, closed?, interp?}"},
+                },
+                "required": ["track", "clip", "keys"],
+            },
+        ),
+        Tool(
+            name="get_shape_path",
+            description=(
+                "Return the effective path of a shape clip at time t (default: current playhead). "
+                "When path-morph keyframes exist, returns the interpolated path at t; otherwise the "
+                "base path. Points are {x, y, w} in local [0,1]² space. Also returns key_count."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "clip":  {"type": "integer"},
+                    "t":     {"type": "number", "description": "Time in seconds (default playhead)"},
+                },
+                "required": ["track", "clip"],
             },
         ),
         Tool(

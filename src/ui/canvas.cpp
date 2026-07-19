@@ -166,6 +166,22 @@ static struct {
     ImVec2 ref_mouse = {};
 } s_crop;
 
+// ── Shape pen-draw mode ──────────────────────────────────────────────────────
+// Entered by pressing 'P' (or the inspector "Edit Path" button) with a Shape
+// clip selected. Left-clicks add points to shape_path in local [0,1]² space
+// (converted from canvas pixels via the clip's transform). Right-click or Esc
+// exits; one history entry is pushed for the whole edit (batched, not per
+// click). The path is live-mutated so the scene pass shows it as you draw.
+static struct {
+    bool       active        = false;
+    int        target_track  = -1, target_clip = -1;
+    ShapePath  entry_path;          // snapshot for Esc-cancel
+    bool       dirty          = false;
+} s_pen;
+static bool g_shape_pen_request = false;   // set by canvas_request_shape_pen
+void canvas_request_shape_pen() { g_shape_pen_request = true; }
+bool canvas_shape_pen_active()  { return s_pen.active; }
+
 static void crop_mode_exit(AppState& state) {
     state.crop_edit_track = state.crop_edit_clip = -1;
     s_crop.target_track   = s_crop.target_clip   = -1;
@@ -400,6 +416,156 @@ static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, f
     }
 }
 
+// ── Shape pen-draw mode ──────────────────────────────────────────────────────
+static void pen_mode_exit(AppState& state, bool cancel) {
+    if (s_pen.active && s_pen.dirty && !cancel) {
+        // One undo step for the whole edit. A freehand-drawn path is no longer
+        // the baked preset, so drop the preset label so the brick reads
+        // "Freehand".
+        if (s_pen.target_track >= 0 && s_pen.target_track < (int)state.tracks.size() &&
+            s_pen.target_clip  >= 0 && s_pen.target_clip  < (int)state.tracks[s_pen.target_track].clips.size()) {
+            Clip& cl = state.tracks[s_pen.target_track].clips[s_pen.target_clip];
+            if (cl.clip_type == ClipType::Shape) cl.text.clear();
+        }
+        history_push(state, "Edit shape path");
+    }
+    s_pen.active = false;
+    s_pen.target_track = s_pen.target_clip = -1;
+    s_pen.dirty = false;
+}
+
+// Convert a canvas-pixel position to the shape's local [0,1]² space, inverting
+// the same transform the scene pass applies (canvas.cpp:1673-1707 /
+// shape_tessellate's to_canvas). Returns false when the clip is degenerate
+// (zero size) and the inverse is undefined.
+static bool pen_canvas_to_local(const Clip& cl, float playhead,
+                                ImVec2 p, float w, float h,
+                                ImVec2 m, float& lx, float& ly) {
+    float px  = cl.eval_prop("pos_x",    playhead);
+    float py  = cl.eval_prop("pos_y",    playhead);
+    float sx  = cl.eval_prop("scale_x",  playhead);
+    float sy  = cl.eval_prop("scale_y",  playhead);
+    float rot = cl.eval_prop("rotation", playhead);
+    float base = (w < h) ? w : h;
+    float cx = px * w + p.x, cy = py * h + p.y;
+    float hw = base * sx * 0.5f, hh = base * sy * 0.5f;
+    if (hw < 1.f || hh < 1.f) return false;
+    float rad = rot * 3.14159265f / 180.f;
+    float c = cosf(rad), s = sinf(rad);
+    // Inverse rotate the offset, then undo the scale + centre.
+    float dx = m.x - cx, dy = m.y - cy;
+    float rx =  dx * c + dy * s;
+    float ry = -dx * s + dy * c;
+    lx = rx / (2.f * hw) + 0.5f;
+    ly = ry / (2.f * hh) + 0.5f;
+    return true;
+}
+
+static ImVec2 pen_local_to_canvas(const Clip& cl, float playhead,
+                                  ImVec2 p, float w, float h,
+                                  float lx, float ly) {
+    float px  = cl.eval_prop("pos_x",    playhead);
+    float py  = cl.eval_prop("pos_y",    playhead);
+    float sx  = cl.eval_prop("scale_x",  playhead);
+    float sy  = cl.eval_prop("scale_y",  playhead);
+    float rot = cl.eval_prop("rotation", playhead);
+    float base = (w < h) ? w : h;
+    float cx = px * w + p.x, cy = py * h + p.y;
+    float hw = base * sx * 0.5f, hh = base * sy * 0.5f;
+    float rad = rot * 3.14159265f / 180.f;
+    float c = cosf(rad), s = sinf(rad);
+    float ax = (lx - 0.5f) * 2.f * hw;
+    float ay = (ly - 0.5f) * 2.f * hh;
+    return { cx + ax * c - ay * s, cy + ax * s + ay * c };
+}
+
+static void draw_pen_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, float h) {
+    // Validate target — clip deleted / track hidden ends the mode.
+    if (s_pen.target_track < 0 || s_pen.target_track >= (int)state.tracks.size())
+        { pen_mode_exit(state, true); return; }
+    Track& tr = state.tracks[s_pen.target_track];
+    if (s_pen.target_clip < 0 || s_pen.target_clip >= (int)tr.clips.size())
+        { pen_mode_exit(state, true); return; }
+    Clip& cl = tr.clips[s_pen.target_clip];
+    if (cl.clip_type != ClipType::Shape || !tr.visible)
+        { pen_mode_exit(state, true); return; }
+
+    ImVec2 mpos = ImGui::GetIO().MousePos;
+    ImVec2 zp = ImGui::GetWindowPos();
+    ImVec2 zs = ImGui::GetWindowSize();
+    bool in_preview = mpos.x >= zp.x && mpos.x <= zp.x + zs.x &&
+                      mpos.y >= zp.y && mpos.y <= zp.y + zs.y;
+    bool lclick = ImGui::IsMouseClicked(0) && in_preview &&
+                  !ui_widget_claims_mouse() &&
+                  !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId |
+                                          ImGuiPopupFlags_AnyPopupLevel);
+
+    // Draw the existing polyline + points in the clip's transform.
+    ImU32 seg_col = IM_COL32(100, 220, 255, 200);
+    ImU32 dot_col = IM_COL32(255, 255, 255, 230);
+    ImU32 dot_bdr = IM_COL32(0, 0, 0, 180);
+    int n = cl.shape_path.size();
+    for (int i = 0; i < n; ++i) {
+        ImVec2 a = pen_local_to_canvas(cl, state.playhead, p, w, h,
+                                       cl.shape_path.pts[i].x,
+                                       cl.shape_path.pts[i].y);
+        if (i > 0) {
+            ImVec2 b = pen_local_to_canvas(cl, state.playhead, p, w, h,
+                                           cl.shape_path.pts[i-1].x,
+                                           cl.shape_path.pts[i-1].y);
+            dl->AddLine(a, b, seg_col, 2.f);
+        }
+        dl->AddCircleFilled(a, 4.f, dot_col);
+        dl->AddCircle(a, 4.f, dot_bdr, 0, 1.5f);
+    }
+    // Close segment for closed paths.
+    if (cl.shape_path.closed && n >= 2) {
+        ImVec2 a = pen_local_to_canvas(cl, state.playhead, p, w, h,
+                                       cl.shape_path.pts[n-1].x,
+                                       cl.shape_path.pts[n-1].y);
+        ImVec2 b = pen_local_to_canvas(cl, state.playhead, p, w, h,
+                                       cl.shape_path.pts[0].x,
+                                       cl.shape_path.pts[0].y);
+        dl->AddLine(a, b, seg_col, 2.f);
+    }
+    // Rubber band from the last point to the cursor.
+    if (n > 0 && in_preview) {
+        ImVec2 a = pen_local_to_canvas(cl, state.playhead, p, w, h,
+                                       cl.shape_path.pts[n-1].x,
+                                       cl.shape_path.pts[n-1].y);
+        dl->AddLine(a, mpos, IM_COL32(100, 220, 255, 110), 1.5f);
+    }
+
+    // Left-click adds a point (live mutation; history is batched on exit).
+    if (lclick) {
+        float lx, ly;
+        if (pen_canvas_to_local(cl, state.playhead, p, w, h, mpos, lx, ly)) {
+            ShapePoint pt;
+            pt.x = lx;
+            pt.y = ly;
+            pt.width = 0.008f;
+            cl.shape_path.pts.push_back(pt);
+            s_pen.dirty = true;
+        }
+    }
+
+    // Instruction pill (top-left of the preview).
+    {
+        const char* msg = "Pen: click to add points  \xc2\xb7  right-click / Esc to finish";
+        ImVec2 tsz = ImGui::CalcTextSize(msg);
+        float pad = 6.f;
+        ImVec2 pp = { p.x + 8.f, p.y + 8.f };
+        dl->AddRectFilled(pp, { pp.x + tsz.x + pad * 2.f, pp.y + tsz.y + pad * 2.f },
+                          IM_COL32(0, 0, 0, 170), 4.f);
+        dl->AddText({ pp.x + pad, pp.y + pad }, IM_COL32(255, 255, 255, 230), msg);
+    }
+
+    // Right-click or Esc exits (commit). Right-click is a finish, not a cancel
+    // — the points drawn are kept (the user explicitly placed them).
+    if (ImGui::IsMouseClicked(1) || ImGui::IsKeyPressed(ImGuiKey_Escape))
+        pen_mode_exit(state, /*cancel=*/false);
+}
+
 // Handle-geometry storage hoisted to the engine (src/ui_geom.cpp).
 #define s_handle_geom g_canvas_handle_geom
 
@@ -437,6 +603,33 @@ static bool mouse_on_handle_spot(ImVec2 m) {
 
 void draw_canvas_handles(AppState& state, ImDrawList* dl, ImVec2 p, float w, float h) {
     s_handle_geom = CanvasHandleGeom{};
+
+    // ── Shape pen-draw mode ────────────────────────────────────────────────
+    // Active mode draws the path + handles click-to-add and exits. Entry is
+    // requested by the inspector ("Edit Path" button → canvas_request_shape_pen)
+    // or by pressing 'P' with a Shape clip selected. The mode owns the canvas
+    // entirely (like crop-edit), so the normal transform handles stand down.
+    if (s_pen.active) { draw_pen_mode(state, dl, p, w, h); return; }
+    if (state.crop_edit_track < 0 &&
+        state.selected_track >= 0 && state.selected_track < (int)state.tracks.size()) {
+        Track& str = state.tracks[state.selected_track];
+        if (state.selected_clip >= 0 && state.selected_clip < (int)str.clips.size() &&
+            str.clips[state.selected_clip].clip_type == ClipType::Shape &&
+            str.visible &&
+            (g_shape_pen_request ||
+             (ImGui::IsKeyPressed(ImGuiKey_P) && !ImGui::GetIO().WantCaptureKeyboard))) {
+            s_pen.active = true;
+            s_pen.target_track = state.selected_track;
+            s_pen.target_clip  = state.selected_clip;
+            s_pen.entry_path   = str.clips[state.selected_clip].shape_path;
+            s_pen.dirty        = false;
+            g_shape_pen_request = false;
+            draw_pen_mode(state, dl, p, w, h);
+            return;
+        }
+    }
+    g_shape_pen_request = false;
+
     // Crop-edit mode replaces the normal transform handles entirely.
     if (state.crop_edit_track >= 0) { draw_crop_mode(state, dl, p, w, h); return; }
     if (state.selected_track < 0 || state.selected_clip < 0) return;
@@ -1415,7 +1608,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // transform handles (the rotate knob sits outside the clip bbox; picking
     // there deselected the clip before the rotate drag could begin).
     if (lclick && in_preview_area && s_ctx.handle == CanvasHandle::None &&
-        state.crop_edit_track < 0 && !mouse_on_handle_spot(mpos)) {
+        state.crop_edit_track < 0 && !s_pen.active && !mouse_on_handle_spot(mpos)) {
         struct HitCandidate { int ti, ci; float area; };
         std::vector<HitCandidate> hits;
         for (int ti = 0; ti < (int)state.tracks.size(); ++ti) {
@@ -1436,6 +1629,20 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     float hsx = cl2.eval_prop("scale_x", state.playhead);
                     float hsy = cl2.eval_prop("scale_y", state.playhead);
                     float hhw = w * hsx * 0.5f, hhh = h * hsy * 0.5f;
+                    float hbx0 = hpx - hhw, hby0 = hpy - hhh;
+                    float hbx1 = hpx + hhw, hby1 = hpy + hhh;
+                    if (mpos.x >= hbx0 && mpos.x <= hbx1 &&
+                        mpos.y >= hby0 && mpos.y <= hby1)
+                        hits.push_back({ti, ci, (hbx1-hbx0)*(hby1-hby0)});
+                } else if (cl2.clip_type == ClipType::Shape) {
+                    // Shape bbox mirrors the scene pass: sized to the smaller
+                    // canvas dimension so the unit-scale shape stays square.
+                    float hpx = cl2.eval_prop("pos_x",   state.playhead) * w + p.x;
+                    float hpy = cl2.eval_prop("pos_y",   state.playhead) * h + p.y;
+                    float hsx = cl2.eval_prop("scale_x", state.playhead);
+                    float hsy = cl2.eval_prop("scale_y", state.playhead);
+                    float hbase = (w < h) ? w : h;
+                    float hhw = hbase * hsx * 0.5f, hhh = hbase * hsy * 0.5f;
                     float hbx0 = hpx - hhw, hby0 = hpy - hhh;
                     float hbx1 = hpx + hhw, hby1 = hpy + hhh;
                     if (mpos.x >= hbx0 && mpos.x <= hbx1 &&
@@ -1668,6 +1875,42 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 scene_add_layer(tex, cx, cy, hw, hh, cosf(rad), sinf(rad), alpha);
             }
             break;
+        }
+
+        // ── Shape clip ─────────────────────────────────────────────────────────
+        for (auto& cl : track.clips) {
+            if (cl.clip_type != ClipType::Shape) continue;
+            if (state.playhead < cl.start || state.playhead >= cl.end) continue;
+
+            float px    = cl.eval_prop("pos_x",    state.playhead);
+            float py    = cl.eval_prop("pos_y",    state.playhead);
+            float sx    = cl.eval_prop("scale_x",  state.playhead);
+            float sy    = cl.eval_prop("scale_y",  state.playhead);
+            float rot   = cl.eval_prop("rotation", state.playhead);
+            float alpha = cl.eval_prop("opacity",  state.playhead);
+            float stroke_len = cl.eval_prop("shape_stroke_length", state.playhead);
+            float width_mul  = cl.eval_prop("shape_stroke_width_mul", state.playhead);
+
+            // Shape size: scale relative to the smaller canvas dimension so a
+            // unit scale reads as "fit the shape's bbox into a square centred
+            // on pos". This matches how Background clips scale (w*sx, h*sy)
+            // but keeps the shape's aspect from distorting on non-square canvases.
+            float base = (w < h) ? w : h;
+            float cx = px * w, cy = py * h;
+            float hw = base * sx * 0.5f, hh = base * sy * 0.5f;
+            float rad = rot * 3.14159265f / 180.f;
+
+            ShapePath path = cl.eval_path(state.playhead);
+            ShapeGeometry geom = shape_tessellate(path, stroke_len, width_mul,
+                                                  cl.shape_style.stroke_width,
+                                                  (int)w, (int)h,
+                                                  cx, cy, hw, hh,
+                                                  cosf(rad), sinf(rad));
+            // Fill fades in over the last 40% of the stroke reveal.
+            float fill_alpha = stroke_len >= 1.f ? 1.f
+                             : stroke_len <= 0.6f ? 0.f
+                             : (stroke_len - 0.6f) / 0.4f;
+            scene_add_shape(geom, cl.shape_style, alpha, fill_alpha, (int)w, (int)h);
         }
 
         // ── Video clip ─────────────────────────────────────────────────────────
@@ -2511,8 +2754,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 if (cl.start > state.playhead || cl.end <= state.playhead) continue;
                 ClipType t = cl.clip_type;
                 if (clip_is_videolike_type(t) || t == ClipType::Background ||
-                    t == ClipType::Text || t == ClipType::Lyrics ||
-                    t == ClipType::Subtitle) { has_content_at_play = true; break; }
+                    t == ClipType::Shape   || t == ClipType::Text ||
+                    t == ClipType::Lyrics  || t == ClipType::Subtitle)
+                    { has_content_at_play = true; break; }
             }
             if (has_content_at_play) break;
         }

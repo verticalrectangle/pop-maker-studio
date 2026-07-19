@@ -144,6 +144,22 @@ void      scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, floa
                           float cos_r, float sin_r, float alpha,
                           float u0 = 0.f, float v0 = 0.f,
                           float u1 = 1.f, float v1 = 1.f);
+// Composite a shape clip (ClipType::Shape) into the scene. Renders the fill +
+// stroke + glow directly into the current scene FBO with GL_BLEND (src-over).
+// The shape geometry is pre-tessellated by shape_tessellate() in shape.cpp.
+// fill_alpha fades the fill in (draw-on animation); alpha is the clip opacity.
+void scene_add_shape(const struct ShapeGeometry& geom,
+                     const struct ShapeStyle& style,
+                     float alpha, float fill_alpha,
+                     int canvas_w, int canvas_h);
+// Render a shape clip directly into an arbitrary FBO (the export path uses
+// this to composite shapes into the export framebuffer, which is not the
+// scene compositor's ping-pong). Same geometry/style as scene_add_shape.
+void shape_render_to_fbo(const struct ShapeGeometry& geom,
+                         const struct ShapeStyle& style,
+                         float alpha, float fill_alpha,
+                         unsigned int target_fbo,
+                         int canvas_w, int canvas_h);
 void      scene_add_solid(float r, float g, float b, float a);
 void      scene_apply_fx (int canvas_w, int canvas_h,
                           const EffectAccum& ea, const CreativeFXAccum& cfx, float t);

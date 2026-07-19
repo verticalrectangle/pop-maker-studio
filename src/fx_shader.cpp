@@ -420,6 +420,81 @@ void main() {
 }
 )glsl";
 
+// ── Shape clip shaders (ClipType::Shape) ─────────────────────────────────────
+// Vertex shader: orthographic projection of canvas-space pixels to NDC, with
+// Y flip (canvas y-down → NDC y-up). Same convention as k_bg_dl_vert.
+static const char* k_shape_vert = R"glsl(
+#version 330 core
+layout(location = 0) in vec2 a_pos;   // canvas px (y-down, top-left origin)
+layout(location = 1) in vec2 a_uv;    // local [0,1] path position
+uniform vec2 u_resolution;             // canvas w, h
+out vec2 v_uv;
+void main() {
+    gl_Position = vec4(a_pos.x / u_resolution.x * 2.0 - 1.0,
+                       1.0 - a_pos.y / u_resolution.y * 2.0, 0.0, 1.0);
+    v_uv = a_uv;
+}
+)glsl";
+
+// Fill + stroke fragment shader. Handles flat / linear / radial / hue-cycle
+// gradients via v_uv (the path's local [0,1] position). u_mode: 0=fill, 1=stroke.
+// u_fill_alpha is the draw-on fade (0..1) for the fill pass.
+static const char* k_shape_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform int   u_mode;         // 0=fill, 1=stroke
+uniform vec4  u_color;        // base color (fill_col or stroke_col)
+uniform vec4  u_color2;       // gradient stop 2
+uniform int   u_grad_mode;    // 0=none 1=linear 2=radial 3=hue-cycle
+uniform float u_grad_angle;   // degrees (linear mode)
+uniform float u_fill_alpha;   // draw-on fade for fill (0..1)
+uniform float u_alpha;        // global layer alpha (clip opacity)
+
+vec3 hsv2rgb(vec3 c) {
+    vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+void main() {
+    vec4 col = u_color;
+    if (u_grad_mode == 1) {
+        // Linear: project UV-0.5 onto the gradient direction.
+        float a = radians(u_grad_angle);
+        vec2 dir = vec2(cos(a), -sin(a));   // canvas y-down
+        float t = clamp(dot(v_uv - 0.5, dir) * 2.0 + 0.5, 0.0, 1.0);
+        col = mix(u_color, u_color2, t);
+    } else if (u_grad_mode == 2) {
+        // Radial: distance from centre.
+        float t = clamp(length(v_uv - 0.5) * 2.0, 0.0, 1.0);
+        col = mix(u_color, u_color2, t);
+    } else if (u_grad_mode == 3) {
+        // Hue-cycle: rotate hue based on position.
+        float h = fract(v_uv.x * 0.7 + v_uv.y * 0.3);
+        col = vec4(hsv2rgb(vec3(h, 0.8, 1.0)), u_color.a);
+    }
+    float a = col.a * u_alpha;
+    if (u_mode == 0) a *= u_fill_alpha;   // fill fades in during draw-on
+    frag = vec4(col.rgb, a);
+}
+)glsl";
+
+// Glow composite: samples the blurred shape texture and outputs glow color *
+// alpha, for additive blending over the scene.
+static const char* k_shape_glow_frag = R"glsl(
+#version 330 core
+in vec2 v_uv;
+out vec4 frag;
+uniform sampler2D u_tex;     // blurred shape alpha
+uniform vec4  u_glow_col;
+uniform float u_intensity;
+void main() {
+    float a = texture(u_tex, v_uv).a * u_intensity;
+    frag = vec4(u_glow_col.rgb * a, a);
+}
+)glsl";
+
 // Amount blend — mixes original (u_tex, unit 0) with effect (u_effect, unit 1)
 static const char* k_blend_frag = R"glsl(
 #version 330 core
@@ -493,6 +568,7 @@ static struct {
     GLuint grade = 0, blur = 0, chroma_key = 0, glitch = 0;
     GLuint vhs = 0, leak = 0, datamosh = 0, blit = 0, blend = 0;
     GLuint composite = 0, chroma_melt = 0, chroma_echo = 0, chroma_frame = 0;
+    GLuint shape_fill = 0, shape_glow = 0;
 } g_prog;
 
 // Generated effects use a map keyed by (int)FXType — no struct fields needed.
@@ -516,6 +592,14 @@ static struct {
 
 // 1×1 solid-colour texture for scene_add_solid
 static GLuint g_solid_tex = 0;
+
+// Shape clip rendering: VAO/VBO for uploading ShapeVertex data, and a temp
+// FBO for the glow blur pass (render shape → blur → composite additively).
+static GLuint g_shape_vao = 0, g_shape_vbo = 0;
+static struct {
+    GLuint fbo = 0, tex = 0;
+    int w = 0, h = 0;
+} g_shape_temp;
 
 // Per-slot stable output textures — indexed by fx_apply's 'slot' argument.
 // These persist between pass chains so deferred ImDrawList commands are safe.
@@ -669,6 +753,8 @@ void fx_shader_init() {
     g_prog.chroma_melt    = link_prog(k_chroma_melt_frag);
     g_prog.chroma_echo    = link_prog(k_chroma_echo_frag);
     g_prog.chroma_frame   = link_prog(k_chroma_frame_frag);
+    g_prog.shape_fill     = link_prog2(k_shape_vert, k_shape_frag);
+    g_prog.shape_glow     = link_prog2(k_shape_vert, k_shape_glow_frag);
 
     glGenVertexArrays(1, &g_vao);
 
@@ -697,6 +783,16 @@ void fx_shader_init() {
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE,       sizeof(ImDrawVert), (void*)offsetof(ImDrawVert, col));
     glBindVertexArray(0);
+    // Shape clip VAO/VBO (interleaved pos+uv, 4 floats per vertex)
+    glGenVertexArrays(1, &g_shape_vao);
+    glGenBuffers(1, &g_shape_vbo);
+    glBindVertexArray(g_shape_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_shape_vbo);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, (void*)8);
+    glBindVertexArray(0);
 }
 
 #include "generated/fx_shader_init.h"
@@ -704,7 +800,7 @@ void fx_shader_init() {
 void fx_shader_shutdown() {
     for (auto p : { g_prog.grade, g_prog.blur, g_prog.chroma_key, g_prog.glitch,
                     g_prog.vhs, g_prog.leak, g_prog.datamosh, g_prog.blit, g_prog.blend,
-                    g_prog.composite })
+                    g_prog.composite, g_prog.shape_fill, g_prog.shape_glow })
         if (p) glDeleteProgram(p);
     for (auto& [k, v] : g_gen_progs) if (v) glDeleteProgram(v);
     g_gen_progs.clear();
@@ -721,6 +817,9 @@ void fx_shader_shutdown() {
     if (g_bg_vao)  glDeleteVertexArrays(1, &g_bg_vao);
     if (g_bg_vbo)  glDeleteBuffers(1, &g_bg_vbo);
     if (g_bg_ebo)  glDeleteBuffers(1, &g_bg_ebo);
+    if (g_shape_vao) glDeleteVertexArrays(1, &g_shape_vao);
+    if (g_shape_vbo) glDeleteBuffers(1, &g_shape_vbo);
+    if (g_shape_temp.fbo) { glDeleteFramebuffers(1, &g_shape_temp.fbo); glDeleteTextures(1, &g_shape_temp.tex); }
 }
 
 // ── Face warp (filters) ───────────────────────────────────────────────────────
@@ -1937,6 +2036,158 @@ void scene_add_solid(float r, float g, float b, float a) {
     float cw = (float)g_scene.w, ch = (float)g_scene.h;
     scene_add_layer((uintptr_t)g_solid_tex, cw * 0.5f, ch * 0.5f,
                     cw * 0.5f, ch * 0.5f, 1.f, 0.f, a);
+}
+
+// Ensure g_shape_temp matches canvas size (for the glow blur pass).
+static void shape_temp_ensure(int w, int h) {
+    if (g_shape_temp.w == w && g_shape_temp.h == h && g_shape_temp.fbo) return;
+    if (g_shape_temp.fbo) { glDeleteFramebuffers(1, &g_shape_temp.fbo); glDeleteTextures(1, &g_shape_temp.tex); }
+    make_tex_fbo(g_shape_temp.tex, g_shape_temp.fbo, w, h);
+    g_shape_temp.w = w; g_shape_temp.h = h;
+}
+
+// Upload a ShapeVertex list to g_shape_vbo and draw it with g_prog.shape_fill.
+// mode: 0=fill, 1=stroke. Sets all shape_frag uniforms from `style`.
+static void draw_shape_pass(const std::vector<ShapeVertex>& verts,
+                            const ShapeStyle& style, int mode,
+                            float alpha, float fill_alpha,
+                            GLuint target_fbo, int canvas_w, int canvas_h,
+                            const float* color_override = nullptr)
+{
+    if (verts.empty() || !g_prog.shape_fill) return;
+    GLint prev_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4]; glGetIntegerv(GL_VIEWPORT, prev_vp);
+    GLboolean prev_blend = glIsEnabled(GL_BLEND);
+    GLint prev_blend_src, prev_blend_dst;
+    glGetIntegerv(GL_BLEND_SRC_RGB, &prev_blend_src);
+    glGetIntegerv(GL_BLEND_DST_RGB, &prev_blend_dst);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
+    glViewport(0, 0, canvas_w, canvas_h);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);  // straight alpha src-over
+
+    glUseProgram(g_prog.shape_fill);
+    glBindVertexArray(g_shape_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, g_shape_vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(verts.size() * sizeof(ShapeVertex)),
+                 verts.data(), GL_STREAM_DRAW);
+
+    glUniform2f(glGetUniformLocation(g_prog.shape_fill, "u_resolution"),
+                (float)canvas_w, (float)canvas_h);
+    glUniform1i(glGetUniformLocation(g_prog.shape_fill, "u_mode"), mode);
+    glUniform1i(glGetUniformLocation(g_prog.shape_fill, "u_grad_mode"), style.grad_mode);
+    glUniform1f(glGetUniformLocation(g_prog.shape_fill, "u_grad_angle"), style.grad_angle);
+    glUniform1f(glGetUniformLocation(g_prog.shape_fill, "u_fill_alpha"), fill_alpha);
+    glUniform1f(glGetUniformLocation(g_prog.shape_fill, "u_alpha"), alpha);
+
+    const float* col = color_override ? color_override :
+                       (mode == 0 ? style.fill_col : style.stroke_col);
+    glUniform4f(glGetUniformLocation(g_prog.shape_fill, "u_color"),
+                col[0], col[1], col[2], col[3]);
+    glUniform4f(glGetUniformLocation(g_prog.shape_fill, "u_color2"),
+                style.grad_col2[0], style.grad_col2[1],
+                style.grad_col2[2], style.grad_col2[3]);
+
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)verts.size());
+    glBindVertexArray(0);
+
+    glBlendFunc((GLenum)prev_blend_src, (GLenum)prev_blend_dst);
+    if (!prev_blend) glDisable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+}
+
+// Render a shape clip's geometry (fill + stroke + glow) into `target_fbo`.
+// Used by both the preview scene compositor (target = scene FBO) and the
+// export path (target = export FBO). The caller is responsible for ensuring
+// the target FBO is bound to the right viewport size before calling — but we
+// bind it explicitly per pass anyway so the caller's binding is irrelevant.
+void shape_render_to_fbo(const ShapeGeometry& geom,
+                                const ShapeStyle& style,
+                                float alpha, float fill_alpha,
+                                GLuint target_fbo,
+                                int canvas_w, int canvas_h)
+{
+    if (!g_prog.shape_fill) return;
+    if (geom.fill.empty() && geom.stroke.empty()) return;
+
+    GLint prev_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_vp[4]; glGetIntegerv(GL_VIEWPORT, prev_vp);
+
+    // ── Glow pass ────────────────────────────────────────────────────────────
+    // Render the shape (stroke + fill) to a temp FBO at full opacity, blur it,
+    // then composite the blurred alpha as an additive glow over the target.
+    if (style.glow_on && style.glow_radius > 0.f && style.glow_intensity > 0.f) {
+        shape_temp_ensure(canvas_w, canvas_h);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_shape_temp.fbo);
+        glViewport(0, 0, canvas_w, canvas_h);
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        if (style.fill_on && !geom.fill.empty())
+            draw_shape_pass(geom.fill, style, 0, 1.f, 1.f, g_shape_temp.fbo, canvas_w, canvas_h);
+        if (style.stroke_on && !geom.stroke.empty())
+            draw_shape_pass(geom.stroke, style, 1, 1.f, 1.f, g_shape_temp.fbo, canvas_w, canvas_h);
+
+        pp_ensure(canvas_w, canvas_h);
+        GLuint blurred = g_shape_temp.tex;
+        int pslot = 0;
+        float sigma = style.glow_radius * (float)canvas_h;
+        for (int pass = 0; pass < 2; ++pass) {
+            glUseProgram(g_prog.blur);
+            glUniform2f(glGetUniformLocation(g_prog.blur, "u_dir"),
+                        pass == 0 ? 1.f / (float)canvas_w : 0.f,
+                        pass == 0 ? 0.f : 1.f / (float)canvas_h);
+            glUniform1f(glGetUniformLocation(g_prog.blur, "u_sigma"), sigma);
+            draw_pass(g_pp.fbo[pslot], blurred, canvas_w, canvas_h, g_prog.blur);
+            blurred = g_pp.tex[pslot];
+            pslot ^= 1;
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, target_fbo);
+        glViewport(0, 0, canvas_w, canvas_h);
+        GLboolean prev_blend = glIsEnabled(GL_BLEND);
+        GLint prev_bs, prev_bd;
+        glGetIntegerv(GL_BLEND_SRC_RGB, &prev_bs);
+        glGetIntegerv(GL_BLEND_DST_RGB, &prev_bd);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);  // additive
+        glUseProgram(g_prog.shape_glow);
+        glBindVertexArray(g_vao);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, blurred);
+        glUniform1i(glGetUniformLocation(g_prog.shape_glow, "u_tex"), 0);
+        glUniform4f(glGetUniformLocation(g_prog.shape_glow, "u_glow_col"),
+                    style.glow_col[0], style.glow_col[1],
+                    style.glow_col[2], style.glow_col[3]);
+        glUniform1f(glGetUniformLocation(g_prog.shape_glow, "u_intensity"),
+                    style.glow_intensity * alpha);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glActiveTexture(GL_TEXTURE0);
+        glBlendFunc((GLenum)prev_bs, (GLenum)prev_bd);
+        if (!prev_blend) glDisable(GL_BLEND);
+        glBindVertexArray(0);
+    }
+
+    // ── Fill + stroke passes (src-over into the target FBO) ──────────────────
+    if (style.fill_on && !geom.fill.empty())
+        draw_shape_pass(geom.fill, style, 0, alpha, fill_alpha,
+                        target_fbo, canvas_w, canvas_h);
+    if (style.stroke_on && !geom.stroke.empty())
+        draw_shape_pass(geom.stroke, style, 1, alpha, 1.f,
+                        target_fbo, canvas_w, canvas_h);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
+    glViewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+}
+
+void scene_add_shape(const ShapeGeometry& geom, const ShapeStyle& style,
+                     float alpha, float fill_alpha,
+                     int canvas_w, int canvas_h)
+{
+    if (!g_scene.begun) return;
+    shape_render_to_fbo(geom, style, alpha, fill_alpha,
+                        g_scene.fbo[g_scene.active], canvas_w, canvas_h);
 }
 
 void scene_apply_fx(int canvas_w, int canvas_h,

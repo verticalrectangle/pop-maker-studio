@@ -133,7 +133,9 @@ const ClipKfField kClipKfFields[] = {
     {"runtime_fx_amount", &Clip::runtime_fx_amount},
     {"face_filter_amt", &Clip::face_filter_amt},
     {"fade_in", &Clip::fade_in}, {"fade_out", &Clip::fade_out},
-    {"transition_pre", &Clip::transition_pre}, {"transition_post", &Clip::transition_post},
+    // Shape clip: draw-on reveal + global stroke-width multiplier.
+    {"shape_stroke_length",   &Clip::shape_stroke_length},
+    {"shape_stroke_width_mul", &Clip::shape_stroke_width_mul},
     // Generated shader-FX packs: amount + every param (one row each).
 #include "generated/fx_kf_fields.h"
 };
@@ -156,6 +158,11 @@ float Clip::eval_prop(const std::string& name, float playhead) const {
     for (int i = 0; i < kClipKfFieldCount; ++i)
         if (name == kClipKfFields[i].name) return this->*(kClipKfFields[i].f);
     return 0.f;
+}
+
+ShapePath Clip::eval_path(float playhead) const {
+    float t = playhead - start;
+    return shape_path_keys.eval(t, shape_path);
 }
 
 // ── Split / trim keyframe handling ────────────────────────────────────────────
