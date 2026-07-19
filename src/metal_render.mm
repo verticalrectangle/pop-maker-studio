@@ -3460,6 +3460,10 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
             NSLog(@"[shape] fill=%zu stroke=%zu fill_on=%d alpha=%.2f pso=%d",
                   geom.fill.size(), geom.stroke.size(), (int)cl.shape_style.fill_on,
                   alpha, (int)(g_shape_fill_pso != nil));
+            if (!geom.fill.empty())
+                NSLog(@"[shape] v0=(%.1f,%.1f,%.2f,%.2f) v1=(%.1f,%.1f,%.2f,%.2f)",
+                      geom.fill[0].x, geom.fill[0].y, geom.fill[0].u, geom.fill[0].v,
+                      geom.fill[1].x, geom.fill[1].y, geom.fill[1].u, geom.fill[1].v);
             draw_shape(geom, cl.shape_style, alpha, fill_alpha);
         }
 
