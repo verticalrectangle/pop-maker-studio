@@ -228,7 +228,7 @@ fragment float4 shape_f(ShapeVOut in [[stage_in]],
     float4 col = float4(u.u_cr, u.u_cg, u.u_cb, u.u_ca);
     float4 col2 = float4(u.u_c2r, u.u_c2g, u.u_c2b, u.u_c2a);
     if (u.u_grad_mode == 1) {
-        float a = radians(u.u_grad_angle);
+        float a = u.u_grad_angle * (3.14159265358979 / 180.0);
         float2 dir = float2(cos(a), -sin(a));
         float tt = clamp(dot(in.v_uv - 0.5, dir) * 2.0 + 0.5, 0.0, 1.0);
         col = mix(col, col2, tt);

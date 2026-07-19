@@ -46,3 +46,13 @@ xcodebuild -create-xcframework \
     -library build-ios/xcf/libpms-engine-full.a -headers build-ios/xcf/headers \
     -output "$OUT/pms_engine.xcframework"
 echo "built: $OUT/pms_engine.xcframework ($(lipo -archs build-ios/xcf/libpms-engine-full.a))"
+
+# Copy the ORT iOS xcframework into the app's Engine/build so project.yml's
+# OTHER_LDFLAGS can find it (the app links onnxruntime.xcframework/ios-arm64).
+if [ -d "$TOOLS/ort-ios/onnxruntime.xcframework" ]; then
+    rm -rf "$OUT/onnxruntime.xcframework"
+    cp -R "$TOOLS/ort-ios/onnxruntime.xcframework" "$OUT/"
+    echo "copied: $OUT/onnxruntime.xcframework"
+else
+    echo "⚠️  onnxruntime.xcframework not found at $TOOLS/ort-ios — device build will fail to link"
+fi
