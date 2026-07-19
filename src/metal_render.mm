@@ -3229,6 +3229,7 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
                     length:(NSUInteger)(verts.size() * sizeof(ShapeVertex))
                 options:MTLResourceStorageModeShared];
             [enc setVertexBytes:&su length:sizeof(su) atIndex:1];
+            [enc setFragmentBytes:&su length:sizeof(su) atIndex:1];
             [enc setVertexBuffer:vb offset:0 atIndex:0];
             [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
                       vertexCount:(NSUInteger)verts.size()];
