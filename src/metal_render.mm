@@ -3432,7 +3432,6 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
             const Clip& cl = track.clips[ci];
             if (cl.clip_type != ClipType::Shape) continue;
-            NSLog(@"[shape] track=%d clip=%d t=%.2f start=%.2f end=%.2f", ti, ci, t, cl.start, cl.end);
             if (t < cl.start || t >= cl.end) continue;
 
             float px    = cl.eval_prop("pos_x",    t);
@@ -3458,13 +3457,6 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
             float fill_alpha = stroke_len >= 1.f ? 1.f
                              : stroke_len <= 0.6f ? 0.f
                              : (stroke_len - 0.6f) / 0.4f;
-            NSLog(@"[shape] fill=%zu stroke=%zu fill_on=%d alpha=%.2f pso=%d",
-                  geom.fill.size(), geom.stroke.size(), (int)cl.shape_style.fill_on,
-                  alpha, (int)(g_shape_fill_pso != nil));
-            if (!geom.fill.empty())
-                NSLog(@"[shape] v0=(%.1f,%.1f,%.2f,%.2f) v1=(%.1f,%.1f,%.2f,%.2f)",
-                      geom.fill[0].x, geom.fill[0].y, geom.fill[0].u, geom.fill[0].v,
-                      geom.fill[1].x, geom.fill[1].y, geom.fill[1].u, geom.fill[1].v);
             draw_shape(geom, cl.shape_style, alpha, fill_alpha);
         }
 
