@@ -5,8 +5,7 @@ Status: draft v1 (2026-06-10) · target: dev branch, personal use
 An "Agent" button next to Terminal in the top bar opens a terminal-like chat
 panel. The panel drives the editor through the same tool surface external
 agents already use, with inference on the DeepSeek API today and any
-OpenAI-compatible endpoint tomorrow (vLLM, llama.cpp, Ollama — that is the
-WEB_SPEC §3.6 local tier for free).
+OpenAI-compatible endpoint tomorrow (vLLM, llama.cpp, Ollama).
 
 ---
 
@@ -200,8 +199,7 @@ edits — same workflow I (Claude) use over MCP:
   - Model id (default `deepseek-chat`)
   - Vision toggle
   Base URL/model/vision live in the normal app config (not secret).
-- No privacy banner in v1 (dev-branch personal tool); the WEB_SPEC consent
-  language applies when this grows into a product surface.
+- No privacy banner in v1 (dev-branch personal tool); consent language applies when this grows into a product surface.
 
 ## 6. Panel UI
 
@@ -242,5 +240,4 @@ edits — same workflow I (Claude) use over MCP:
 - No context summarization (rolling window only).
 - No parallel tool calls (serial execution in call order).
 - No python_only tool emulation — they're simply absent.
-- No local model management UI (point base URL at Ollama and it works;
-  download/UX comes with WEB_SPEC §3.6).
+- No local model management UI (point base URL at Ollama and it works).
