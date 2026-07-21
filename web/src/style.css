@@ -1,0 +1,243 @@
+/* Pop Maker Studio Web — "goth glass" design system.
+   Deep black ground, hairline alpha-white depth, one lavender accent,
+   glass panels (blur + gloss + hairline stroke). Ported from the iOS theme. */
+
+:root {
+  --ground: #050507;
+  --panel: rgba(18, 18, 24, 0.72);
+  --panel-solid: #121218;
+  --elevated: rgba(255, 255, 255, 0.055);
+  --line-faint: rgba(255, 255, 255, 0.06);
+  --line: rgba(255, 255, 255, 0.13);
+  --line-strong: rgba(255, 255, 255, 0.22);
+  --text: rgba(255, 255, 255, 0.96);
+  --text-body: rgba(255, 255, 255, 0.78);
+  --text-muted: rgba(255, 255, 255, 0.55);
+  --text-label: rgba(255, 255, 255, 0.38);
+  --accent: #a78bfa;
+  --accent-deep: #7c5cf0;
+  --accent-warm: #f0a05c;
+  --danger: #f06a6a;
+  --radius-card: 16px;
+  --radius-tile: 12px;
+  --radius-brick: 6px;
+  font-family: "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #app { height: 100%; overflow: hidden; }
+body {
+  background: var(--ground);
+  color: var(--text);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Atmosphere: drifting bokeh glow behind everything. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(600px 400px at 15% -10%, rgba(167, 139, 250, 0.10), transparent 60%),
+    radial-gradient(700px 500px at 90% 110%, rgba(124, 92, 240, 0.08), transparent 60%),
+    radial-gradient(400px 300px at 70% 20%, rgba(240, 160, 92, 0.04), transparent 60%);
+}
+
+#app { display: flex; flex-direction: column; position: relative; }
+
+/* ── Glass primitive ── */
+.glass, #toolbar, #side-pane, #timeline-pane, #statusbar, #transport {
+  background: var(--panel);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  border: 1px solid var(--line-faint);
+}
+
+/* ── Toolbar ── */
+#toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px;
+  border-width: 0 0 1px 0;
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 30;
+}
+#toolbar::after { /* top gloss */
+  content: "";
+  position: absolute; inset: 0 0 auto 0; height: 40%;
+  background: linear-gradient(rgba(255,255,255,0.05), transparent);
+  pointer-events: none;
+}
+#toolbar .spacer { flex: 1; }
+#toolbar .title {
+  font-weight: 900; letter-spacing: 0.2px; margin-right: 10px;
+  color: var(--text);
+}
+
+button {
+  background: var(--elevated);
+  color: var(--text-body);
+  border: 1px solid var(--line-faint);
+  border-radius: 10px;
+  padding: 6px 13px;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.06s;
+}
+button:hover { background: rgba(255,255,255,0.10); border-color: var(--line-strong); color: var(--text); }
+button:active { transform: scale(0.97); }
+button:disabled { opacity: 0.4; cursor: default; transform: none; }
+button.primary {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%);
+  border-color: transparent;
+  color: #0b0714;
+  font-weight: 700;
+  box-shadow: 0 2px 14px rgba(124, 92, 240, 0.35);
+}
+button.primary:hover { filter: brightness(1.12); color: #0b0714; }
+button.active { border-color: var(--accent-warm); color: var(--accent-warm); }
+
+select {
+  background: var(--elevated); color: var(--text-body);
+  border: 1px solid var(--line-faint); border-radius: 10px;
+  padding: 6px 10px; font: inherit; cursor: pointer;
+}
+
+/* ── Workspace ── */
+#workspace { flex: 1; display: flex; min-height: 0; position: relative; }
+
+#preview-pane {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  min-width: 0; position: relative;
+  padding: 14px 14px 6px;
+}
+#preview {
+  background: #000;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--line-faint);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6), 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+#canvas-handles {
+  position: absolute;
+  z-index: 10;
+  touch-action: none;
+}
+
+/* Transport: floating glass pill under the canvas. */
+#transport {
+  display: flex; align-items: center; gap: 4px;
+  margin-top: 10px; padding: 5px 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
+#transport button {
+  border: none; background: transparent;
+  width: 32px; height: 32px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; font-size: 14px;
+}
+#transport button:hover { background: rgba(255,255,255,0.10); }
+#transport .time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 128px; text-align: center;
+  font-size: 12px;
+}
+
+/* ── Side pane ── */
+#side-pane {
+  flex: 0 0 296px; display: flex; flex-direction: column;
+  border-width: 0 0 0 1px;
+  position: relative;
+  z-index: 20;
+}
+#bin { flex: 0 0 40%; overflow-y: auto; border-bottom: 1px solid var(--line-faint); padding: 12px; }
+#inspector { flex: 1; overflow-y: auto; padding: 12px; }
+
+.panel-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-label); font-weight: 600;
+}
+
+#bin .bin-grid { display: grid; grid-template-columns: repeat(auto-fill, 84px); gap: 10px; margin-top: 10px; }
+#bin .bin-item {
+  width: 84px; cursor: grab;
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-tile);
+  overflow: hidden;
+  background: var(--elevated);
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+#bin .bin-item:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+#bin .bin-item:active { cursor: grabbing; }
+#bin .bin-item canvas, #bin .bin-item img { width: 82px; height: 46px; object-fit: cover; display: block; }
+#bin .bin-item .label {
+  font-size: 10px; color: var(--text-muted); padding: 4px 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#bin .bin-item button { /* delete affordance */
+  background: rgba(5, 5, 7, 0.75); border: none; color: var(--text-muted);
+}
+#bin .bin-item button:hover { color: var(--danger); background: rgba(5,5,7,0.9); }
+
+/* ── Inspector ── */
+#inspector h3 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-label); margin: 14px 0 8px; font-weight: 600;
+}
+#inspector .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+#inspector .row label { flex: 0 0 74px; color: var(--text-muted); font-size: 12px; }
+#inspector input[type="number"], #inspector input[type="text"], #inspector select {
+  flex: 1; background: rgba(0,0,0,0.35); color: var(--text);
+  border: 1px solid var(--line-faint); border-radius: 8px;
+  padding: 5px 8px; font: inherit;
+  transition: border-color 0.15s;
+}
+#inspector input:focus, #inspector select:focus { outline: none; border-color: var(--accent); }
+#inspector input[type="range"] { flex: 1; accent-color: var(--accent); }
+#inspector input[type="color"] {
+  width: 36px; height: 26px; padding: 0;
+  border: 1px solid var(--line-faint); border-radius: 6px; background: none;
+}
+#inspector button { font-size: 12px; padding: 5px 10px; }
+
+/* ── Timeline ── */
+#timeline-pane {
+  flex: 0 0 264px;
+  border-width: 1px 0 0 0;
+  position: relative;
+  overflow: hidden; min-height: 0;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.35);
+}
+#timeline { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: default; }
+
+/* ── Status bar ── */
+#statusbar {
+  flex: 0 0 auto; padding: 5px 14px;
+  border-width: 1px 0 0 0;
+  color: var(--text-label);
+  display: flex; gap: 18px; font-size: 11.5px;
+}
+#statusbar .toast { color: var(--accent); }
+
+/* ── Misc ── */
+.drop-hint {
+  position: absolute; inset: 12px; border: 1.5px dashed var(--line-strong);
+  border-radius: var(--radius-card); display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); pointer-events: none; font-size: 15px;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }

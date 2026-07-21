@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pop Maker Studio</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar"></header>
+    <main id="workspace">
+      <section id="preview-pane">
+        <canvas id="preview"></canvas>
+        <div id="transport"></div>
+      </section>
+      <aside id="side-pane">
+        <div id="bin"></div>
+        <div id="inspector"></div>
+      </aside>
+    </main>
+    <section id="timeline-pane">
+      <canvas id="timeline"></canvas>
+    </section>
+    <footer id="statusbar"></footer>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

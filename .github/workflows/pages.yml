@@ -23,11 +23,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build web editor
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Prepare site
         run: |
           mkdir _site
           cp index.html _site/
           cp -r docs _site/docs
+          cp -r web/dist _site/web
 
       - uses: actions/upload-pages-artifact@v3
         with:

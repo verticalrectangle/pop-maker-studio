@@ -15,3 +15,5 @@ build-linux/
 build-ios/
 .DS_Store
 build-mac/
+web/node_modules/
+web/dist/
