@@ -223,12 +223,19 @@ int main(int argc, char** argv) {
                             {"face_amount", amount}};
         json look_entry = {{"fx_type", "face_fx"}, {"params", look_params}};
         if (const char* tex = getenv("PMS_PHOTO_TEX")) {
-            // Plate QA: force the makeup texture + a neutral skin bundle so
-            // the filter's own smooth/desat doesn't distort the read.
+            // Plate QA: force the makeup texture with EVERYTHING else off —
+            // on the MP path procedural elements are NOT auto-zeroed, so
+            // the filter's own lash/liner/lip (Goth id 13: plum-black eye +
+            // dark lip) would draw right over the plate.
+            look_params["face_filter"] = 0;
             look_params["smooth"] = 0.40; look_params["brighten"] = 0.15;
             look_params["warmth"] = 0.0; look_params["desat"] = 0.0;
             look_params["chrome"] = 0.0; look_params["scanlines"] = 0.0;
             look_params["skin_tint"] = 0.0; look_params["eye_pop"] = 0.0;
+            look_params["lash"] = 0.0; look_params["liner"] = 0.0;
+            look_params["lash_wing"] = 0.0; look_params["shadow"] = 0.0;
+            look_params["lip"] = 0.0; look_params["blush"] = 0.0;
+            look_params["freckles"] = 0.0; look_params["nose_blush"] = 0.0;
             look_entry["params"] = look_params;
             look_entry["face_makeup_tex"] = tex;
         }
