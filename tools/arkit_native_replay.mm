@@ -210,7 +210,7 @@ int main(int argc, char** argv) {
                 params["skin_tint"] = 0.0; params["eye_pop"] = 0.0;
             }
             cmd("set_live_fx",
-                {{{"fx"}, json::array({ {{{"fx_type"}, "face_fx"},
+                {{"fx", json::array({ {{{"fx_type"}, "face_fx"},
                    {"params", params}} })}});
             FILE* jf = fopen(obj_path.c_str(), "r");
             if (!jf) fail("open " + obj_path);
