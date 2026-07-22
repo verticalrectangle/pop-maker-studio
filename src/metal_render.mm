@@ -913,6 +913,8 @@ struct FaceNatUni {
     float4x4 mvp;
     float4 mvn[3];    // model-view rotation columns (normal transform)
     float2 dim; float opacity; float adapt;
+    float2 ref[3];    // skin reference points (forehead, cheeks), screen px
+    float occl; float pad0;
 };
 struct NatVOut { float4 pos [[position]]; float2 mkuv; float facing; };
 vertex NatVOut face_nat_v(uint vid [[vertex_id]],
@@ -970,10 +972,28 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
     // past the real face ("mask edge"), so pigment fades there instead of
     // painting the background.
     a *= smoothstep(0.18, 0.46, fabs(in.facing));
+    // Occlusion gate: pigment must not paint whatever passes IN FRONT of
+    // the face (hair, sleeves, objects). Compare the covered pixel against
+    // a per-frame skin reference (component-wise median of forehead +
+    // cheek samples from the un-makeup'd source); where chroma/luma
+    // deviates strongly, the pixel isn't face skin -> fade pigment out.
+    if (u.occl > 0.001) {
+        float3 s0 = srct.sample(s, u.ref[0] / u.dim).rgb;
+        float3 s1 = srct.sample(s, u.ref[1] / u.dim).rgb;
+        float3 s2 = srct.sample(s, u.ref[2] / u.dim).rgb;
+        float3 refc = median(s0, s1, s2);
+        float rl = f_lum(refc) + 0.06;
+        float bl = f_lum(base) + 0.06;
+        float3 rch = refc / rl, bch = base / bl;
+        float dev = length(bch - rch) + 0.8 * fabs(bl - rl);
+        float fade = 1.0 - smoothstep(0.10, 0.30, dev);
+        a *= mix(1.0, fade, u.occl);
+    }
     return float4(mix(base, mkcol, a), 1.0);
 }
 
-struct FaceIrisUni { float2 dim; float amount; float pad0; float4 color; };
+struct FaceIrisUni { float2 dim; float amount; float pad0; float4 color;
+                     float2 ref[3]; float occl; float pad1; };
 struct IrisV { float4 clip; float2 loc; float2 pad; };
 struct IrisVOut { float4 pos [[position]]; float2 loc; };
 vertex IrisVOut face_iris_v(uint vid [[vertex_id]],
@@ -996,6 +1016,16 @@ fragment float4 face_iris_f(IrisVOut in [[stage_in]],
     col *= (1.0 - 0.85 * pupil);
     float a = u.amount * (1.0 - smoothstep(0.92, 1.0, r));
     a *= 1.0 - smoothstep(0.88, 0.97, lum);       // keep catchlights white
+    if (u.occl > 0.001) {   // same occlusion gate as the mesh pass
+        float3 s0 = srct.sample(s, u.ref[0] / u.dim).rgb;
+        float3 s1 = srct.sample(s, u.ref[1] / u.dim).rgb;
+        float3 s2 = srct.sample(s, u.ref[2] / u.dim).rgb;
+        float3 refc = median(s0, s1, s2);
+        float rl = f_lum(refc) + 0.06;
+        float bl = f_lum(base) + 0.06;
+        float dev = length(base / bl - refc / rl) + 0.8 * fabs(bl - rl);
+        a *= mix(1.0, 1.0 - smoothstep(0.10, 0.30, dev), u.occl);
+    }
     return float4(mix(base, col, a), 1.0);
 }
 
@@ -2028,7 +2058,8 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                             [cb renderCommandEncoderWithDescriptor:rp];
                         // mesh: writes stencil 1 wherever the face covers
                         struct { float mvp[16]; float mvn[12];
-                                 float dim[2]; float opacity, adapt; } nu;
+                                 float dim[2]; float opacity, adapt;
+                                 float ref[3][2]; float occl, pad0; } nu;
                         memcpy(nu.mvp, mvp, sizeof(nu.mvp));
                         // normal transform = MV rotation columns (uniform
                         // scale assumed; normalized in the shader)
@@ -2041,6 +2072,21 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                         nu.dim[0] = (float)sw; nu.dim[1] = (float)sh;
                         nu.opacity = atlas ? fminf(famt, 1.5f) : 0.f;
                         nu.adapt = 1.f;
+                        // Skin reference points for the occlusion gate:
+                        // forehead (956) + cheeks (311, 746) — stable,
+                        // rarely all covered at once. Projected per frame.
+                        {
+                            static const int kRef[3] = {956, 311, 746};
+                            for (int r2 = 0; r2 < 3; ++r2) {
+                                float c4r[4];
+                                mat4_xform(mvp, f3.verts[kRef[r2]], 1.f, c4r);
+                                float iwr = 1.f / (fabsf(c4r[3]) > 1e-6f ? c4r[3] : 1e-6f);
+                                nu.ref[r2][0] = (c4r[0] * iwr * 0.5f + 0.5f) * (float)sw;
+                                nu.ref[r2][1] = (1.f - (c4r[1] * iwr * 0.5f + 0.5f)) * (float)sh;
+                            }
+                            nu.occl = atlas ? 1.f : 0.f;
+                            nu.pad0 = 0.f;
+                        }
                         // per-vertex normals (accumulated face normals) —
                         // feeds the grazing-angle silhouette fade
                         static float nrm[ARKIT_NPTS][3];
@@ -2124,11 +2170,15 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                                     o.loc[1] = locs[quad[q]][1];
                                 }
                             }
-                            struct { float dim[2]; float amount, pad0; float color[4]; } iu;
+                            struct { float dim[2]; float amount, pad0;
+                                     float color[4]; float ref[3][2];
+                                     float occl, pad1; } iu;
                             iu.dim[0] = (float)sw; iu.dim[1] = (float)sh;
                             iu.amount = fminf(iris_amt, 1.f);
                             iu.color[0] = look.iris_col[0]; iu.color[1] = look.iris_col[1];
                             iu.color[2] = look.iris_col[2]; iu.color[3] = 1.f;
+                            memcpy(iu.ref, nu.ref, sizeof(iu.ref));
+                            iu.occl = nu.occl; iu.pad1 = 0.f;
                             [e setRenderPipelineState:get_face_pso(kFaceIris)];
                             [e setDepthStencilState:g_dss_seq0];
                             [e setStencilReferenceValue:0];
