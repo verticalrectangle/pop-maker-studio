@@ -986,7 +986,7 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
         float bl = f_lum(base) + 0.06;
         float3 rch = refc / rl, bch = base / bl;
         float dev = length(bch - rch) + 0.8 * fabs(bl - rl);
-        float fade = 1.0 - smoothstep(0.10, 0.30, dev);
+        float fade = 1.0 - smoothstep(0.16, 0.42, dev);
         a *= mix(1.0, fade, u.occl);
     }
     return float4(mix(base, mkcol, a), 1.0);
@@ -1024,7 +1024,7 @@ fragment float4 face_iris_f(IrisVOut in [[stage_in]],
         float rl = f_lum(refc) + 0.06;
         float bl = f_lum(base) + 0.06;
         float dev = length(base / bl - refc / rl) + 0.8 * fabs(bl - rl);
-        a *= mix(1.0, 1.0 - smoothstep(0.10, 0.30, dev), u.occl);
+        a *= mix(1.0, 1.0 - smoothstep(0.16, 0.42, dev), u.occl);
     }
     return float4(mix(base, col, a), 1.0);
 }
@@ -1995,6 +1995,17 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                                 float al = 1.f / (1.f + fs / (6.2832f * fc));
                                 flt[v][c2] += al * (f3.verts[v][c2] - flt[v][c2]);
                             }
+                        // NaN guard: a single NaN vertex from ARKit (tracking
+                        // glitch) permanently corrupts the filter's static
+                        // state, producing exploding/piercing geometry.
+                        bool bad = false;
+                        for (int z = 0; z < ARKIT_NPTS && !bad; ++z)
+                            for (int c2 = 0; c2 < 3; ++c2)
+                                if (!isfinite(flt[z][c2])) { bad = true; break; }
+                        if (bad) {
+                            memcpy(flt, f3.verts, sizeof(flt));
+                            memset(dflt, 0, sizeof(dflt));
+                        } else
                         memcpy(f3.verts, flt, sizeof(f3.verts));
                     }
                 }
@@ -2021,6 +2032,12 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                 lookn.shadow = lookn.lip = lookn.blush = 0.f;
                 lookn.freckles = lookn.nose_blush = 0.f;
                 lookn.iris_tint = 0.f;   // native iris pass handles it
+                // Kill the pixel-space shape warp (vline/nose/eyes/cheek) on
+                // the native 3D path: it deforms the COMPOSITED result (skin +
+                // pigment) AFTER the mesh already placed makeup correctly,
+                // shifting liner/lip edges → "piercing." The mesh carries
+                // expressions natively; no extra 2D warp is needed.
+                lookn.eyes = lookn.vline = lookn.nose = lookn.cheek = 0.f;
                 FaceRenderPlan plan;
                 if (face_filter_build_plan_from_arkit(lookn, famt, obs2d, sw, sh, plan)
                     && plan.valid) {
