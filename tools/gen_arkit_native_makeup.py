@@ -248,26 +248,29 @@ def el_shadow(cv, img, lid=None, crease=None, outer=None, inner=None,
               shimmer=None, lower=None, height=1.0, seed=0):
     """Layered eye: lid wash, crease depth, outer-V, inner light, lower."""
     eye_d = np.linalg.norm(cv.eyes[0].center - cv.eyes[1].center)
-    H = eye_d * 0.34 * height
+    # Total lid stack height. The eye hole-to-brow distance in ARKit UV is
+    # ~0.2*eye_d — 0.34 reached the brow on a real face (douyin QA read as
+    # 'pink pigment placed too high'). Keep the whole stack on the lid.
+    H = eye_d * 0.17 * height
     for eye in cv.eyes:
         if crease:
             c, a = crease
             l = layer()
             ImageDraw.Draw(l).polygon(
-                _band(eye, (0.04, 0.96), H * 0.55, H * 1.05), fill=rgba(c, a))
-            img = over(img, blur(l, eye_d * 0.045))
+                _band(eye, (0.04, 0.96), H * 0.50, H * 1.0), fill=rgba(c, a))
+            img = over(img, blur(l, eye_d * 0.035))
         if lid:
             c, a = lid
             l = layer()
             ImageDraw.Draw(l).polygon(
-                _band(eye, (0.02, 0.98), H * 0.10, H * 0.60), fill=rgba(c, a))
-            img = over(img, blur(l, eye_d * 0.030))
+                _band(eye, (0.02, 0.98), H * 0.10, H * 0.58), fill=rgba(c, a))
+            img = over(img, blur(l, eye_d * 0.024))
         if outer:
             c, a = outer
             l = layer()
             ImageDraw.Draw(l).polygon(
-                _band(eye, (0.0, 0.30), H * 0.15, H * 0.85), fill=rgba(c, a))
-            img = over(img, blur(l, eye_d * 0.040))
+                _band(eye, (0.0, 0.30), H * 0.15, H * 0.80), fill=rgba(c, a))
+            img = over(img, blur(l, eye_d * 0.032))
         if lower:
             c, a = lower
             l = layer()
