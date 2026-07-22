@@ -104,6 +104,12 @@ static CVPixelBufferRef skin_frame() {
             float dx = (float)x / W - 0.5f, dy = (float)y / H - 0.5f;
             int grad = (int)(-28.0f * (dx * dx + dy * dy));
             int delta = n / 16 + grad;
+            // QA: fake occluder — a dark diagonal bar across the frame so
+            // the skin-gate must suppress makeup where it crosses the face.
+            if (getenv("PMS_FAKE_OCCLUDER")) {
+                float dbar = fabsf((float)x / W - (float)y / H);
+                if (dbar < 0.045) delta = -110;
+            }
             for (int c = 0; c < 3; ++c) {
                 int v = g_skin[2 - c] + delta;
                 q[c] = (uint8_t)std::min(255, std::max(0, v));
