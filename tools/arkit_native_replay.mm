@@ -198,10 +198,20 @@ int main(int argc, char** argv) {
             // (docs/ARKIT_NATIVE_PLAN.md Phase 0) and write PNGs every 45
             // frames for eyes-on art review on the wearer's true
             // proportions. Assertions don't apply — this is a review tool.
+            // Neutral skin bundle when QA-forcing an atlas: without these
+            // overrides the run inherits the filter's own skin params (Goth's
+            // 0.62 smooth / 0.28 desat washed out every look in review).
+            json params = {{"face_filter", filter_id},
+                           {"face_amount", amount}};
+            if (getenv("PMS_NATIVE_ATLAS")) {
+                params["smooth"] = 0.40; params["brighten"] = 0.15;
+                params["warmth"] = 0.0; params["desat"] = 0.0;
+                params["chrome"] = 0.0; params["scanlines"] = 0.0;
+                params["skin_tint"] = 0.0; params["eye_pop"] = 0.0;
+            }
             cmd("set_live_fx",
-                {{"fx", json::array({ {{"fx_type", "face_fx"},
-                   {"params", {{"face_filter", filter_id},
-                               {"face_amount", amount}}}} })}});
+                {{{"fx"}, json::array({ {{{"fx_type"}, "face_fx"},
+                   {"params", params}} })}});
             FILE* jf = fopen(obj_path.c_str(), "r");
             if (!jf) fail("open " + obj_path);
             // Pre-scan: find the interesting frames — max blink, extreme gaze,
