@@ -304,8 +304,8 @@ def el_lashes(cv, img, strength=0.8, style="doll", lower=False,
             sweep = rng.uniform(-0.30, 0.10) if style != "cat" else -0.45
             tip = root + out * ln + tan * ln * sweep
             d, wt = dist_to_polyline(TX, np.array([root, tip]))
-            w = 0.42 * (1 - 0.55 * wt)          # taper to the tip
-            ink = (1 - smooth(w - 0.15, w + 0.25, d)) * 230 * min(strength, 1.2)
+            w = 0.65 * (1 - 0.50 * wt)          # thicker base; taper to tip
+            ink = (1 - smooth(w - 0.18, w + 0.30, d)) * 240 * min(strength, 1.2)
             lay = new_img(); lay[:, :3] = color; lay[:, 3] = ink
             l = over(l, lay)
         if lower:
@@ -322,8 +322,8 @@ def el_lashes(cv, img, strength=0.8, style="doll", lower=False,
                 ln = 1.8 * rng.uniform(0.7, 1.2)
                 tip = root + out * ln
                 d, wt = dist_to_polyline(TX, np.array([root, tip]))
-                w = 0.32 * (1 - 0.5 * wt)
-                ink = (1 - smooth(w - 0.12, w + 0.2, d)) * 180 * min(strength, 1.2)
+                w = 0.48 * (1 - 0.45 * wt)
+                ink = (1 - smooth(w - 0.14, w + 0.22, d)) * 200 * min(strength, 1.2)
                 lay = new_img(); lay[:, :3] = color; lay[:, 3] = ink
                 l = over(l, lay)
     return over(img, l)
