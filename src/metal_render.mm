@@ -967,27 +967,26 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
     float3 mkcol = mix(tinted, covered, coverage);
     mkcol = clamp(mkcol + detail * (1.0 - 0.55 * coverage), 0.0, 1.0);
     float a = clamp(mkc.a * u.opacity, 0.0, 1.0);
-    // Grazing-angle fade: ARKit's geometry is approximate at the
-    // silhouette — where the surface turns edge-on the mesh can stick out
-    // past the real face ("mask edge"), so pigment fades there instead of
-    // painting the background.
-    a *= smoothstep(0.18, 0.46, fabs(in.facing));
-    // Occlusion gate: pigment must not paint whatever passes IN FRONT of
-    // the face (hair, sleeves, objects). Compare the covered pixel against
-    // a per-frame skin reference (component-wise median of forehead +
-    // cheek samples from the un-makeup'd source); where chroma/luma
-    // deviates strongly, the pixel isn't face skin -> fade pigment out.
-    if (u.occl > 0.001) {
-        float3 s0 = srct.sample(s, u.ref[0] / u.dim).rgb;
-        float3 s1 = srct.sample(s, u.ref[1] / u.dim).rgb;
-        float3 s2 = srct.sample(s, u.ref[2] / u.dim).rgb;
-        float3 refc = median3(s0, s1, s2);
-        float rl = f_lum(refc) + 0.06;
-        float bl = f_lum(base) + 0.06;
-        float3 rch = refc / rl, bch = base / bl;
-        float dev = length(bch - rch) + 0.8 * fabs(bl - rl);
-        float fade = 1.0 - smoothstep(0.16, 0.42, dev);
-        a *= mix(1.0, fade, u.occl);
+    // Dark ink (liner, lashes) bypasses both the grazing fade and the
+    // occlusion gate: it's sharp pigment that must read at the eye rim
+    // (high curvature + shadowed skin differ from the cheek/forehead
+    // skin reference). Only translucent cosmetics (shadow/blush/lip/
+    // highlight) get gated.
+    bool dark_ink = plum < 0.14;
+    if (!dark_ink) {
+        a *= smoothstep(0.18, 0.46, fabs(in.facing));
+        if (u.occl > 0.001) {
+            float3 s0 = srct.sample(s, u.ref[0] / u.dim).rgb;
+            float3 s1 = srct.sample(s, u.ref[1] / u.dim).rgb;
+            float3 s2 = srct.sample(s, u.ref[2] / u.dim).rgb;
+            float3 refc = median3(s0, s1, s2);
+            float rl = f_lum(refc) + 0.06;
+            float bl = f_lum(base) + 0.06;
+            float3 rch = refc / rl, bch = base / bl;
+            float dev = length(bch - rch) + 0.8 * fabs(bl - rl);
+            float fade = 1.0 - smoothstep(0.16, 0.42, dev);
+            a *= mix(1.0, fade, u.occl);
+        }
     }
     return float4(mix(base, mkcol, a), 1.0);
 }
