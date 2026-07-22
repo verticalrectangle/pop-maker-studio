@@ -981,7 +981,7 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
         float3 s0 = srct.sample(s, u.ref[0] / u.dim).rgb;
         float3 s1 = srct.sample(s, u.ref[1] / u.dim).rgb;
         float3 s2 = srct.sample(s, u.ref[2] / u.dim).rgb;
-        float3 refc = median(s0, s1, s2);
+        float3 refc = median3(s0, s1, s2);
         float rl = f_lum(refc) + 0.06;
         float bl = f_lum(base) + 0.06;
         float3 rch = refc / rl, bch = base / bl;
@@ -1020,7 +1020,7 @@ fragment float4 face_iris_f(IrisVOut in [[stage_in]],
         float3 s0 = srct.sample(s, u.ref[0] / u.dim).rgb;
         float3 s1 = srct.sample(s, u.ref[1] / u.dim).rgb;
         float3 s2 = srct.sample(s, u.ref[2] / u.dim).rgb;
-        float3 refc = median(s0, s1, s2);
+        float3 refc = median3(s0, s1, s2);
         float rl = f_lum(refc) + 0.06;
         float bl = f_lum(base) + 0.06;
         float dev = length(base / bl - refc / rl) + 0.8 * fabs(bl - rl);
