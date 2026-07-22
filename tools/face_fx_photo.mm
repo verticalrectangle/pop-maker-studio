@@ -219,10 +219,21 @@ int main(int argc, char** argv) {
             write_png(prefix + "_landmarks.png", lm);
         }
 
+        json look_params = {{"face_filter", filter_id},
+                            {"face_amount", amount}};
+        json look_entry = {{"fx_type", "face_fx"}, {"params", look_params}};
+        if (const char* tex = getenv("PMS_PHOTO_TEX")) {
+            // Plate QA: force the makeup texture + a neutral skin bundle so
+            // the filter's own smooth/desat doesn't distort the read.
+            look_params["smooth"] = 0.40; look_params["brighten"] = 0.15;
+            look_params["warmth"] = 0.0; look_params["desat"] = 0.0;
+            look_params["chrome"] = 0.0; look_params["scanlines"] = 0.0;
+            look_params["skin_tint"] = 0.0; look_params["eye_pop"] = 0.0;
+            look_entry["params"] = look_params;
+            look_entry["face_makeup_tex"] = tex;
+        }
         cmd("set_live_fx",
-            {{"fx", json::array({ {{"fx_type", "face_fx"},
-                                   {"params", {{"face_filter", filter_id},
-                                               {"face_amount", amount}}}} })}});
+            {{"fx", json::array({ look_entry })}});
         pms_submit_camera_frame(g_e, pb, 0, 10.1);
         Img out = render_frame("look");
         write_png(prefix + "_look.png", out);
