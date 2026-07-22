@@ -10,6 +10,7 @@
 // Env:   PMS_NATIVE_ATLAS=checker.png  — force the checker atlas (Phase 1).
 //        PMS_ASSET_ROOT / PMS_SHADER_DIR as usual.
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -93,7 +94,21 @@ static CVPixelBufferRef skin_frame() {
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
             uint8_t* q = dst + (size_t)y * bpr + (size_t)x * 4;
-            q[0] = g_skin[2]; q[1] = g_skin[1]; q[2] = g_skin[0]; q[3] = 255;
+            // Subtle deterministic skin texture: value noise + a soft radial
+            // falloff. A flat fill hides exactly what art QA needs to see —
+            // whether pigment preserves skin detail (realism) or plasters
+            // over it (decal). Mean stays g_skin.
+            uint32_t h32 = (uint32_t)(x * 374761393u + y * 668265263u);
+            h32 = (h32 ^ (h32 >> 13)) * 1274126177u;
+            int n = (int)((h32 >> 8) & 0xff) - 128;
+            float dx = (float)x / W - 0.5f, dy = (float)y / H - 0.5f;
+            int grad = (int)(-28.0f * (dx * dx + dy * dy));
+            int delta = n / 16 + grad;
+            for (int c = 0; c < 3; ++c) {
+                int v = g_skin[2 - c] + delta;
+                q[c] = (uint8_t)std::min(255, std::max(0, v));
+            }
+            q[3] = 255;
         }
     CVPixelBufferUnlockBaseAddress(pb, 0);
     return pb;
@@ -235,7 +250,7 @@ int main(int argc, char** argv) {
                 if (rec.is_discarded()) continue;
                 if (!fpb) {
                     int vw = rec.value("w", 1080), vh = rec.value("h", 1440);
-                    W = vw / 2; H = vh / 2;
+                    W = vw; H = vh;   // full-res: half-res hides liner/lash adhesion artifacts
                     [g_target release];
                     MTLTextureDescriptor* td2 = [MTLTextureDescriptor
                         texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
