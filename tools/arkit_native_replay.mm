@@ -189,6 +189,40 @@ int main(int argc, char** argv) {
                                {"face_amount", amount}}}} })}});
             FILE* jf = fopen(obj_path.c_str(), "r");
             if (!jf) fail("open " + obj_path);
+            // Pre-scan: find the interesting frames — max blink, extreme gaze,
+            // extreme yaw — so art review always includes the hard cases even
+            // when they fall between the every-45 dumps.
+            int blink_frame = -1, gaze_frame = -1, yaw_frame = -1;
+            {
+                float best_blink = 0.3f, best_gaze = 0.3f, best_yaw = 0.f;
+                std::string pl;
+                int pc, pi = 0;
+                while ((pc = fgetc(jf)) != EOF) {
+                    if (pc != '\n') { pl.push_back((char)pc); continue; }
+                    if (!pl.empty()) {
+                        json pr = json::parse(pl, nullptr, false);
+                        pl.clear();
+                        if (!pr.is_discarded() && pr.contains("blend")) {
+                            auto& b = pr["blend"];
+                            auto bs = [&](int k) { return k < (int)b.size() ? (float)b[k].get<double>() : 0.f; };
+                            float blink = std::max(bs(9), bs(10));
+                            float gaze = std::max(std::max(bs(15), bs(16)),
+                                                  std::max(bs(17), bs(18)));
+                            float yawr = 0.f;
+                            if (pr.contains("model")) {
+                                auto& m = pr["model"];
+                                // column 2 x-component ~ face normal yaw
+                                yawr = std::fabs((float)m[8].get<double>());
+                            }
+                            if (blink > best_blink) { best_blink = blink; blink_frame = pi; }
+                            if (gaze > best_gaze) { best_gaze = gaze; gaze_frame = pi; }
+                            if (yawr > best_yaw) { best_yaw = yawr; yaw_frame = pi; }
+                        }
+                    }
+                    ++pi;
+                }
+                rewind(jf);
+            }
             std::string linebuf;
             int ch2, fidx = 0, written = 0;
             CVPixelBufferRef fpb = nullptr;
@@ -234,10 +268,16 @@ int main(int argc, char** argv) {
                 int rc2 = pms_render(g_e, (__bridge void*)g_target, W, H);
                 if (rc2 != 0) fail("render rc (fixture)");
                 pms_render_wait(g_e);
-                if (fidx % 45 == 0) {
+                bool dump = (fidx % 45 == 0);
+                const char* tag = nullptr;
+                if (fidx == blink_frame) { dump = true; tag = "blink"; }
+                else if (fidx == gaze_frame) { dump = true; tag = "gaze"; }
+                else if (fidx == yaw_frame) { dump = true; tag = "yaw"; }
+                if (dump) {
                     Img im2 = read_target();
                     char nm[64];
-                    snprintf(nm, sizeof nm, "_f%03d.png", fidx);
+                    if (tag) snprintf(nm, sizeof nm, "_%s_f%03d.png", tag, fidx);
+                    else snprintf(nm, sizeof nm, "_f%03d.png", fidx);
                     write_png(prefix + nm, im2);
                     ++written;
                 }
