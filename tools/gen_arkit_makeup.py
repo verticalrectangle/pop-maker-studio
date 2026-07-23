@@ -1,126 +1,71 @@
 #!/usr/bin/env python3
-"""Bake ARKit-UV makeup atlases (docs/ARKIT_NATIVE_PLAN.md Phase 2).
+"""ARKit makeup atlas painter — paint-on-model, single look.
 
-The native tier-1 path renders ARKit's own face mesh textured in ARKit UV
-space. Two atlas sources:
+Every element is painted ON the canonical ARKit head in MILLIMETERS (lid-rim
+polylines, lip ring, cheek anchors), then rasterized through the mesh's own
+triangles into its ARKit-UV texture. Placement is correct by construction:
+the eye-hole rim IS the lash line, the mouth ring IS the vermilion border, so
+liner rides the lashes and lips hug the mouth — no UV-space curve fitting that
+flips or floats on device.
 
-  1. Plate PNGs (MakeupStudio, authored in MediaPipe canonical UV space):
-     resampled through a precomputed ARKit-UV -> MP-UV warp map derived from
-     the canonical-mesh correspondence (offline use, where its error is a
-     small pigment-placement offset, not per-frame motion).
-  2. Builtin FaceFilter looks (procedural lash/liner/shadow/lip/blush/...):
-     parsed straight out of face_filters.cpp, painted into MP UV space from
-     landmark UV geometry, then warped like plates. Output: arkit/look_<id>.png
+CRISPNESS: the position map + all painting run at SS×SIZE (default 2× = 2048²)
+and the result is downsampled to 1024² with Lanczos. Thin features (liner,
+lashes) that aliased to nothing at 1024² — because the mesh samples the atlas
+at a foreshortened angle near the rim — anti-alias correctly through the
+downsample. This is the fix for "liner not a clean line, no lashes."
 
-Also emits arkit/checker.png (Phase-1 alignment QA texture).
+Output: models/face/arkit/makeup_<id>.png (RGBA 1024²).
+Verify on a REAL face fixture via arkit-native-replay before ship — the
+canonical head's proportions lie (brows, eye shape, jitter are per-person).
 
-Usage: tools/gen_arkit_makeup.py [--assets ~/dev/pms-ios/Engine/EngineAssets]
+Usage:
+  tools/gen_arkit_makeup.py [--assets <dir>] [--ss N] [--only id ...]
 """
 import argparse
+import hashlib
 import os
-import re
 import sys
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
-from scipy.spatial import cKDTree
+from PIL import Image
 
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, here)
-import gen_arkit_mp_map as G  # parse_obj / parse_header_array / umeyama / tps
+import gen_arkit_mp_map as G   # parse_obj / parse_header_array / boundary_rings / ring_near
 
-SRC_GEN = os.path.join(here, "..", "src", "generated")
 SIZE = 1024
+SS = 2                          # supersample: paint at SS*SIZE, downsample to SIZE
+SRC_GEN = os.path.join(here, "..", "src", "generated")
 
-# MP landmark index geometry (person's R = viewer-left in canonical UV).
-LIP_OUT = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291,
-           375, 321, 405, 314, 17, 84, 181, 91, 146]
-LIP_IN = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308,
-          324, 318, 402, 317, 14, 87, 178, 88, 95]
-LASH_R = [33, 246, 161, 160, 159, 158, 157, 173, 133]
-LASH_L = [263, 466, 388, 387, 386, 385, 384, 398, 362]
-BROW_R = 105
-BROW_L = 334
-CHEEK_R = 50
-CHEEK_L = 280
-UNDEREYE_R = 100
-UNDEREYE_L = 329
-NOSE_TIP = 1
-NOSE_BRIDGE = 6
+# ── ARKit topology ─────────────────────────────────────────────────────────
+# Validated in arkit_map_smoke + gen_arkit_mp_map anchors. The canonical head
+# faces +z with +y up, so +x = the person's LEFT in model space (matches MP).
+#   person's RIGHT eye: outer 1101, inner 1090, upper-rim arc 1100..1091 (x<0)
+#   person's LEFT  eye: outer 1069, inner 1080, upper-rim arc 1070..1079 (x>0)
+#   mouth hole flanked by verts 249 (right corner) / 684 (left corner)
+ARC_UP_R = [1100, 1099, 1098, 1097, 1096, 1095, 1094, 1093, 1092, 1091]
+ARC_UP_L = [1070, 1071, 1072, 1073, 1074, 1075, 1076, 1077, 1078, 1079]
+CORNERS_R = (1101, 1090)        # (outer, inner)
+CORNERS_L = (1069, 1080)
+MOUTH_TARGET = (249, 684)
 
 
-def build_correspondence():
-    """MP verts warped into ARKit space.
-
-    Similarity fit + TPS with the MP lash contours PINNED to the ARKit
-    eye-hole rims and the inner-lip ring pinned to the mouth hole. For the
-    live RENDER that pinning was wrong (the hole edge is not the moving
-    lash line) — but for a STATIC atlas bake it is exactly right: plate art
-    authored along the MP lash line must land on the rim, which is where
-    the lash roots live on the mesh. Similarity-only left ~5mm RMS and
-    plate eyeliner floated above the lash line on device.
-    """
-    ak_v = G.parse_obj(os.path.join(here, "arkit_face_canonical.obj"))
-    mp_v = G.parse_obj(os.path.join(here, "canonical_face_model.obj"))
-    ak_tris = G.parse_header_array(
-        os.path.join(SRC_GEN, "arkit_face_mesh.h"),
-        "k_arkit_tris", (2304, 3)).astype(int)
-    mi = [m for m, _ in G.ANCHORS]
-    ai = [a for _, a in G.ANCHORS]
-    s, R, t = G.umeyama(mp_v[mi], ak_v[ai])
-    mp_w = s * (R @ mp_v.T).T + t
-
-    ak_rings = G.boundary_rings(ak_tris, 1220)
-    MP_EYE_R = [33, 246, 161, 160, 159, 158, 157, 173, 133,
-                155, 154, 153, 145, 144, 163, 7]
-    MP_EYE_L = [263, 466, 388, 387, 386, 385, 384, 398, 362,
-                382, 381, 380, 374, 373, 390, 249]
-    MP_LIPS_IN = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308,
-                  324, 318, 402, 317, 14, 87, 178, 88, 95]
-    pairs = [
-        (MP_EYE_R, (1101, 1090), 33, 1101),
-        (MP_EYE_L, (1069, 1080), 263, 1069),
-        (MP_LIPS_IN, (249, 684), 78, 249),
-    ]
-    src_ctrl = [mp_w[mi]]
-    dst_ctrl = [ak_v[ai]]
-    # Identity pins on the brows: the rim pinning below must stay LOCAL to
-    # the eyes — without these the TPS drags the whole brow region up with
-    # the upper lash correction and plate brow art rendered ~1cm above the
-    # real brows on device. (The similarity fit places brows about right:
-    # the live overlay's brow landmarks sat on the user's brows.)
-    BROWS = [70, 63, 105, 66, 107, 46, 53, 52, 65, 55,
-             300, 293, 334, 296, 336, 276, 283, 282, 295, 285]
-    src_ctrl.append(mp_w[BROWS])
-    dst_ctrl.append(mp_w[BROWS])
-    for mring, ak_t, mp_c, ak_c in pairs:
-        aring = G.ring_near(ak_rings, ak_v, ak_v[list(ak_t)].mean(0))
-        mring = G.orient_ring(list(mring), mp_w, mp_w[mp_c])
-        aring = G.orient_ring(aring, ak_v, ak_v[ak_c])
-        mpts = mp_w[mring]
-        seg = np.sqrt(((np.roll(mpts, -1, 0) - mpts) ** 2).sum(1))
-        ts = np.concatenate([[0.0], np.cumsum(seg)[:-1]]) / seg.sum()
-        src_ctrl.append(mpts)
-        dst_ctrl.append(G.ring_resample(ak_v[aring], ts))
-    mp_w = G.tps_warp(np.vstack(src_ctrl), np.vstack(dst_ctrl), mp_w)
-    return ak_v, mp_w
-
-
+# ── mesh → UV rasterization ────────────────────────────────────────────────
 def parse_uvs():
+    """ARKit UV coords + triangle indices from the generated mesh header."""
     ak_uv = G.parse_header_array(os.path.join(SRC_GEN, "arkit_face_mesh.h"),
                                  "k_arkit_uv", (1220, 2))
     ak_tris = G.parse_header_array(os.path.join(SRC_GEN, "arkit_face_mesh.h"),
                                    "k_arkit_tris", (2304, 3)).astype(int)
-    mp_uv = G.parse_header_array(os.path.join(SRC_GEN, "face_uv_mesh.h"),
-                                 "k_face_uv", (468, 2))
-    mp_tris = G.parse_header_array(os.path.join(SRC_GEN, "face_uv_mesh.h"),
-                                   "k_face_tris", (898, 3)).astype(int)
-    return ak_uv, ak_tris, mp_uv, mp_tris
+    return ak_uv, ak_tris
 
 
 def rasterize_positions(uv, tris, verts, size):
-    """Per-texel 3D position map for a mesh in its own UV space.
-    Returns (pos[size,size,3], mask[size,size])."""
+    """Per-texel 3D position (mm) for a mesh in its own UV space.
+
+    Returns (pos[size,size,3], mask[size,size]). mask=True where a triangle
+    covers the texel — i.e. on-face skin (eye/mouth holes stay False, so paint
+    never lands inside the apertures)."""
     pos = np.zeros((size, size, 3), np.float64)
     mask = np.zeros((size, size), bool)
     puv = uv * (size - 1)
@@ -145,489 +90,409 @@ def rasterize_positions(uv, tris, verts, size):
         if not inside.any():
             continue
         pt = (w0[..., None] * v0 + w1[..., None] * v1 + w2[..., None] * v2)
-        sel_y, sel_x = ys[inside], xs[inside]
-        pos[sel_y, sel_x] = pt[inside]
-        mask[sel_y, sel_x] = True
+        pos[ys[inside], xs[inside]] = pt[inside]
+        mask[ys[inside], xs[inside]] = True
     return pos, mask
 
 
-def build_warp_map(cache_path):
-    """warp[y,x] = MP-UV pixel coords sampling the same skin as ARKit texel."""
-    if os.path.exists(cache_path):
-        z = np.load(cache_path)
-        return z["warp"], z["mask"]
-    ak_v, mp_w = build_correspondence()
-    ak_uv, ak_tris, mp_uv, mp_tris = parse_uvs()
-    print("rasterizing ARKit UV positions...")
-    ak_pos, ak_mask = rasterize_positions(ak_uv, ak_tris, ak_v, SIZE)
-    print("rasterizing MP UV positions...")
-    mp_pos, mp_mask = rasterize_positions(mp_uv, mp_tris, mp_w, SIZE)
-    mp_yx = np.argwhere(mp_mask)
-    tree = cKDTree(mp_pos[mp_mask])
-    q = ak_pos[ak_mask]
-    print(f"kd-query {len(q)} texels...")
-    dist, idx = tree.query(q, workers=-1)
-    warp = np.zeros((SIZE, SIZE, 2), np.float32)
-    warp[ak_mask] = mp_yx[idx][:, ::-1]  # store as (x, y)
-    # Texels whose skin is far from any MP surface stay unmapped ->
-    # transparent in every atlas. Tight tolerance: nearest-surface lookups
-    # past the MP mesh edge SMEAR edge pixels (liner ink!) sideways across
-    # the temple — on device that read as a rigid wing spike at 3/4 views.
-    far = np.zeros((SIZE, SIZE), bool)
-    far[ak_mask] = dist > 9.0  # mm
-    mask = ak_mask & ~far
-    np.savez_compressed(cache_path, warp=warp, mask=mask)
-    print(f"cached {cache_path}")
-    return warp, mask
+# ── canonical-head geometry (built once) ───────────────────────────────────
+print("loading canonical head + rasterizing UV positions "
+      f"(SS={SS}, {SS * SIZE}²)...")
+AK_V = G.parse_obj(os.path.join(here, "arkit_face_canonical.obj"))
+AK_UV, AK_TRIS = parse_uvs()
+SSIZE = SS * SIZE
+POS, MASK = rasterize_positions(AK_UV, AK_TRIS, AK_V, SSIZE)
+TX = POS[MASK]                          # (N,3) per-texel 3D positions, mm
+NTX = TX.shape[0]
+print(f"  {NTX} on-face texels")
 
 
-def warp_image(img_rgba, warp, mask):
-    src = np.asarray(img_rgba, np.uint8).astype(np.float32)
-    if src.shape[0] != SIZE:
-        src = np.asarray(img_rgba.resize((SIZE, SIZE)), np.uint8).astype(np.float32)
-    out = np.zeros((SIZE, SIZE, 4), np.float32)
-    xy = warp[mask]
-    x0 = np.clip(np.floor(xy[:, 0]).astype(int), 0, SIZE - 2)
-    y0 = np.clip(np.floor(xy[:, 1]).astype(int), 0, SIZE - 2)
-    fx = np.clip(xy[:, 0] - x0, 0, 1)[:, None]
-    fy = np.clip(xy[:, 1] - y0, 0, 1)[:, None]
-    out[mask] = (src[y0, x0] * (1 - fx) * (1 - fy)
-                 + src[y0, x0 + 1] * fx * (1 - fy)
-                 + src[y0 + 1, x0] * (1 - fx) * fy
-                 + src[y0 + 1, x0 + 1] * fx * fy)
-    return Image.fromarray(out.astype(np.uint8))
+def ring_3d(target_verts):
+    c = AK_V[list(target_verts)].mean(0)
+    return G.ring_near(G.boundary_rings(AK_TRIS, 1220), AK_V, c)
 
 
-# ── builtin-look parsing ────────────────────────────────────────────────────
-INIT_FIELDS = ["smooth", "brighten", "warmth", "eye_pop", "blush", "lip",
-               "eyes", "cheek", "vline", "nose", "lips_plump"]
+class Eye:
+    """Upper/lower rim polylines (outer→inner) + corners, in mm."""
+
+    def __init__(self, corners, up_arc):
+        ring = ring_3d(corners)
+        up = [AK_V[c] for c in [corners[0]] + list(up_arc) + [corners[1]]]
+        low_ids = [v for v in ring if v not in up_arc and v not in corners]
+        o, i = AK_V[corners[0]], AK_V[corners[1]]
+        ax = i - o
+        ax = ax / np.linalg.norm(ax)
+        low_ids.sort(key=lambda v: float((AK_V[v] - o) @ ax))
+        low = [AK_V[corners[0]]] + [AK_V[v] for v in low_ids] + [AK_V[corners[1]]]
+        self.up = np.array(up)           # upper rim (lash line), outer→inner
+        self.low = np.array(low)         # lower rim (waterline), outer→inner
+        self.center = self.up.mean(0)
+        self.outer = AK_V[corners[0]]
+        self.inner = AK_V[corners[1]]
 
 
-def parse_looks(face_filters_cpp):
-    """FaceFilter id -> {field: value} from the case blocks."""
-    src = open(face_filters_cpp).read()
-    hdr = open(face_filters_cpp.replace(".cpp", ".h")).read()
-    enum = re.search(r"enum class FaceFilter \{(.*?)\};", hdr, re.S).group(1)
-    ids, i = {}, 0
-    # strip comments LINE-WISE first: enum comments contain commas and a
-    # comma-split would mint phantom entries ("bronze contour"), shifting
-    # every id after them.
-    clean = "\n".join(re.sub(r"//.*", "", ln) for ln in enum.splitlines())
-    for tok in clean.split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        if "=" in tok:
-            name, val = tok.split("=")
-            i = int(val)
-            ids[name.strip()] = i
-        else:
-            ids[tok] = i
-        i += 1
-    looks = {}
-    for m in re.finditer(
-            r"case FaceFilter::(\w+):(.*?)return true;", src, re.S):
-        name, body = m.group(1), m.group(2)
-        if name not in ids:
-            continue
-        lk = {}
-        init = re.search(r"L\s*=\s*\{([^}]*)\}", body)
-        if init:
-            vals = [float(x) for x in re.findall(r"-?[\d.]+", init.group(1))]
-            for k, v in zip(INIT_FIELDS, vals):
-                lk[k] = v
-        for mm in re.finditer(r"set3\(L\.(\w+),\s*([^)]*)\)", body):
-            lk[mm.group(1)] = [float(x) for x in
-                               re.findall(r"-?[\d.]+", mm.group(2))]
-        for mm in re.finditer(r"L\.(\w+)\s*=\s*(-?[\d.]+)f?", body):
-            lk[mm.group(1)] = float(mm.group(2))
-        looks[ids[name]] = lk
-    return looks
+EYES = [Eye(CORNERS_R, ARC_UP_R), Eye(CORNERS_L, ARC_UP_L)]
+_mpts = AK_V[np.array(ring_3d(MOUTH_TARGET))]
+_mc = _mpts.mean(0)
+_ang = np.arctan2(_mpts[:, 1] - _mc[1], _mpts[:, 0] - _mc[0])
+MOUTH = _mpts[np.argsort(_ang)]          # mouth ring, CCW
+MOUTH_C = _mc
+
+# face anchors (mm), straight off the canonical head
+EYE_D = float(np.linalg.norm(EYES[0].center - EYES[1].center))
+NOSE_TIP = AK_V[int(np.argmax(AK_V[:, 2]))]
+NOSE_BRIDGE = (EYES[0].center + EYES[1].center + NOSE_TIP) / 3.0
+CHIN = AK_V[int(np.argmin(AK_V[:, 1]))]
+CHEEK = [AK_V[311], AK_V[746]]           # cheekbones
+JAW = [AK_V[62], AK_V[511]]
+CUPID = MOUTH_C + np.array([0, 4.0, 3.0])
 
 
-# ── MP-UV painter ───────────────────────────────────────────────────────────
-def px(uv_pt):
-    return (float(uv_pt[0]) * (SIZE - 1), float(uv_pt[1]) * (SIZE - 1))
+# ── paint helpers (operate on NTX-length float RGBA arrays) ─────────────────
+def new_img():
+    return np.zeros((NTX, 4), np.float64)
 
 
-def paint_look_mp(lk, mp_uv):
-    img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    dr = ImageDraw.Draw(img)
-
-    def col(c, a):
-        return (int(c[0] * 255), int(c[1] * 255), int(c[2] * 255),
-                int(np.clip(a, 0, 1) * 255))
-
-    # blush (soft radial blobs, mid-cheek raised toward under-eye)
-    blush = lk.get("blush", 0.0)
-    if blush > 0.01:
-        c = lk.get("blush_col", [1.0, 0.45, 0.55])
-        raise_f = lk.get("blush_raise", 0.40)
-        layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-        d2 = ImageDraw.Draw(layer)
-        # blush apple: between the outer eye corner and the mouth corner,
-        # pushed laterally outward — the cheek-center landmark sat too
-        # medial on real faces (blobs hugged the nose).
-        for eye_c, mouth_c, sgn in ((33, 61, -1.0), (263, 291, 1.0)):
-            ex, ey = px(mp_uv[eye_c])
-            mx2, my2 = px(mp_uv[mouth_c])
-            bx = ex * 0.52 + mx2 * 0.48 + sgn * SIZE * 0.045
-            by = ey * 0.55 + my2 * 0.45 - SIZE * 0.01 * raise_f
-            r = SIZE * 0.075
-            d2.ellipse([bx - r, by - r, bx + r, by + r],
-                       fill=col(c, min(0.62 * blush, 0.75)))
-        layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.035))
-        img = Image.alpha_composite(img, layer)
-        dr = ImageDraw.Draw(img)
-
-    # freckles / nose blush (e-girl)
-    if lk.get("nose_blush", 0.0) > 0.01:
-        layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-        d2 = ImageDraw.Draw(layer)
-        nx, ny = px(mp_uv[NOSE_BRIDGE])
-        r = SIZE * 0.055
-        d2.ellipse([nx - r * 1.6, ny - r * 0.5, nx + r * 1.6, ny + r * 0.9],
-                   fill=col([0.95, 0.45, 0.45], 0.5 * lk["nose_blush"]))
-        layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.02))
-        img = Image.alpha_composite(img, layer)
-        dr = ImageDraw.Draw(img)
-    if lk.get("freckles", 0.0) > 0.01:
-        rng = np.random.default_rng(7)
-        layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-        d2 = ImageDraw.Draw(layer)
-        nx, ny = px(mp_uv[NOSE_BRIDGE])
-        for _ in range(55):
-            fx = nx + rng.normal(0, SIZE * 0.062)
-            fy = ny + rng.normal(0, SIZE * 0.026) + SIZE * 0.015
-            r = rng.uniform(0.5, 1.1)
-            a = 0.30 * lk["freckles"] * rng.uniform(0.4, 1.0)
-            d2.ellipse([fx - r, fy - r, fx + r, fy + r],
-                       fill=col([0.45, 0.28, 0.18], a))
-        layer = layer.filter(ImageFilter.GaussianBlur(0.8))
-        img = Image.alpha_composite(img, layer)
-        dr = ImageDraw.Draw(img)
-
-    # (eyeshadow/liner/lash/wing are painted DIRECTLY in ARKit UV along the
-    # real eye-hole rim — see paint_eyes_arkit — so the precision-critical
-    # elements never pass through the warp map.)
-    shadow = 0.0
-    _unused_shadow = lk.get("shadow", 0.0)
-    if shadow > 0.01:
-        c = lk.get("shadow_col", [0.35, 0.22, 0.30])
-        layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-        d2 = ImageDraw.Draw(layer)
-        for chain, brow in ((LASH_R, BROW_R), (LASH_L, BROW_L)):
-            pts = [px(mp_uv[i]) for i in chain]
-            bx, by = px(mp_uv[brow])
-            mx = np.mean([p[0] for p in pts])
-            my = np.mean([p[1] for p in pts])
-            h = min(0.42 + 0.30 * shadow, 0.85)
-            up = [(p[0] + (bx - mx) * h, p[1] + (by - my) * h) for p in pts]
-            d2.polygon(pts + up[::-1], fill=col(c, min(0.60 * shadow, 0.78)))
-        layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.014))
-        img = Image.alpha_composite(img, layer)
-        dr = ImageDraw.Draw(img)
-
-    liner = 0.0
-    _unused_liner = lk.get("liner", 0.0)
-    if liner > 0.01:
-        wpx = max(2.0, SIZE * 0.004 * (0.7 + 0.6 * min(liner, 2.0)))
-        for chain in (LASH_R, LASH_L):
-            pts = [px(mp_uv[i]) for i in chain]
-            dr.line(pts, fill=(12, 8, 12, int(240 * min(liner, 1.0))),
-                    width=int(wpx), joint="curve")
-    wing = 0.0
-    _unused_wing = lk.get("lash_wing", 0.0)
-    if wing > 0.01:
-        for chain, sgn in ((LASH_R, -1.0), (LASH_L, 1.0)):
-            o = np.array(px(mp_uv[chain[0]]))
-            n1 = np.array(px(mp_uv[chain[1]]))
-            d = o - n1
-            d = d / (np.linalg.norm(d) + 1e-6)
-            tip = o + d * SIZE * 0.035 * wing + np.array([0, -SIZE * 0.012])
-            dr.line([tuple(o), tuple(tip)],
-                    fill=(12, 8, 12, 235), width=max(2, int(SIZE * 0.005)))
-
-    lash = 0.0
-    _unused_lash = lk.get("lash", 0.0)
-    if lash > 0.01:
-        rng = np.random.default_rng(3)
-        for chain in (LASH_R, LASH_L):
-            pts = np.array([px(mp_uv[i]) for i in chain], float)
-            n = int(10 + 8 * min(lash, 2.0))
-            for k in range(n):
-                t = (k + 0.5) / n
-                seg = t * (len(pts) - 1)
-                i0 = min(int(seg), len(pts) - 2)
-                f = seg - i0
-                base = pts[i0] * (1 - f) + pts[i0 + 1] * f
-                dirv = pts[i0 + 1] - pts[i0]
-                nrm = np.array([-dirv[1], dirv[0]])
-                nrm = nrm / (np.linalg.norm(nrm) + 1e-6)
-                if nrm[1] > 0:
-                    nrm = -nrm  # up = toward brow (smaller y in MP UV? sign-checked below)
-                ln = SIZE * (0.010 + 0.008 * min(lash, 1.6)) \
-                    * rng.uniform(0.7, 1.25)
-                tip = base + nrm * ln + dirv / (np.linalg.norm(dirv) + 1e-6) \
-                    * ln * 0.35 * (1 - t)
-                dr.line([tuple(base), tuple(tip)],
-                        fill=(10, 7, 10, int(200 * min(lash, 1.0))), width=2)
-
-    # lip: outer ring filled, inner ring (aperture) cleared
-    lip = lk.get("lip", 0.0)
-    if lip > 0.01:
-        c = lk.get("lip_col", [0.95, 0.25, 0.35])
-        layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-        d2 = ImageDraw.Draw(layer)
-        d2.polygon([px(mp_uv[i]) for i in LIP_OUT],
-                   fill=col(c, min(0.80 * lip, 0.9)))
-        d2.polygon([px(mp_uv[i]) for i in LIP_IN], fill=(0, 0, 0, 0))
-        layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.0022))
-        img = Image.alpha_composite(img, layer)
-
-    return img
+def over(base, l):
+    """Straight-alpha composite layer l over base."""
+    sa = base[:, 3:4] / 255.0
+    la = l[:, 3:4] / 255.0
+    oa = la + sa * (1 - la)
+    rgb = (l[:, :3] * la + base[:, :3] * sa * (1 - la)) / np.where(oa > 0, oa, 1)
+    return np.concatenate([rgb, oa * 255.0], 1)
 
 
-# ── ARKit-direct eye painter ────────────────────────────────────────────────
-# The eye-hole rims ARE the lash lines on the live mesh; painting along them
-# in ARKit UV puts liner/lash/shadow exactly at the roots with zero warp
-# error. Arc indices are constants of ARKit topology (x-ordered outer→inner
-# per eye; see arkit_map_smoke.cpp).
-# Arcs listed OUTER -> INNER to match the (outer, inner) corner pairs — the
-# x-sorted list runs the other way for the left eye, and a mismatched rim
-# order draws the liner as a diagonal slice across the eye.
-ARC_UP_R = [1100, 1099, 1098, 1097, 1096, 1095, 1094, 1093, 1092, 1091]
-ARC_UP_L = [1070, 1071, 1072, 1073, 1074, 1075, 1076, 1077, 1078, 1079]
-CORNERS_R = (1101, 1090)   # outer, inner
-CORNERS_L = (1069, 1080)
+def to_img(arr):
+    """NTX float RGBA → 1024² uint8 PNG (downsampled from SSIZE if SS>1)."""
+    full = np.zeros((SSIZE, SSIZE, 4), np.uint8)
+    full[MASK] = np.clip(arr, 0, 255).astype(np.uint8)
+    im = Image.fromarray(full, "RGBA")
+    if SS > 1:
+        im = im.resize((SIZE, SIZE), Image.LANCZOS)
+    return im
 
 
-def paint_eyes_arkit(lk, ak_uv):
-    img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    dr = ImageDraw.Draw(img)
-
-    def puv(i):
-        return (float(ak_uv[i][0]) * (SIZE - 1), float(ak_uv[i][1]) * (SIZE - 1))
-
-    def col(c, a):
-        return (int(c[0] * 255), int(c[1] * 255), int(c[2] * 255),
-                int(np.clip(a, 0, 1) * 255))
-
-    for arc, corners in ((ARC_UP_R, CORNERS_R), (ARC_UP_L, CORNERS_L)):
-        rim = [puv(corners[0])] + [puv(i) for i in arc] + [puv(corners[1])]
-        rim_np = np.array(rim, float)
-        center = rim_np.mean(0)
-        # "up" in UV = away from the hole center at the rim (per point)
-        def outward(p):
-            d = p - center
-            n = np.linalg.norm(d) + 1e-6
-            return d / n
-
-        # eyeshadow: soft band hugging the rim, taller mid-eye
-        shadow = lk.get("shadow", 0.0)
-        if shadow > 0.01:
-            c = lk.get("shadow_col", [0.35, 0.22, 0.30])
-            layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-            d2 = ImageDraw.Draw(layer)
-            band = SIZE * (0.028 + 0.020 * min(shadow, 2.0))
-            upper = []
-            for k2, p2 in enumerate(rim_np):
-                t = k2 / (len(rim_np) - 1)
-                lift = np.sin(np.pi * t) * band + band * 0.25
-                upper.append(tuple(p2 + outward(p2) * lift))
-            d2.polygon([tuple(p2) for p2 in rim_np] + upper[::-1],
-                       fill=col(c, min(0.62 * shadow, 0.80)))
-            layer = layer.filter(ImageFilter.GaussianBlur(SIZE * 0.011))
-            img = Image.alpha_composite(img, layer)
-            dr = ImageDraw.Draw(img)
-
-        # Smooth rim curve: quadratic fit through the rim points in the
-        # corner-to-corner frame. Drawing vertex-to-vertex bent into hooks
-        # at the ends where the rim verts stack near the corners.
-        u_ax = rim_np[-1] - rim_np[0]
-        u_len = np.linalg.norm(u_ax) + 1e-6
-        u_ax = u_ax / u_len
-        v_ax = np.array([-u_ax[1], u_ax[0]])
-        us = (rim_np - rim_np[0]) @ u_ax
-        vs = (rim_np - rim_np[0]) @ v_ax
-        qa, qb, qc = np.polyfit(us, vs, 2)
-
-        def rim_curve(t):
-            uu = t * u_len
-            vv = qa * uu * uu + qb * uu + qc
-            return rim_np[0] + u_ax * uu + v_ax * vv
-
-        def rim_tangent(t):
-            uu = t * u_len
-            d = u_ax + v_ax * (2 * qa * uu + qb)
-            return d / (np.linalg.norm(d) + 1e-6)
-
-        # liner: along the fitted curve, inset toward the hole, trimmed
-        # short of the oversized corners; the wing is the curve's own
-        # tangent continued past the outer end — no separate segment, so
-        # no kink.
-        liner = lk.get("liner", 0.0)
-        if liner > 0.01:
-            w = max(4, int(SIZE * 0.005 * (0.7 + 0.6 * min(liner, 2.0))))
-            pts2 = []
-            wing = lk.get("lash_wing", 0.0)
-            if wing > 0.01:
-                tip = rim_curve(0.08) - rim_tangent(0.08) * SIZE * 0.014 * wing
-                tip = tip + outward(rim_curve(0.08)) * SIZE * 0.004 * wing
-                pts2.append(tuple(tip))
-            for t in np.linspace(0.08, 0.92, 22):
-                p2 = rim_curve(t) - outward(rim_curve(t)) * w * 0.45
-                pts2.append(tuple(p2))
-            dr.line(pts2, fill=(12, 8, 12, int(235 * min(liner, 1.0))),
-                    width=w, joint="curve")
-
-        # wing: from the outer corner, along the rim tangent, gentle lift
-        # lash fringe: strokes rooted on the fitted curve, fanning outward
-        lash = lk.get("lash", 0.0)
-        if lash > 0.01:
-            rng = np.random.default_rng(11)
-            n = int(12 + 9 * min(lash, 2.0))
-            for k2 in range(n):
-                t = 0.08 + 0.84 * (k2 + 0.5) / n
-                base = rim_curve(t)
-                d = outward(base)
-                tangent = rim_tangent(t)
-                ln = SIZE * (0.008 + 0.006 * min(lash, 1.6)) \
-                    * rng.uniform(0.7, 1.25)
-                base = base - d * SIZE * 0.0015
-                tip = base + d * ln + tangent * ln * rng.uniform(-0.25, 0.25)
-                dr.line([tuple(base), tuple(tip)],
-                        fill=(10, 7, 10, int(210 * min(lash, 1.0))), width=3)
-    return img
+def dist_to_polyline(P, poly):
+    """(N,3) points → (min distance to polyline, global t along it [0,1])."""
+    best = np.full(P.shape[0], 1e9)
+    best_t = np.zeros(P.shape[0])
+    for k in range(len(poly) - 1):
+        a, b = poly[k], poly[k + 1]
+        ab = b - a
+        L2 = float(ab @ ab) + 1e-12
+        t = np.clip(((P - a) @ ab) / L2, 0, 1)
+        d = np.linalg.norm(P - (a + t[:, None] * ab), axis=1)
+        m = d < best
+        best[m] = d[m]
+        best_t[m] = (k + t[m]) / (len(poly) - 1)
+    return best, best_t
 
 
-def checker():
-    img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    a = np.zeros((SIZE, SIZE, 4), np.uint8)
-    cell = SIZE // 32
-    yy, xx = np.mgrid[0:SIZE, 0:SIZE]
-    chk = ((xx // cell + yy // cell) % 2).astype(bool)
-    a[chk] = (255, 40, 200, 170)
-    a[~chk] = (40, 255, 120, 170)
-    return Image.fromarray(a)
+def smooth(e0, e1, x):
+    t = np.clip((x - e0) / (e1 - e0), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def blob(center, sigma_mm, color, alpha):
+    d = np.linalg.norm(TX - np.array(center), axis=1)
+    a = alpha * np.exp(-(d ** 2) / (2 * sigma_mm ** 2))
+    l = new_img()
+    l[:, :3] = color
+    l[:, 3] = a
+    return l
+
+
+def stroke(a, b, width_mm, color, alpha, taper=0.0):
+    """A capped line segment a→b of the given width, optional tip taper."""
+    d, t = dist_to_polyline(TX, np.array([a, b]))
+    w = width_mm * (1.0 - taper * t)
+    ink = (1 - smooth(w - 0.18, w + 0.22, d)) * alpha
+    l = new_img()
+    l[:, :3] = color
+    l[:, 3] = ink
+    return l
+
+
+# ── elements ───────────────────────────────────────────────────────────────
+def el_blush(img, style, color, alpha):
+    l = new_img()
+    for cheek, eye in zip(CHEEK, EYES):
+        if style == "lifted":
+            l = over(l, blob(cheek * 0.72 + eye.center * 0.28, 11, color, alpha))
+        elif style == "apple":
+            l = over(l, blob(cheek * 0.6 + MOUTH_C * 0.4, 10, color, alpha))
+        else:                                   # cheeks
+            l = over(l, blob(cheek, 13, color, alpha))
+    return over(img, l)
+
+
+def el_contour(img, style="soft", color=None, alpha=46, areas=None):
+    if color is None:
+        color = {"warm": (118, 84, 68), "cool": (90, 70, 80),
+                 "soft": (104, 84, 76)}[style]
+    if areas is None:
+        areas = ["cheek", "jaw", "nose"]
+    l = new_img()
+    for cheek, jaw in zip(CHEEK, JAW):
+        if "cheek" in areas:
+            l = over(l, blob(cheek * 0.5 + jaw * 0.5, 12, color, alpha))
+        if "jaw" in areas:
+            l = over(l, blob(jaw * 0.6 + CHIN * 0.4, 11, color, alpha * 0.8))
+    if "nose" in areas:
+        nb = NOSE_BRIDGE * 0.4 + NOSE_TIP * 0.6
+        for sgn in (-1, 1):
+            l = over(l, blob(nb + np.array([6.5 * sgn, 0, 0]), 5,
+                             color, alpha * 0.7))
+    return over(img, l)
+
+
+def el_shadow(img, lid=None, crease=None, outer=None, inner=None,
+              shimmer=None, height=1.0):
+    """Layered eye: lid wash, crease depth, outer-V, inner light, shimmer."""
+    l = new_img()
+    for eye in EYES:
+        d, t = dist_to_polyline(TX, eye.up)
+        up_dir = TX - eye.center
+        up_dir = up_dir / (np.linalg.norm(up_dir, axis=1, keepdims=True) + 1e-9)
+        above = up_dir[:, 1] > -0.15          # lid hemisphere (not in the hole)
+        if lid:
+            c, a = lid
+            al = smooth(-0.2, 0.6, d) * (1 - smooth(3.0 * height, 4.4 * height, d)) * above
+            al *= a / 255.0
+            lay = new_img(); lay[:, :3] = c; lay[:, 3] = al * 255
+            l = over(l, lay)
+        if crease:
+            c, a = crease
+            al = smooth(2.2 * height, 3.4 * height, d) * \
+                 (1 - smooth(6.6 * height, 8.4 * height, d)) * above
+            al *= a / 255.0
+            lay = new_img(); lay[:, :3] = c; lay[:, 3] = al * 255
+            l = over(l, lay)
+        if outer:
+            c, a = outer
+            w = np.clip(1.0 - t / 0.42, 0, 1)   # outer ~40% of the rim
+            al = smooth(0.2, 1.2, d) * (1 - smooth(5.0 * height, 6.6 * height, d)) * w * above
+            al *= a / 255.0
+            lay = new_img(); lay[:, :3] = c; lay[:, 3] = al * 255
+            l = over(l, lay)
+        if inner:
+            c, a = inner
+            w = np.clip((t - 0.70) / 0.30, 0, 1)  # inner ~30%
+            al = smooth(-0.2, 0.8, d) * (1 - smooth(2.6, 3.8, d)) * w
+            al *= a / 255.0
+            lay = new_img(); lay[:, :3] = c; lay[:, 3] = al * 255
+            l = over(l, lay)
+        if shimmer:
+            c, a = shimmer
+            w = np.exp(-((t - 0.5) ** 2) / (2 * 0.16 ** 2))
+            al = smooth(0.4, 1.4, d) * (1 - smooth(3.0, 4.2, d)) * w * above
+            al *= a / 255.0
+            lay = new_img(); lay[:, :3] = c; lay[:, 3] = al * 255
+            l = over(l, lay)
+    return over(img, l)
+
+
+def el_liner(img, color=(20, 14, 16), alpha=246, width=1.25, wing=5.5,
+             lower=True):
+    """Crisp upper lash-line liner with a soft outer wing + tightline lower.
+
+    Sits ON eye.up (the lash rim): full opacity at d=0, clean edge. The wing
+    continues the outer-corner tangent up & out. Lower is a thin kohl over the
+    inner two-thirds of the waterline (the classic tightline)."""
+    l = new_img()
+    for eye in EYES:
+        d, t = dist_to_polyline(TX, eye.up)
+        # taper: thicker at the outer corner, finer toward the inner
+        w = width * (1.0 - 0.40 * t)
+        ink = (1 - smooth(w - 0.18, w + 0.22, d)) * alpha
+        lay = new_img(); lay[:, :3] = color; lay[:, 3] = ink
+        l = over(l, lay)
+        # wing: outer-corner tangent lifted up & out
+        if wing > 0:
+            tan = eye.up[0] - eye.up[1]
+            tan = tan / np.linalg.norm(tan)
+            upv = np.array([0.0, 1.0, 0.0])
+            wdir = tan * 0.78 + upv * 0.22
+            wdir = wdir / np.linalg.norm(wdir)
+            tip = eye.outer + wdir * wing
+            l = over(l, stroke(eye.outer, tip, width * 0.8, color,
+                               alpha, taper=0.55))
+        # lower tightline: continuous thin kohl along the waterline, solid
+        # over the inner four-fifths then a soft taper past the outer third.
+        if lower:
+            dl, tl = dist_to_polyline(TX, eye.low)
+            lw = width * 0.85
+            low_ink = (1 - smooth(lw - 0.18, lw + 0.24, dl)) * alpha * 0.85
+            low_ink *= np.clip((1.0 - tl) / 0.22, 0, 1)   # taper only outer tip
+            lay = new_img(); lay[:, :3] = color; lay[:, 3] = low_ink
+            l = over(l, lay)
+    return over(img, l)
+
+
+def el_lashes(img, strength=1.0, style="natural", color=(14, 10, 14),
+              lower=True, seed=0):
+    """Tapered lash clusters radiating up & out from the upper rim, plus
+    sparse lower lashes. Wide enough (0.85–1.0mm) to survive the mesh sampling
+    the atlas at a foreshortened angle."""
+    rng = np.random.default_rng(seed + 5)
+    n, ln, w, sweep_r = {
+        "natural": (30, 5.6, 1.05, (-0.22, 0.12)),
+        "doll":    (24, 6.0, 1.15, (-0.12, 0.12)),
+        "wispy":   (34, 5.0, 0.95, (-0.30, 0.08)),
+        "stage":   (38, 6.4, 1.20, (-0.18, 0.04)),
+    }[style]
+    l = new_img()
+    for eye in EYES:
+        rim = eye.up
+        nn = int(n * min(strength, 1.4))
+        for k in range(nn):
+            t = 0.05 + 0.90 * (k + 0.5) / nn
+            f = t * (len(rim) - 1)
+            i0 = min(int(f), len(rim) - 2)
+            root = rim[i0] * (1 - f + i0) + rim[i0 + 1] * (f - i0)
+            out = root - eye.center
+            out[1] = abs(out[1]) + 2.0                 # up, off the lid
+            out = out / np.linalg.norm(out)
+            tan = rim[i0 + 1] - rim[i0]
+            tan = tan / np.linalg.norm(tan)
+            length = ln * rng.uniform(0.78, 1.22) * min(strength, 1.3)
+            sweep = rng.uniform(*sweep_r)
+            tip = root + out * length + tan * length * sweep
+            l = over(l, stroke(root, tip, w * rng.uniform(0.9, 1.15),
+                               color, 255 * min(strength, 1.2), taper=0.45))
+        if lower:
+            m = max(4, int(6 * strength))
+            rim2 = eye.low
+            for k in range(m):
+                t = 0.18 + 0.64 * (k + 0.5) / m
+                f = t * (len(rim2) - 1)
+                i0 = min(int(f), len(rim2) - 2)
+                root = rim2[i0] * (1 - f + i0) + rim2[i0 + 1] * (f - i0)
+                out = root - eye.center
+                out[1] = -abs(out[1]) - 2.0           # down, off the lower lid
+                out = out / np.linalg.norm(out)
+                length = 2.0 * rng.uniform(0.8, 1.2)
+                tip = root + out * length
+                l = over(l, stroke(root, tip, w * 0.7, color,
+                                   220 * min(strength, 1.2), taper=0.5))
+    return over(img, l)
+
+
+def el_lip(img, color=(176, 92, 88), alpha=220, liner_color=(120, 56, 58),
+           gloss=True):
+    """Filled lip painted around the mouth seam (the closed-mouth lip line).
+
+    The canonical head's mouth is a thin sealed slit, so the lip can't be built
+    from a mouth-opening ring. Instead: distance to the seam polyline (which
+    follows the mouth's curve) split by signed vertical offset — upper lip
+    above the seam, a fuller lower lip below. The vermilion liner rides the
+    outer edge; gloss pools on the lower-lip center."""
+    dy = TX[:, 1] - MOUTH_C[1]            # y-up: + above seam (upper lip)
+    dx = TX[:, 0] - MOUTH_C[0]
+    half_w = 20.5                          # mouth half-width, mm
+    xt = np.clip(1.0 - (np.abs(dx) - 16.5) / 4.0, 0, 1)   # taper into corners
+    h_up, h_low = 5.0, 7.5
+    # fill both lips outward from the seam (signed dy, not the x-z loop distance)
+    fu = (1 - smooth(h_up - 1.2, h_up - 0.2, dy)) * (dy > -0.3)
+    fl = (1 - smooth(h_low - 1.2, h_low - 0.2, -dy)) * (dy < 0.3)
+    fill = np.clip(fu + fl, 0, 1) * xt
+
+    l = new_img()
+    lay = new_img(); lay[:, :3] = color; lay[:, 3] = fill * alpha
+    l = over(l, lay)
+    if liner_color is not None:            # vermilion liner at the outer edges
+        eu = smooth(h_up - 1.4, h_up - 0.6, dy) * (1 - smooth(h_up + 0.1, h_up + 0.9, dy))
+        el = smooth(h_low - 1.4, h_low - 0.6, -dy) * (1 - smooth(h_low + 0.1, h_low + 0.9, -dy))
+        edge = np.clip(eu + el, 0, 1) * xt
+        lay = new_img(); lay[:, :3] = liner_color; lay[:, 3] = edge * 235
+        l = over(l, lay)
+    if gloss:                              # dimensional gloss, lower-lip center
+        gl = blob(MOUTH_C + np.array([0, -3.5, 3.0]), 2.6, (255, 250, 246),
+                  alpha * 0.20)
+        l = over(l, gl)
+    return over(img, l)
+
+
+def el_highlight(img, color=(255, 246, 240), alpha=52):
+    l = new_img()
+    for cheek, eye in zip(CHEEK, EYES):
+        p = cheek * 0.45 + eye.center * 0.55
+        p[1] += 6
+        l = over(l, blob(p, 8, color, alpha))         # cheekbone / brow bone
+    l = over(l, blob(NOSE_BRIDGE * 0.6 + NOSE_TIP * 0.4, 4, color, alpha * 0.8))
+    l = over(l, blob(CUPID, 3, color, alpha * 0.6))
+    return over(img, l)
+
+
+EL = {"blush": el_blush, "contour": el_contour, "shadow": el_shadow,
+      "liner": el_liner, "lashes": el_lashes, "lip": el_lip,
+      "highlight": el_highlight}
+
+
+def S(lid=None, crease=None, outer=None, inner=None, shimmer=None):
+    return dict(lid=lid, crease=crease, outer=outer, inner=inner, shimmer=shimmer)
+
+
+# ── the one look ───────────────────────────────────────────────────────────
+# Soft Glam / everyday: taupe-brown eye (lid + crease + outer-V + inner
+# light), soft warm contour, lifted rose blush, clean wing liner + lower
+# tightline, visible natural lashes, nude satin lip with a defined edge.
+# Pigment is intentionally solid enough to read through the engine's
+# luma-adaptive premult-over composite (the old atlases washed out).
+LOOKS = {
+    "soft_glam": [
+        ("contour", dict(style="warm", alpha=50, areas=["cheek", "jaw", "nose"])),
+        ("blush", dict(style="lifted", color=(222, 130, 120), alpha=58)),
+        ("shadow", S(lid=((206, 156, 122), 92), crease=((168, 112, 82), 82),
+                     outer=((140, 88, 62), 74), inner=((248, 232, 212), 70),
+                     shimmer=((255, 244, 232), 48))),
+        ("liner", dict(alpha=246, width=1.25, wing=5.5, lower=True)),
+        ("lip", dict(color=(172, 100, 92), alpha=220,
+                     liner_color=(118, 56, 58), gloss=True)),
+        ("highlight", dict(alpha=54)),
+        # No texture lashes: on the ARKit native path lashes are 3D geometry
+        # generated from the eye-rim mesh vertices (metal_render.mm face_lash_*),
+        # so the atlas must not also paint them (no doubling).
+    ],
+}
+
+
+def seed_of(s):
+    return int(hashlib.sha256(s.encode()).hexdigest(), 16) % (2 ** 32)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--assets", default=os.path.expanduser(
         "~/dev/pms-ios/Engine/EngineAssets"))
-    ap.add_argument("--only", nargs="*", default=None,
-                    help="Warp only these makeup_<id>.png basenames (or ids)")
+    ap.add_argument("--ss", type=int, default=2)
+    ap.add_argument("--only", nargs="*", default=None)
     args = ap.parse_args()
-    face_dir = os.path.join(args.assets, "models", "face")
-    out_dir = os.path.join(face_dir, "arkit")
+
+    global SS, SSIZE, POS, MASK, TX, NTX
+    if args.ss != SS:
+        SS = args.ss
+        SSIZE = SS * SIZE
+        POS, MASK = rasterize_positions(AK_UV, AK_TRIS, AK_V, SSIZE)
+        TX = POS[MASK]
+        NTX = TX.shape[0]
+        print(f"re-rasterized at SS={SS} ({SSIZE}², {NTX} texels)")
+
+    out_dir = os.path.join(args.assets, "models", "face", "arkit")
     os.makedirs(out_dir, exist_ok=True)
-
-    warp, mask = build_warp_map(os.path.join(here, "arkit_uv_warp.npz"))
-    ak_uv_g, _, mp_uv, _ = parse_uvs()
-
-    checker().save(os.path.join(out_dir, "checker.png"))
-    print("checker.png")
-
-    # plates — with the brow art ERASED first: ARKit fits the face's 3D
-    # shape, not where the eyebrow hair sits, so painted brows always fight
-    # the user's real brows by a per-person offset. The user has eyebrows.
-    brow_mask = Image.new("L", (SIZE, SIZE), 0)
-    bd = ImageDraw.Draw(brow_mask)
-    for ring in ([70, 63, 105, 66, 107, 55, 65, 52, 53, 46],
-                 [300, 293, 334, 296, 336, 285, 295, 282, 283, 276]):
-        pts = [px(mp_uv[i]) for i in ring]
-        cx = sum(p2[0] for p2 in pts) / len(pts)
-        cy = sum(p2[1] for p2 in pts) / len(pts)
-        grown = [(cx + (p2[0] - cx) * 1.55, cy + (p2[1] - cy) * 1.9)
-                 for p2 in pts]
-        bd.polygon(grown, fill=255)
-    brow_mask = brow_mask.filter(ImageFilter.GaussianBlur(SIZE * 0.008))
-    brow_np = np.asarray(brow_mask, np.float32) / 255.0
-
-    # Wing limiter: plate wing art that extends far past the outer eye
-    # corner rides temple geometry that folds at yaw — the tip juts off the
-    # face as a rigid spike. Fade plate alpha laterally beyond the corners.
-    wing_mask = np.ones((SIZE, SIZE), np.float32)
-    yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float32)
-    for outer_i, sgn in ((33, -1.0), (263, 1.0)):
-        cx2, cy2 = px(mp_uv[outer_i])
-        beyond = (xx - cx2) * sgn - SIZE * 0.022
-        band = np.exp(-((yy - cy2) ** 2) / (2 * (SIZE * 0.060) ** 2))
-        fade = np.clip(beyond / (SIZE * 0.020), 0.0, 1.0) * band
-        wing_mask *= (1.0 - fade)
-
-    # Post-warp limiter in ARKIT UV: eye-corner ink lands on the temple-side
-    # vertex rows THROUGH the warp (traced from an on-device fixture — the
-    # rigid "wing spike" at 3/4 views), so it must be erased on the output
-    # side, laterally beyond the hole corners. Corner UVs are topology
-    # constants: R outer 1101 (0.272, 0.651), L outer 1069 (0.728, 0.651).
-    out_mask = np.ones((SIZE, SIZE), np.float32)
-    yy2, xx2 = np.mgrid[0:SIZE, 0:SIZE].astype(np.float32)
-    for (cu, cv), sgn in (((0.272, 0.651), -1.0), ((0.728, 0.651), 1.0)):
-        cx3, cy3 = cu * SIZE, cv * SIZE
-        # Start past the legitimate wing zone (~20px) with a NARROW band:
-        # v1 of this cut started at corner-12px with a +/-100px band and
-        # erased real foundation/wings around the outer eyes (pale patches,
-        # cheek seams, amputated CatEye wing) — the regression of 2026-07-13.
-        # Most aggressive setting with ZERO foundation cost (offline sweep):
-        # the smeared corner ink that isn't laterally-beyond in UV can't be
-        # caught here anyway (it only projects outward at 3/4 views — that
-        # residual is plate wing length, a per-look art choice), so push the
-        # cut as far as the sweep allows without eating foundation.
-        beyond = (xx2 - cx3) * sgn - SIZE * 0.008
-        band = np.exp(-((yy2 - cy3) ** 2) / (2 * (SIZE * 0.045) ** 2))
-        fade = np.clip(beyond / (SIZE * 0.010), 0.0, 1.0) * band
-        out_mask *= (1.0 - fade)
-
-    plates = sorted(f for f in os.listdir(face_dir)
-                    if f.startswith("makeup_") and f.endswith(".png"))
-    if args.only:
-        want = set()
-        for x in args.only:
-            x = x.strip()
-            if not x.endswith(".png"):
-                x = f"makeup_{x}.png" if not x.startswith("makeup_") else f"{x}.png"
-            want.add(x)
-        plates = [f for f in plates if f in want]
-        missing = want - set(plates)
-        if missing:
-            raise SystemExit(f"missing plates: {sorted(missing)}")
-    for f in plates:
-        img = Image.open(os.path.join(face_dir, f)).convert("RGBA")
-        arr = np.asarray(img.resize((SIZE, SIZE)), np.uint8).astype(np.float32)
-        arr[..., 3] *= (1.0 - brow_np) * wing_mask
-        img = Image.fromarray(arr.astype(np.uint8))
-        out = warp_image(img, warp, mask)
-        oarr = np.asarray(out, np.uint8).astype(np.float32)
-        oarr[..., 3] *= out_mask
-        Image.fromarray(oarr.astype(np.uint8)).save(os.path.join(out_dir, f))
-        print(f"  warped {f}")
-    print(f"{len(plates)} plates warped (brow erased, wings limited, "
-          f"corner spill cut)")
-
-    if args.only:
-        print("skipping builtin looks (--only)")
-        return
-
-    # builtin looks
-    looks = parse_looks(os.path.join(here, "..", "src", "face_filters.cpp"))
-    n = 0
-    for fid, lk in sorted(looks.items()):
-        pigment = any(lk.get(k, 0) > 0.01 for k in
-                      ("blush", "lip", "shadow", "liner", "lash",
-                       "freckles", "nose_blush"))
-        if not pigment:
-            continue
-        mp_img = paint_look_mp(lk, mp_uv)
-        atlas = warp_image(mp_img, warp, mask)
-        atlas = Image.alpha_composite(atlas, paint_eyes_arkit(lk, ak_uv_g))
-        aarr = np.asarray(atlas, np.uint8).astype(np.float32)
-        aarr[..., 3] *= out_mask
-        Image.fromarray(aarr.astype(np.uint8)).save(
-            os.path.join(out_dir, f"look_{fid}.png"))
-        n += 1
-    print(f"{n} builtin looks baked")
+    ids = args.only or list(LOOKS.keys())
+    for look_id in ids:
+        img = new_img()
+        for name, kw in LOOKS[look_id]:
+            kw = dict(kw)
+            if name in ("lashes", "freckles"):
+                kw.setdefault("seed", seed_of(look_id))
+            img = EL[name](img, **kw)
+        path = os.path.join(out_dir, f"makeup_{look_id}.png")
+        to_img(img).save(path, optimize=True)
+        print(f"  painted {os.path.basename(path)} "
+              f"({os.path.getsize(path) // 1024} KB)")
+    print(f"done — {len(ids)} atlas(es)")
 
 
 if __name__ == "__main__":

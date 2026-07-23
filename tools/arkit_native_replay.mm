@@ -26,6 +26,7 @@
 #include "../src/metal_render.h"
 #include "stb_image_write.h"
 #include "json.hpp"
+#include "stb_image.h"
 
 using json = nlohmann::json;
 
@@ -80,6 +81,27 @@ static void write_png(const std::string& path, const Img& im) {
     printf("wrote %s\n", path.c_str());
 }
 
+// Optional real-photo base (PMS_PHOTO_BASE=path): render makeup over a real
+// face instead of the flat synthetic skin. Loaded once, RGB-packed, sampled
+// (scaled) into each W×H frame. Lets art QA judge pigment against real skin,
+// eyes, and lighting — which synthetic skin can never show.
+static std::vector<uint8_t> g_photo;   // RGB, tightly packed
+static int g_photo_w = 0, g_photo_h = 0;
+static bool photo_base(std::vector<uint8_t>& rgb, int& w, int& h) {
+    if (g_photo.empty()) {
+        const char* p = getenv("PMS_PHOTO_BASE");
+        if (!p || !*p) return false;
+        int n = 0;
+        unsigned char* d = stbi_load(p, &g_photo_w, &g_photo_h, &n, 3);
+        if (!d) { fprintf(stderr, "arkit native replay: photo load failed: %s\n", p); return false; }
+        g_photo.assign(d, d + (size_t)g_photo_w * g_photo_h * 3);
+        stbi_image_free(d);
+        fprintf(stderr, "photo base: %s (%dx%d)\n", p, g_photo_w, g_photo_h);
+    }
+    rgb = g_photo; w = g_photo_w; h = g_photo_h;
+    return true;
+}
+
 // Flat skin-tone camera frame (pigment shows on it like on skin).
 static uint8_t g_skin[3] = {205, 170, 150};   // r,g,b — override with --skin
 static CVPixelBufferRef skin_frame() {
@@ -91,9 +113,20 @@ static CVPixelBufferRef skin_frame() {
     CVPixelBufferLockBaseAddress(pb, 0);
     uint8_t* dst = (uint8_t*)CVPixelBufferGetBaseAddress(pb);
     size_t bpr = CVPixelBufferGetBytesPerRow(pb);
+    std::vector<uint8_t> photo; int pw = 0, ph = 0;
+    bool use_photo = photo_base(photo, pw, ph);
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
             uint8_t* q = dst + (size_t)y * bpr + (size_t)x * 4;
+            if (use_photo) {
+                // same aspect as the capture viewport → uniform scale, no squash
+                int sx = std::min((int)((float)x / W * pw), pw - 1);
+                int sy = std::min((int)((float)y / H * ph), ph - 1);
+                const uint8_t* s = &photo[((size_t)sy * pw + sx) * 3];  // RGB
+                q[0] = s[2]; q[1] = s[1]; q[2] = s[0];                  // → BGRA
+                q[3] = 255;
+                continue;
+            }
             // Subtle deterministic skin texture: value noise + a soft radial
             // falloff. A flat fill hides exactly what art QA needs to see —
             // whether pigment preserves skin detail (realism) or plasters
@@ -210,7 +243,12 @@ int main(int argc, char** argv) {
             json params = {{"face_filter", filter_id},
                            {"face_amount", amount}};
             if (getenv("PMS_NATIVE_ATLAS")) {
-                params["smooth"] = 0.40; params["brighten"] = 0.15;
+                // Over a real photo the base face must stay sharp to judge
+                // alignment/art (PMS_PHOTO_BASE); synthetic skin keeps the
+                // 0.40 review smoothing.
+                bool photo = getenv("PMS_PHOTO_BASE");
+                params["smooth"]   = photo ? 0.05 : 0.40;
+                params["brighten"] = photo ? 0.0  : 0.15;
                 params["warmth"] = 0.0; params["desat"] = 0.0;
                 params["chrome"] = 0.0; params["scanlines"] = 0.0;
                 params["skin_tint"] = 0.0; params["eye_pop"] = 0.0;

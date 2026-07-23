@@ -1031,6 +1031,30 @@ fragment float4 face_iris_f(IrisVOut in [[stage_in]],
     return float4(mix(base, col, a), 1.0);
 }
 
+// ── 3D lash cards: tapered dark quads standing off the upper-lid rim ──────
+// Geometry is generated per frame from the eye-rim mesh vertices + their
+// surface normals (the lashes grow from the lid edge, up & out), compressed
+// on blink. This is the only way lashes read as real fringe — a flat texture
+// can't hold dense, occlusion-correct strands. Reuses FaceIrisUni (dim/amount/color).
+struct LashV { float4 clip; float along; float edge; };   // along: 0 root→1 tip; edge: across width
+struct LashVOut { float4 pos [[position]]; float along; float edge; };
+vertex LashVOut face_lash_v(uint vid [[vertex_id]],
+                            device const LashV* v [[buffer(0)]]) {
+    LashVOut o; o.pos = v[vid].clip; o.along = v[vid].along; o.edge = v[vid].edge; return o;
+}
+fragment float4 face_lash_f(LashVOut in [[stage_in]],
+                            constant FaceIrisUni& u [[buffer(0)]]) {
+    // Alpha-blended onto the live target (the pipeline has blending enabled):
+    // lashes draw AFTER the mesh/liner, so they must composite over the
+    // already-rendered lid — not over the pre-makeup source frame.
+    float taper = 1.0 - in.along * 0.62;                       // thin toward the tip
+    float side  = 1.0 - smoothstep(0.55, 1.0, fabs(in.edge - 0.5) * 2.0);  // round the edges
+    float a = u.amount * taper * side;
+    if (a < 0.004) discard_fragment();
+    float3 col = u.color.rgb * 0.08;                           // near-black ink
+    return float4(col * a, a);                                 // premultiplied
+}
+
 // Debug landmark overlay: point sprites at the tracked/bridged landmarks.
 struct DbgVOut { float4 pos [[position]]; float ps [[point_size]]; float4 col [[flat]]; };
 vertex DbgVOut face_dbg_v(uint vid [[vertex_id]],
@@ -1307,7 +1331,7 @@ static ChromaUniCPU chroma_uniforms(const LiveFx& fx, int pass, int w, int h) {
 
 // ── Face FX (makeup looks — stateless passes over live FaceObs) ─────────────
 enum { kFaceWarp = 0, kFaceBeauty = 1, kFaceMesh = 2, kFaceDbg = 3,
-       kFaceNat = 4, kFaceIris = 5, kFacePsoCount = 6 };
+       kFaceNat = 4, kFaceIris = 5, kFaceLash = 6, kFacePsoCount = 7 };
 static id<MTLRenderPipelineState> g_face_pso[kFacePsoCount] = { nil, nil, nil };
 static bool g_face_tried = false;
 
@@ -1351,6 +1375,7 @@ static id<MTLTexture> g_face_stencil = nil;
 static id<MTLTexture> g_face_depth = nil;
 static id<MTLDepthStencilState> g_dss_swrite = nil;   // depth test+write, stencil 1
 static id<MTLDepthStencilState> g_dss_seq0 = nil;     // depth test, stencil==0
+static id<MTLDepthStencilState> g_dss_lash = nil;     // depth test only (lashes stand off the lid)
 static id<MTLBuffer> g_arkit_uv_buf = nil;            // constant topology
 static id<MTLBuffer> g_arkit_idx_buf = nil;
 
@@ -1373,6 +1398,13 @@ static bool face_native_resources(int sw, int sh) {
         se.stencilCompareFunction = MTLCompareFunctionEqual;
         d.frontFaceStencil = se; d.backFaceStencil = se;
         g_dss_seq0 = [g_dev newDepthStencilStateWithDescriptor:d];
+        // Lashes: depth-test against the face (occluded when behind) but no
+        // stencil clip and no depth write — they stand off the lid and above
+        // the brow, mustn't be clipped to the mesh silhouette.
+        MTLDepthStencilDescriptor* dl = [MTLDepthStencilDescriptor new];
+        dl.depthCompareFunction = MTLCompareFunctionLessEqual;
+        dl.depthWriteEnabled = NO;
+        g_dss_lash = [g_dev newDepthStencilStateWithDescriptor:dl];
     }
     if (!g_arkit_uv_buf) {
         g_arkit_uv_buf = [g_dev newBufferWithBytes:&k_arkit_uv[0][0]
@@ -1394,8 +1426,8 @@ static bool face_native_resources(int sw, int sh) {
         g_face_stencil = [g_dev newTextureWithDescriptor:td];
         g_face_depth = g_face_stencil;
     }
-    return g_dss_swrite && g_arkit_uv_buf && g_arkit_idx_buf && g_face_stencil
-        && g_face_depth;
+    return g_dss_swrite && g_dss_lash && g_arkit_uv_buf && g_arkit_idx_buf
+        && g_face_stencil && g_face_depth;
 }
 
 static id<MTLTexture> face_makeup_texture(const char* name) {
@@ -1585,6 +1617,16 @@ static id<MTLRenderPipelineState> get_face_pso(int which) {
                     MTLRenderPipelineDescriptor* rd = [MTLRenderPipelineDescriptor new];
                     rd.vertexFunction = vf; rd.fragmentFunction = ff;
                     rd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+                    if (slot == kFaceLash) {   // lashes blend over the composited lid
+                        auto* ca = rd.colorAttachments[0];
+                        ca.blendingEnabled = YES;
+                        ca.rgbBlendOperation = MTLBlendOperationAdd;
+                        ca.alphaBlendOperation = MTLBlendOperationAdd;
+                        ca.sourceRGBBlendFactor = MTLBlendFactorOne;              // premult
+                        ca.sourceAlphaBlendFactor = MTLBlendFactorOne;
+                        ca.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                        ca.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+                    }
                     rd.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
                     rd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
                     NSError* err = nil;
@@ -1593,6 +1635,7 @@ static id<MTLRenderPipelineState> get_face_pso(int which) {
                 };
                 make_s(kFaceNat,  @"face_nat_v",  @"face_nat_f");
                 make_s(kFaceIris, @"face_iris_v", @"face_iris_f");
+                make_s(kFaceLash, @"face_lash_v", @"face_lash_f");
             }
         }
     }
@@ -2207,6 +2250,80 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                             [e setFragmentTexture:src atIndex:1];
                             [e drawPrimitives:MTLPrimitiveTypeTriangle
                                   vertexStart:0 vertexCount:(NSUInteger)n_iv];
+                        }
+                        // ── 3D lash cards from the upper-lid rim vertices ────
+                        // (docs/ARKIT_NATIVE_PLAN.md Phase 5). Tapered dark
+                        // quads standing off the lid along the rim normal,
+                        // fanned along the rim, compressed on blink, with a
+                        float lash_amt = (getenv("PMS_LASHES") ? look.lash * famt : 0.f);
+                        // the composited lid (liner/shadow already drawn).
+                        if (atlas && lash_amt > 0.02f
+                            && get_face_pso(kFaceLash) && g_dss_lash) {
+                            static const int RIM_R[10] = {1100,1099,1098,1097,1096,1095,1094,1093,1092,1091};
+                            static const int RIM_L[10] = {1070,1071,1072,1073,1074,1075,1076,1077,1078,1079};
+                            const int* rims[2] = { RIM_R, RIM_L };
+                            float blink = f3.has_blend
+                                ? std::max(f3.blend[9], f3.blend[10]) : 0.f;
+                            struct LashVCPU { float clip[4]; float along; float edge; };
+                            LashVCPU lv[2 * 10 * 3 * 6];   // 2 eyes × 10 rim × 3 lash fan × 6 verts
+                            int n_lv = 0;
+                            const int tri[6] = { 0,1,2, 1,3,2 };
+                            const float av[4] = { 0,0,1,1 }, ev[4] = { 0,1,0,1 };
+                            for (int ei = 0; ei < 2; ++ei) {
+                                const int* rim = rims[ei];
+                                float ec[3] = {0,0,0};
+                                for (int i = 0; i < 10; ++i) {
+                                    const float* p = f3.verts[rim[i]];
+                                    ec[0]+=p[0]; ec[1]+=p[1]; ec[2]+=p[2];
+                                }
+                                ec[0]*=0.1f; ec[1]*=0.1f; ec[2]*=0.1f;
+                                for (int i = 0; i < 10; ++i) {
+                                    const float* root = f3.verts[rim[i]];
+                                    float rx=root[0]-ec[0], ry=root[1]-ec[1], rz=root[2]-ec[2];
+                                    float rl=sqrtf(rx*rx+ry*ry+rz*rz)+1e-6f; rx/=rl; ry/=rl; rz/=rl;
+                                    int ia=i>0?i-1:0, ib=i<9?i+1:9;
+                                    const float* pa=f3.verts[rim[ia]]; const float* pb=f3.verts[rim[ib]];
+                                    float tx=pb[0]-pa[0], ty=pb[1]-pa[1], tz=pb[2]-pa[2];
+                                    float tl=sqrtf(tx*tx+ty*ty+tz*tz)+1e-6f; tx/=tl; ty/=tl; tz/=tl;
+                                    // a fan of 3 lashes per rim vertex: offset along the
+                                    // rim + swept direction so they spread into a fringe
+                                    for (int s = 0; s < 3; ++s) {
+                                        float so = (s - 1.f) * 0.0014f;
+                                        float bx=root[0]+tx*so, by=root[1]+ty*so, bz=root[2]+tz*so;
+                                        float sweep = (s - 1.f) * 0.30f;
+                                        float dx=rx*0.70f+tx*sweep, dy=ry*0.70f+0.45f, dz=rz*0.70f+tz*sweep;
+                                        float dl=sqrtf(dx*dx+dy*dy+dz*dz)+1e-6f; dx/=dl; dy/=dl; dz/=dl;
+                                        float wing = 1.f + 0.40f*(1.f-(float)i/9.f);   // outer longer
+                                        float len = 0.0105f*wing*(0.82f+0.18f*(float)s)*(1.f-0.6f*blink);
+                                        float tip[3]={bx+dx*len, by+dy*len, bz+dz*len};
+                                        float w=0.0021f, wt=w*0.30f;
+                                        float r0[3]={bx-tx*w*0.5f,by-ty*w*0.5f,bz-tz*w*0.5f};
+                                        float r1[3]={bx+tx*w*0.5f,by+ty*w*0.5f,bz+tz*w*0.5f};
+                                        float t0[3]={tip[0]-tx*wt*0.5f,tip[1]-ty*wt*0.5f,tip[2]-tz*wt*0.5f};
+                                        float t1[3]={tip[0]+tx*wt*0.5f,tip[1]+ty*wt*0.5f,tip[2]+tz*wt*0.5f};
+                                        const float* corn[4]={r0,r1,t0,t1};
+                                        for (int q = 0; q < 6; ++q) {
+                                            float c4[4]; mat4_xform(mvp, corn[tri[q]], 1.f, c4);
+                                            LashVCPU& o = lv[n_lv++];
+                                            o.clip[0]=c4[0]; o.clip[1]=c4[1]; o.clip[2]=c4[2]; o.clip[3]=c4[3];
+                                            o.along=av[tri[q]]; o.edge=ev[tri[q]];
+                                        }
+                                    }
+                                }
+                            }
+                            struct { float dim[2]; float amount, pad0; float color[4];
+                                     float ref[3][2]; float occl, pad1; } lu;
+                            lu.dim[0]=(float)sw; lu.dim[1]=(float)sh;
+                            lu.amount = fminf(lash_amt * 3.5f, 1.f);
+                            lu.color[0]=0.05f; lu.color[1]=0.04f; lu.color[2]=0.05f; lu.color[3]=1.f;
+                            memcpy(lu.ref, nu.ref, sizeof(lu.ref)); lu.occl=0.f; lu.pad0=lu.pad1=0.f;
+                            [e setRenderPipelineState:get_face_pso(kFaceLash)];
+                            [e setDepthStencilState:g_dss_lash];
+                            [e setCullMode:MTLCullModeNone];
+                            [e setVertexBytes:lv length:sizeof(LashVCPU)*n_lv atIndex:0];
+                            [e setFragmentBytes:&lu length:sizeof(lu) atIndex:0];
+                            [e drawPrimitives:MTLPrimitiveTypeTriangle
+                                  vertexStart:0 vertexCount:(NSUInteger)n_lv];
                         }
                         [e endEncoding];
                     };
