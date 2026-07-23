@@ -243,73 +243,151 @@ def el_shadow(cv, img, lid=None, crease=None, outer=None, inner=None,
     return over(img, l)
 
 
+# Each style: (base width mm, wing length mm, wing angle, taper profile,
+# lower-lid flag, inner-corner extension). Widths are at the ROOT — the line
+# tapers toward the inner corner unless shape says otherwise.
 LINER = {
-    "tightline": dict(w=0.55, wing=0.0, alpha=170),
-    "soft":      dict(w=0.85, wing=0.0, alpha=195),
-    "wing":      dict(w=1.05, wing=4.0, alpha=230),
-    "siren":     dict(w=0.95, wing=6.0, alpha=235),
-    "graphic":   dict(w=1.5,  wing=4.5, alpha=240),
+    "tightline":  dict(w=0.5,  wing=0.0,  alpha=180, shape="uniform"),
+    "natural":    dict(w=0.9,  wing=0.0,  alpha=200, shape="taper_in", color=(48, 30, 28)),
+    "soft":       dict(w=1.1,  wing=0.0,  alpha=210, shape="taper_in"),
+    "wing":       dict(w=1.3,  wing=6.0,  alpha=235, shape="taper_in", wing_ang=0.30),
+    "dramatic":   dict(w=1.6,  wing=9.0,  alpha=245, shape="bold",     wing_ang=0.35),
+    "siren":      dict(w=1.0,  wing=12.0, alpha=240, shape="taper_in", wing_ang=0.15),
+    "graphic":    dict(w=2.2,  wing=5.0,  alpha=250, shape="bold",     wing_ang=0.40),
+    "smudged":    dict(w=1.4,  wing=3.0,  alpha=200, shape="smudge",   wing_ang=0.20),
+    "puppy":      dict(w=1.0,  wing=4.0,  alpha=215, shape="taper_in", wing_ang=-0.35),
+    "kohl":       dict(w=1.3,  wing=5.0,  alpha=240, shape="bold",     wing_ang=0.10, lower=True, inner_ext=2.0),
+    "doe":        dict(w=1.2,  wing=0.0,  alpha=220, shape="round"),
+    "egyptian":   dict(w=1.5,  wing=7.0,  alpha=245, shape="bold",     wing_ang=0.20, lower=True, inner_ext=3.0),
+    "double_wing":dict(w=1.1,  wing=6.0,  alpha=235, shape="taper_in", wing_ang=0.30, double_wing=True),
+    "floating":   dict(w=1.0,  wing=0.0,  alpha=230, shape="floating"),
+    "wrap":       dict(w=1.2,  wing=0.0,  alpha=235, shape="bold", lower=True, connect=True),
+    "wrap_wing":  dict(w=1.1,  wing=5.0,  alpha=240, shape="taper_in", wing_ang=0.25, lower=True, connect=True),
 }
 
 
 def el_liner(cv, img, style="soft", color=(16, 10, 14), alpha=None, seed=0):
     st = LINER[style]
     a = alpha if alpha is not None else st["alpha"]
+    c = st.get("color", color)
     l = new_img()
     for eye in EYES:
         d, t = dist_to_polyline(TX, eye.up)
-        ink = (1 - smooth(st["w"] - 0.25, st["w"] + 0.35, d)) * a
-        if st["wing"] > 0:
-            # wing: continuation of the rim past the outer corner, along the
-            # rim end tangent with a slight upward lift — measured in mm
+        # width profile along the rim (t: 0=outer, 1=inner)
+        if st["shape"] == "taper_in":
+            wp = st["w"] * (1.0 - 0.55 * t)
+        elif st["shape"] == "bold":
+            wp = st["w"] * (1.0 - 0.20 * t)
+        elif st["shape"] == "round":
+            wp = st["w"] * (0.7 + 0.6 * np.sin(np.pi * np.clip(t, 0, 1)))
+        elif st["shape"] == "smudge":
+            wp = st["w"] * (1.0 - 0.40 * t)
+        elif st["shape"] == "floating":
+            wp = st["w"] * np.ones_like(t)
+        else:
+            wp = st["w"] * np.ones_like(t)
+        ink = (1 - smooth(wp - 0.25, wp + 0.35, d)) * a
+        if st["shape"] == "smudge":
+            # diffused edge: widen the falloff
+            ink = (1 - smooth(wp - 0.3, wp + 0.9, d)) * a
+        if st["shape"] == "floating":
+            # line above the crease, disconnected from the lash line
+            float_d = d - 4.5   # 4.5mm above rim
+            ink = (1 - smooth(st["w"] - 0.2, st["w"] + 0.3, np.abs(float_d))) * a
+            ink *= (t > 0.15) & (t < 0.85)
+        # wing: rim tangent continued past outer corner
+        if st.get("wing", 0) > 0:
             tan = eye.up[0] - eye.up[1]
             tan = tan / np.linalg.norm(tan)
             upv = np.array([0.0, 1.0, 0.0])
-            wdir = tan * 0.9 + upv * 0.25
+            ang = st.get("wing_ang", 0.25)
+            wdir = tan * (1.0 - abs(ang)) + upv * ang
             wdir = wdir / np.linalg.norm(wdir)
             tip = eye.outer + wdir * st["wing"]
             wd, wt = dist_to_polyline(TX, np.array([eye.outer, tip]))
-            wing_ink = (1 - smooth(st["w"] * 0.8 - 0.2, st["w"] * 0.8 + 0.3, wd)) \
-                * (1 - smooth(0.55, 0.98, wt)) * a
+            wing_w = st["w"] * 0.85
+            wing_ink = (1 - smooth(wing_w - 0.2, wing_w + 0.3, wd)) \
+                * (1 - smooth(0.60, 0.98, wt)) * a
             ink = np.maximum(ink, wing_ink)
-        lay = new_img(); lay[:, :3] = color; lay[:, 3] = ink
+            if st.get("double_wing"):
+                tip2 = eye.outer + (tan * 0.85 + upv * 0.55) / np.linalg.norm(tan * 0.85 + upv * 0.55) * st["wing"] * 0.65
+                wd2, wt2 = dist_to_polyline(TX, np.array([eye.outer, tip2]))
+                wing2 = (1 - smooth(wing_w * 0.7 - 0.15, wing_w * 0.7 + 0.25, wd2)) \
+                    * (1 - smooth(0.55, 0.95, wt2)) * a * 0.9
+                ink = np.maximum(ink, wing2)
+        # inner-corner extension (egyptian/kohl point)
+        if st.get("inner_ext", 0) > 0:
+            tan_i = eye.up[-1] - eye.up[-2]
+            tan_i = tan_i / np.linalg.norm(tan_i)
+            tip_i = eye.inner + tan_i * st["inner_ext"]
+            id_, it_ = dist_to_polyline(TX, np.array([eye.inner, tip_i]))
+            inner_ink = (1 - smooth(st["w"] * 0.6 - 0.15, st["w"] * 0.6 + 0.25, id_)) \
+                * (1 - smooth(0.5, 0.95, it_)) * a
+            ink = np.maximum(ink, inner_ink)
+        # lower lid line (kohl/egyptian/wrap)
+        if st.get("lower"):
+            dl, tl = dist_to_polyline(TX, eye.low)
+            low_ink = (1 - smooth(st["w"] * 0.7 - 0.2, st["w"] * 0.7 + 0.3, dl)) * a * 0.85
+            ink = np.maximum(ink, low_ink)
+        # wraparound: connect upper+lower at both corners
+        if st.get("connect"):
+            for corner, other in ((eye.outer, eye.low[0]), (eye.inner, eye.low[-1])):
+                cd, ct = dist_to_polyline(TX, np.array([corner, other]))
+                conn_ink = (1 - smooth(st["w"] * 0.6 - 0.15, st["w"] * 0.6 + 0.25, cd)) * a
+                ink = np.maximum(ink, conn_ink)
+        lay = new_img(); lay[:, :3] = c; lay[:, 3] = ink
         l = over(l, lay)
     return over(img, l)
+
+
+LASH = {
+    "wispy":  dict(n=13, ln=3.2, w=0.55, cluster=1, sweep=(-0.30, 0.10), lower_n=6, lower_ln=1.8),
+    "doll":   dict(n=9,  ln=4.0, w=0.65, cluster=1, sweep=(-0.15, 0.10), lower_n=6, lower_ln=2.2),
+    "cat":    dict(n=11, ln=4.5, w=0.60, cluster=1, sweep=(-0.50, -0.30), lower_n=4, lower_ln=1.5),
+    "stage":  dict(n=16, ln=4.8, w=0.70, cluster=1, sweep=(-0.20, 0.05), lower_n=8, lower_ln=2.0),
+    "spiky":  dict(n=5,  ln=5.0, w=0.90, cluster=3, sweep=(-0.10, 0.10), lower_n=5, lower_ln=2.5),
+    "natural":dict(n=10, ln=2.8, w=0.45, cluster=1, sweep=(-0.20, 0.15), lower_n=4, lower_ln=1.5),
+    "feather":dict(n=12, ln=3.8, w=0.50, cluster=1, sweep=(-0.25, 0.05), lower_n=5, lower_ln=1.8),
+}
 
 
 def el_lashes(cv, img, strength=0.8, style="doll", lower=False,
               color=(12, 8, 12), seed=0):
     rng = np.random.default_rng(seed + 5)
+    st = LASH[style]
     l = new_img()
-    n_per = {"wispy": 13, "doll": 9, "cat": 11, "stage": 15}[style]
     for eye in EYES:
-        n = int(n_per * min(strength, 1.5))
         rim = eye.up
+        n = int(st["n"] * min(strength, 1.5))
+        cl = st["cluster"]
         for k in range(n):
             if style == "cat":
-                t = 0.04 + 0.55 * (k + 0.5) / n
+                t = 0.04 + 0.55 * (k + 0.5) / max(n, 1)
             else:
-                t = 0.06 + 0.88 * (k + 0.5) / n
-            f = t * (len(rim) - 1)
-            i0 = min(int(f), len(rim) - 2)
-            root = rim[i0] * (1 - f + i0) + rim[i0 + 1] * (f - i0)
-            out = root - eye.center
-            out[1] = abs(out[1]) + 2.0          # fan upward
-            out = out / (np.linalg.norm(out) + 1e-9)
-            tan = rim[i0 + 1] - rim[i0]
-            tan = tan / (np.linalg.norm(tan) + 1e-9)
-            ln = 3.2 * (0.6 + 0.5 * min(strength, 1.4)) * rng.uniform(0.7, 1.3)
-            if style == "doll":
-                ln *= 1.15
-            sweep = rng.uniform(-0.30, 0.10) if style != "cat" else -0.45
-            tip = root + out * ln + tan * ln * sweep
-            d, wt = dist_to_polyline(TX, np.array([root, tip]))
-            w = 0.65 * (1 - 0.50 * wt)          # thicker base; taper to tip
-            ink = (1 - smooth(w - 0.18, w + 0.30, d)) * 240 * min(strength, 1.2)
-            lay = new_img(); lay[:, :3] = color; lay[:, 3] = ink
-            l = over(l, lay)
+                t = 0.06 + 0.88 * (k + 0.5) / max(n, 1)
+            for ci in range(cl):
+                tt = t + (ci - (cl - 1) / 2.0) * 0.012 if cl > 1 else t
+                tt = np.clip(tt, 0.02, 0.98)
+                f = tt * (len(rim) - 1)
+                i0 = min(int(f), len(rim) - 2)
+                root = rim[i0] * (1 - f + i0) + rim[i0 + 1] * (f - i0)
+                out = root - eye.center
+                out[1] = abs(out[1]) + 2.0
+                out = out / (np.linalg.norm(out) + 1e-9)
+                tan = rim[i0 + 1] - rim[i0]
+                tan = tan / (np.linalg.norm(tan) + 1e-9)
+                ln = st["ln"] * (0.6 + 0.5 * min(strength, 1.4)) * rng.uniform(0.75, 1.25)
+                if style == "cat":
+                    ln *= 1.0 + 0.4 * (1.0 - tt)
+                sweep = rng.uniform(st["sweep"][0], st["sweep"][1])
+                tip = root + out * ln + tan * ln * sweep
+                d, wt = dist_to_polyline(TX, np.array([root, tip]))
+                w = st["w"] * (1 - 0.50 * wt)
+                ink = (1 - smooth(w - 0.18, w + 0.30, d)) * 240 * min(strength, 1.2)
+                lay = new_img(); lay[:, :3] = color; lay[:, 3] = ink
+                l = over(l, lay)
         if lower:
-            m = max(4, int(6 * strength))
+            m = max(3, int(st["lower_n"] * strength))
             rim2 = eye.low
             for k in range(m):
                 t = 0.15 + 0.7 * (k + 0.5) / m
@@ -319,11 +397,11 @@ def el_lashes(cv, img, strength=0.8, style="doll", lower=False,
                 out = root - eye.center
                 out[1] = -abs(out[1]) - 2.0
                 out = out / (np.linalg.norm(out) + 1e-9)
-                ln = 1.8 * rng.uniform(0.7, 1.2)
+                ln = st["lower_ln"] * rng.uniform(0.75, 1.25)
                 tip = root + out * ln
                 d, wt = dist_to_polyline(TX, np.array([root, tip]))
-                w = 0.48 * (1 - 0.45 * wt)
-                ink = (1 - smooth(w - 0.14, w + 0.22, d)) * 200 * min(strength, 1.2)
+                w = st["w"] * 0.65 * (1 - 0.45 * wt)
+                ink = (1 - smooth(w - 0.14, w + 0.22, d)) * 210 * min(strength, 1.2)
                 lay = new_img(); lay[:, :3] = color; lay[:, 3] = ink
                 l = over(l, lay)
     return over(img, l)

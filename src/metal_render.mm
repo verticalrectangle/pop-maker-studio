@@ -963,9 +963,12 @@ fragment float4 face_nat_f(NatVOut in [[stage_in]],
     // coverage: pigment lit by the skin's own shading
     float3 covered = mkc.rgb * (0.30 + 1.05 * slum);
     float plum = f_lum(mkc.rgb);
-    float coverage = mix(0.35, 0.92, smoothstep(0.45, 0.10, plum));
+    // Coverage: how much the pigment masks vs shows through. Raised from
+    // 0.35→0.60 base — real cosmetics have their own surface quality; too
+    // much skin showing through reads as color INSIDE the face, not on it.
+    float coverage = mix(0.60, 0.95, smoothstep(0.45, 0.10, plum));
     float3 mkcol = mix(tinted, covered, coverage);
-    mkcol = clamp(mkcol + detail * (1.0 - 0.55 * coverage), 0.0, 1.0);
+    mkcol = clamp(mkcol + detail * (1.0 - 0.65 * coverage), 0.0, 1.0);
     float a = clamp(mkc.a * u.opacity, 0.0, 1.0);
     // Dark ink (liner, lashes) bypasses both the grazing fade and the
     // occlusion gate: it's sharp pigment that must read at the eye rim
