@@ -302,9 +302,13 @@ def el_liner(img, color=(20, 14, 16), alpha=246, width=1.25, wing=5.5,
     l = new_img()
     for eye in EYES:
         d, t = dist_to_polyline(TX, eye.up)
+        # gate: only paint on the lid side (above the rim), not inside the eye hole
+        up_dir = TX - eye.center
+        up_dir = up_dir / (np.linalg.norm(up_dir, axis=1, keepdims=True) + 1e-9)
+        lid = up_dir[:, 1] > -0.05
         # taper: thicker at the outer corner, finer toward the inner
         w = width * (1.0 - 0.40 * t)
-        ink = (1 - smooth(w - 0.18, w + 0.22, d)) * alpha
+        ink = (1 - smooth(w - 0.18, w + 0.22, d)) * alpha * lid
         lay = new_img(); lay[:, :3] = color; lay[:, 3] = ink
         l = over(l, lay)
         # wing: outer-corner tangent lifted up & out
@@ -443,10 +447,12 @@ LOOKS = {
     "soft_glam": [
         ("contour", dict(style="warm", alpha=50, areas=["cheek", "jaw", "nose"])),
         ("blush", dict(style="lifted", color=(222, 130, 120), alpha=58)),
-        ("shadow", S(lid=((206, 156, 122), 92), crease=((168, 112, 82), 82),
-                     outer=((140, 88, 62), 74), inner=((248, 232, 212), 70),
-                     shimmer=((255, 244, 232), 48))),
-        ("liner", dict(alpha=246, width=1.25, wing=5.5, lower=True)),
+        ("shadow", S(lid=((206, 156, 122), 48), crease=((168, 112, 82), 42),
+                     outer=((140, 88, 62), 38), inner=((248, 232, 212), 40),
+                     shimmer=((255, 244, 232), 28))),
+        # No atlas liner: the 3D per-frame liner (metal_render.mm) tracks the
+        # upper-lid rim through blinks/talk. Atlas liner is static in UV and
+        # stretches off the lid when the mesh deforms.
         ("lip", dict(color=(172, 100, 92), alpha=220,
                      liner_color=(118, 56, 58), gloss=True)),
         ("highlight", dict(alpha=54)),

@@ -2251,6 +2251,66 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                             [e drawPrimitives:MTLPrimitiveTypeTriangle
                                   vertexStart:0 vertexCount:(NSUInteger)n_iv];
                         }
+                        // ── Per-frame 3D eyeliner: thin dark ribbon along the
+                        // upper-lid rim, generated from live mesh vertices so
+                        // it tracks the lash line through blinks/talk/yaw.
+                        // Atlas liner can't do this — it's static in UV space
+                        // and stretches off the lid when the mesh deforms.
+                        float liner_amt = look.liner * famt;
+                        if (atlas && liner_amt > 0.02f
+                            && get_face_pso(kFaceLash) && g_dss_lash) {
+                            static const int LRIM[10] = {1100,1099,1098,1097,1096,1095,1094,1093,1092,1091};
+                            static const int LRIM_L[10] = {1070,1071,1072,1073,1074,1075,1076,1077,1078,1079};
+                            const int* lrims[2] = { LRIM, LRIM_L };
+                            struct LashVCPU lv2[2 * 10 * 6];
+                            int n_lv2 = 0;
+                            const int ltri[6] = { 0,1,2, 1,3,2 };
+                            const float lav[4] = { 0,0,1,1 }, lev[4] = { 0,1,0,1 };
+                            for (int ei = 0; ei < 2; ++ei) {
+                                const int* rim = lrims[ei];
+                                for (int i = 0; i < 10; ++i) {
+                                    const float* root = f3.verts[rim[i]];
+                                    int ia=i>0?i-1:0, ib=i<9?i+1:9;
+                                    const float* pa=f3.verts[rim[ia]];
+                                    const float* pb=f3.verts[rim[ib]];
+                                    float tx=pb[0]-pa[0], ty=pb[1]-pa[1], tz=pb[2]-pa[2];
+                                    float tl=sqrtf(tx*tx+ty*ty+tz*tz)+1e-6f;
+                                    tx/=tl; ty/=tl; tz/=tl;
+                                    // width: thicker at outer corner, taper in
+                                    float w = 0.0028f * (1.f - 0.35f*(float)i/9.f);
+                                    // offset slightly onto the lid (upward)
+                                    float ox=0.f, oy=0.0008f, oz=0.f;
+                                    float r0[3]={root[0]-tx*w*0.5f+ox, root[1]-ty*w*0.5f+oy, root[2]-tz*w*0.5f+oz};
+                                    float r1[3]={root[0]+tx*w*0.5f+ox, root[1]+ty*w*0.5f+oy, root[2]+tz*w*0.5f+oz};
+                                    // next vertex along rim for the tip edge
+                                    const float* next = f3.verts[rim[i<9?i+1:i]];
+                                    float nx=next[0]-root[0], ny=next[1]-root[1], nz=next[2]-root[2];
+                                    float nl=sqrtf(nx*nx+ny*ny+nz*nz)+1e-6f; nx/=nl; ny/=nl; nz/=nl;
+                                    float t0[3]={r0[0]+nx*0.001f, r0[1]+ny*0.001f, r0[2]+nz*0.001f};
+                                    float t1[3]={r1[0]+nx*0.001f, r1[1]+ny*0.001f, r1[2]+nz*0.001f};
+                                    const float* corn[4]={r0,r1,t0,t1};
+                                    for (int q = 0; q < 6; ++q) {
+                                        float c4[4]; mat4_xform(mvp, corn[ltri[q]], 1.f, c4);
+                                        LashVCPU& o = lv2[n_lv2++];
+                                        o.clip[0]=c4[0]; o.clip[1]=c4[1]; o.clip[2]=c4[2]; o.clip[3]=c4[3];
+                                        o.along=lav[ltri[q]]; o.edge=lev[ltri[q]];
+                                    }
+                                }
+                            }
+                            struct { float dim[2]; float amount, pad0; float color[4];
+                                     float ref[3][2]; float occl, pad1; } llu;
+                            llu.dim[0]=(float)sw; llu.dim[1]=(float)sh;
+                            llu.amount = fminf(liner_amt * 2.5f, 0.9f);
+                            llu.color[0]=0.03f; llu.color[1]=0.02f; llu.color[2]=0.03f; llu.color[3]=1.f;
+                            memcpy(llu.ref, nu.ref, sizeof(llu.ref)); llu.occl=0.f; llu.pad0=llu.pad1=0.f;
+                            [e setRenderPipelineState:get_face_pso(kFaceLash)];
+                            [e setDepthStencilState:g_dss_lash];
+                            [e setCullMode:MTLCullModeNone];
+                            [e setVertexBytes:lv2 length:sizeof(LashVCPU)*n_lv2 atIndex:0];
+                            [e setFragmentBytes:&llu length:sizeof(llu) atIndex:0];
+                            [e drawPrimitives:MTLPrimitiveTypeTriangle
+                                  vertexStart:0 vertexCount:(NSUInteger)n_lv2];
+                        }
                         // ── 3D lash cards from the upper-lid rim vertices ────
                         // (docs/ARKIT_NATIVE_PLAN.md Phase 5). Tapered dark
                         // quads standing off the lid along the rim normal,
@@ -2314,7 +2374,7 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                             struct { float dim[2]; float amount, pad0; float color[4];
                                      float ref[3][2]; float occl, pad1; } lu;
                             lu.dim[0]=(float)sw; lu.dim[1]=(float)sh;
-                            lu.amount = fminf(lash_amt * 3.5f, 1.f);
+                            lu.amount = fminf(lash_amt * 1.2f, 0.35f);  // per-lash: 30 overlapping → ~0.7 max
                             lu.color[0]=0.05f; lu.color[1]=0.04f; lu.color[2]=0.05f; lu.color[3]=1.f;
                             memcpy(lu.ref, nu.ref, sizeof(lu.ref)); lu.occl=0.f; lu.pad0=lu.pad1=0.f;
                             [e setRenderPipelineState:get_face_pso(kFaceLash)];
