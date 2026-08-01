@@ -452,14 +452,26 @@ struct Clip {
     //   - path morph: path_ktracks holds full ShapePath snapshots at times;
     //     eval_path() resamples + lerps between them. The base path
     //     (shape_path) is the fallback when no path keys exist.
+    //   - colour: shape_color_tracks override the four ShapeStyle colour
+    //     slots over time (eval_style()); keyed by kShapeColorProps names.
+    //   - kaleidoscope: shape_mirror_fold replicates the tessellated shape
+    //     radially about its centre (shape_radial_replicate), with optional
+    //     alternating reflection. Keyframable scalars (fold rounds at eval).
     ShapePath        shape_path;            // base / fallback path
     ShapeStyle       shape_style;           // fill / stroke / gradient / glow
     PathPropTrack    shape_path_keys;       // morph keyframes (time → ShapePath)
+    std::unordered_map<std::string, ColorPropTrack> shape_color_tracks; // colour keyframes
     float            shape_stroke_length = 1.f;  // 0..1 reveal (keyframable)
     float            shape_stroke_width_mul = 1.f; // global width multiplier (keyframable)
+    float            shape_mirror_fold = 1.f;    // radial replicas, 1 = off (keyframable)
+    float            shape_mirror_reflect = 1.f; // alternate reflection 0/1 (keyframable)
     // Evaluate the effective path at absolute timeline time `playhead`:
     // morph keys if present, else the base path.
     ShapePath eval_path(float playhead) const;
+    // Evaluate the effective style at absolute timeline time `playhead`:
+    // shape_style with any colour tracks applied. Cheap copy — renderers call
+    // this once per shape clip per frame instead of reading shape_style.
+    ShapeStyle eval_style(float playhead) const;
 };
 
 // Split `cl` at absolute timeline time `cut` and return the right half.

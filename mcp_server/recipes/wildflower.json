@@ -1,0 +1,43 @@
+{
+  "id": "wildflower",
+  "name": "Wildflower",
+  "description": "Psychedelic floral bloom: kaleidoscope petals, star bursts and slow colour blooms over a 6-fold mirror, in a saturated Avalanches-Wildflower palette of hot pinks, coral, sunflower yellow, teal, violet and cream.",
+  "time_signature": 4,
+  "palette": [
+    "#FF3D8A",
+    "#FF6B4A",
+    "#FFD23F",
+    "#2EC4B6",
+    "#9B5DE5",
+    "#FFF6E5",
+    "#FF2E93",
+    "#FF8C42",
+    "#00C2D1",
+    "#7B2FF7"
+  ],
+  "symmetry": {
+    "fold": 6,
+    "reflect": true
+  },
+  "motifs": {
+    "high": ["bloom_ring", "petal_burst", "star_morph", "butterfly"],
+    "mid": ["orbit_petals", "pulse_bloom", "petal_burst", "flower_scatter", "ribbon_waves"],
+    "low": ["slow_bloom", "draw_on_vine", "flower_scatter", "ribbon_waves"]
+  },
+  "motif_weights": {
+    "high": {
+      "bloom_ring": 3,
+      "petal_burst": 2,
+      "star_morph": 2,
+      "butterfly": 1
+    }
+  },
+  "color_motion": {
+    "mode": "palette_cycle",
+    "period_beats": 8
+  },
+  "fx_layer": {
+    "fx_id": "kaleidoscope",
+    "amount": 0.35
+  }
+}

@@ -136,6 +136,9 @@ const ClipKfField kClipKfFields[] = {
     // Shape clip: draw-on reveal + global stroke-width multiplier.
     {"shape_stroke_length",   &Clip::shape_stroke_length},
     {"shape_stroke_width_mul", &Clip::shape_stroke_width_mul},
+    // Shape clip: kaleidoscope fold (rounds to int at eval) + reflection toggle.
+    {"shape_mirror_fold",    &Clip::shape_mirror_fold},
+    {"shape_mirror_reflect", &Clip::shape_mirror_reflect},
     // Generated shader-FX packs: amount + every param (one row each).
 #include "generated/fx_kf_fields.h"
 };
@@ -163,6 +166,19 @@ float Clip::eval_prop(const std::string& name, float playhead) const {
 ShapePath Clip::eval_path(float playhead) const {
     float t = playhead - start;
     return shape_path_keys.eval(t, shape_path);
+}
+
+ShapeStyle Clip::eval_style(float playhead) const {
+    ShapeStyle s = shape_style;
+    if (shape_color_tracks.empty()) return s;
+    float t = playhead - start;
+    for (int i = 0; i < kShapeColorPropCount; ++i) {
+        auto it = shape_color_tracks.find(kShapeColorProps[i]);
+        if (it == shape_color_tracks.end() || it->second.empty()) continue;
+        it->second.eval(t, shape_style_color_slot(shape_style, kShapeColorProps[i]),
+                        shape_style_color_slot(s, kShapeColorProps[i]));
+    }
+    return s;
 }
 
 // ── Split / trim keyframe handling ────────────────────────────────────────────

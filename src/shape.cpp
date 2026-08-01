@@ -1,6 +1,7 @@
 // shape.cpp — Shape clip implementation. See shape.h for the data model.
 #include "shape.h"
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 
 namespace {
@@ -172,6 +173,120 @@ int PathPropTrack::find_nearest(float t, float tol) const {
         if (d < bd) { bd = d; best = i; }
     }
     return best;
+}
+
+// ── ColorPropTrack ───────────────────────────────────────────────────────────
+
+void ColorPropTrack::eval(float t, const float base[4], float out[4]) const {
+    if (keys.empty()) { for (int i = 0; i < 4; ++i) out[i] = base[i]; return; }
+    const ColorKeyframe* ka = &keys.front();
+    const ColorKeyframe* kb = nullptr;
+    float alpha = 0.f;
+    if ((int)keys.size() == 1 || t <= keys.front().time) {
+        // clamp to first key
+    } else if (t >= keys.back().time) {
+        ka = &keys.back();
+    } else {
+        for (int i = 0; i < (int)keys.size() - 1; ++i) {
+            if (t >= keys[i].time && t < keys[i+1].time) {
+                ka = &keys[i];
+                if (keys[i].interp != InterpType::Hold) {
+                    kb = &keys[i+1];
+                    alpha = (t - keys[i].time) / (keys[i+1].time - keys[i].time);
+                    alpha = apply_interp(alpha, keys[i].interp);
+                }
+                break;
+            }
+        }
+    }
+    for (int i = 0; i < 4; ++i)
+        out[i] = kb ? lerp(ka->v[i], kb->v[i], alpha) : ka->v[i];
+}
+
+void ColorPropTrack::set(float t, const float v[4], InterpType it) {
+    for (auto& k : keys) {
+        if (std::fabs(k.time - t) < 0.02f) {
+            for (int i = 0; i < 4; ++i) k.v[i] = v[i];
+            k.interp = it;
+            return;
+        }
+    }
+    ColorKeyframe k;
+    k.time = t;
+    for (int i = 0; i < 4; ++i) k.v[i] = v[i];
+    k.interp = it;
+    keys.push_back(k);
+    std::sort(keys.begin(), keys.end(),
+              [](const ColorKeyframe& a, const ColorKeyframe& b){ return a.time < b.time; });
+}
+
+void ColorPropTrack::remove_at(float t, float tol) {
+    int i = find_nearest(t, tol);
+    if (i >= 0) keys.erase(keys.begin() + i);
+}
+
+int ColorPropTrack::find_nearest(float t, float tol) const {
+    int best = -1; float bd = tol;
+    for (int i = 0; i < (int)keys.size(); ++i) {
+        float d = std::fabs(keys[i].time - t);
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
+// ── Colour slot table ────────────────────────────────────────────────────────
+
+const char* const kShapeColorProps[] = {"fill_col", "stroke_col", "grad_col2", "glow_col"};
+const int kShapeColorPropCount = 4;
+
+float* shape_style_color_slot(ShapeStyle& s, const char* name) {
+    if (!strcmp(name, "fill_col"))   return s.fill_col;
+    if (!strcmp(name, "stroke_col")) return s.stroke_col;
+    if (!strcmp(name, "grad_col2"))  return s.grad_col2;
+    if (!strcmp(name, "glow_col"))   return s.glow_col;
+    return nullptr;
+}
+const float* shape_style_color_slot(const ShapeStyle& s, const char* name) {
+    return shape_style_color_slot(const_cast<ShapeStyle&>(s), name);
+}
+
+// ── Kaleidoscope replication ─────────────────────────────────────────────────
+
+namespace {
+
+void replicate_verts(const std::vector<ShapeVertex>& in,
+                     std::vector<ShapeVertex>& out,
+                     float cx, float cy, int fold, bool reflect) {
+    out.reserve(in.size() * (size_t)fold);
+    const float step = 2.f * 3.14159265f / (float)fold;
+    for (int i = 0; i < fold; ++i) {
+        bool mirror = reflect && (i & 1);
+        float c = std::cos(step * (float)i), s = std::sin(step * (float)i);
+        for (int j = 0; j < (int)in.size(); ++j) {
+            ShapeVertex v = in[j];
+            float dx = v.x - cx, dy = v.y - cy;
+            if (mirror) dy = -dy;               // reflect across the local x-axis
+            v.x = cx + dx * c - dy * s;
+            v.y = cy + dx * s + dy * c;
+            out.push_back(v);
+            // Reflection flips winding: emit mirrored triangles in reverse
+            // vertex order to keep every output triangle CCW.
+            if (mirror && (j % 3) == 2)
+                std::swap(out[out.size() - 2], out[out.size() - 1]);
+        }
+    }
+}
+
+} // namespace
+
+ShapeGeometry shape_radial_replicate(const ShapeGeometry& g,
+                                     float cx, float cy,
+                                     int fold, bool reflect) {
+    if (fold <= 1) return g;
+    ShapeGeometry out;
+    replicate_verts(g.fill,   out.fill,   cx, cy, fold, reflect);
+    replicate_verts(g.stroke, out.stroke, cx, cy, fold, reflect);
+    return out;
 }
 
 // ── Presets ──────────────────────────────────────────────────────────────────

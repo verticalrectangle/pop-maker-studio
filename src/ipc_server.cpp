@@ -774,6 +774,21 @@ static json clip_to_json(int idx, const Clip& c) {
         j["shape_style"]     = style;
         j["shape_stroke_length"]    = c.shape_stroke_length;
         j["shape_stroke_width_mul"] = c.shape_stroke_width_mul;
+        j["shape_mirror_fold"]      = c.shape_mirror_fold;
+        j["shape_mirror_reflect"]   = c.shape_mirror_reflect;
+        if (!c.shape_color_tracks.empty()) {
+            json cts = json::object();
+            for (auto& [prop, ct] : c.shape_color_tracks) {
+                if (ct.empty()) continue;
+                json arr = json::array();
+                for (auto& k : ct.keys)
+                    arr.push_back({{"t", k.time},
+                                   {"v", {k.v[0], k.v[1], k.v[2], k.v[3]}},
+                                   {"interp", interp_str(k.interp)}});
+                cts[prop] = std::move(arr);
+            }
+            if (!cts.empty()) j["shape_color_keyframes"] = std::move(cts);
+        }
         if (!c.shape_path_keys.empty()) {
             json keys = json::array();
             for (auto& k : c.shape_path_keys.keys) {
@@ -1081,9 +1096,13 @@ static bool clip_type_is_text_kind(ClipType t) {
     return t == ClipType::Text || t == ClipType::Subtitle || t == ClipType::Lyrics;
 }
 static bool clip_type_occupies_row(ClipType t) {
+    // Shape is content: it occupies its row like video/audio/text. The only
+    // legal overlap in the app is an FX brick welding onto a host (FX types
+    // are absent from this list by design).
     return clip_type_is_text_kind(t) ||
            t == ClipType::Video  || t == ClipType::Audio ||
            t == ClipType::Background ||
+           t == ClipType::Shape ||
            t == ClipType::VideoRecord || t == ClipType::Record;
 }
 static bool row_overlap_on_track(const AppState& state, int ti, ClipType ct,
@@ -2725,6 +2744,100 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    // ── Read-only getters that used to live below the auto-batch line: that
+    // made the auto-batcher swallow their real payload (replaced by a full
+    // state dump) and push a phantom history entry per call.
+    if (method == "get_markers") {
+        json arr = json::array();
+        for (int mi = 0; mi < (int)state.markers.size(); ++mi) {
+            const auto& m = state.markers[mi];
+            char hex[12];
+            snprintf(hex, sizeof(hex), "#%06X", m.color & 0x00FFFFFFu);
+            json mj;
+            mj["index"] = mi;
+            mj["time"]  = m.time;
+            mj["label"] = m.label;
+            mj["color"] = hex;
+            arr.push_back(mj);
+        }
+        json r; r["markers"] = arr;
+        return r;
+    }
+
+    if (method == "get_shape_style") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (cl.clip_type != ClipType::Shape) { err = "clip is not a shape"; return {}; }
+        float t = params.value("t", state.playhead);
+        ShapeStyle s = cl.eval_style(t);
+        json r;
+        r["t"] = t;
+        auto put4 = [](const float* c) { return json::array({c[0], c[1], c[2], c[3]}); };
+        r["fill_col"]       = put4(s.fill_col);
+        r["fill_on"]        = s.fill_on;
+        r["stroke_col"]     = put4(s.stroke_col);
+        r["stroke_on"]      = s.stroke_on;
+        r["stroke_width"]   = s.stroke_width;
+        r["grad_mode"]      = s.grad_mode;
+        r["grad_col2"]      = put4(s.grad_col2);
+        r["grad_angle"]     = s.grad_angle;
+        r["glow_col"]       = put4(s.glow_col);
+        r["glow_on"]        = s.glow_on;
+        r["glow_radius"]    = s.glow_radius;
+        r["glow_intensity"] = s.glow_intensity;
+        r["mirror_fold"]    = (int)lroundf(cl.eval_prop("shape_mirror_fold", t));
+        r["mirror_reflect"] = cl.eval_prop("shape_mirror_reflect", t) >= 0.5f;
+        json ckc = json::object();
+        for (auto& [prop, ct] : cl.shape_color_tracks)
+            ckc[prop] = (int)ct.keys.size();
+        r["color_key_counts"] = std::move(ckc);
+        return r;
+    }
+
+    if (method == "get_shape_path") {
+        int ti = params.value("track", -1), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (cl.clip_type != ClipType::Shape) { err = "clip is not a shape"; return {}; }
+        float t = params.value("t", state.playhead);
+        ShapePath path = cl.eval_path(t);
+        json pts = json::array();
+        for (auto& p : path.pts)
+            pts.push_back({{"x", p.x}, {"y", p.y}, {"w", p.width}});
+        json r;
+        r["closed"] = path.closed;
+        r["points"] = pts;
+        r["key_count"] = (int)cl.shape_path_keys.keys.size();
+        return r;
+    }
+
+    if (method == "get_stills") {
+        if (!params.contains("paths") || !params["paths"].is_array()) {
+            err = "paths array required"; return {};
+        }
+        std::vector<std::string> paths;
+        for (auto& p : params["paths"]) paths.push_back(p.get<std::string>());
+        if (client_fd < 0) { return json::object(); }
+        fd_mark_busy(client_fd);
+        std::thread([paths, client_fd, req_id]() {
+            json stills = json::array();
+            for (const auto& p : paths) {
+                proxy_ensure_still(p);
+                json entry;
+                entry["path"]  = p;
+                entry["still"] = proxy_still_path(p);
+                entry["ok"]    = std::filesystem::exists(proxy_still_path(p));
+                stills.push_back(std::move(entry));
+            }
+            json r; r["stills"] = stills;
+            send_ok_id(client_fd, req_id, r);
+            agent_done();
+            fd_mark_free(client_fd);
+        }).detach();
+        json sentinel; sentinel["__async"] = true; return sentinel;
+    }
+
     // ── Editing: auto-batch single mutations if not already in a batch ────────
     if (!g_in_batch) {
         g_in_batch     = true;
@@ -3281,7 +3394,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                        : prop == "bg_c2" ? cl.bg_c2 : cl.bg_c3;
             for (int i = 0; i < 4; ++i) dst[i] = jval_float(val[i]);
         }
-        else { err = "unknown prop: " + prop; return {}; }
+        else {
+            // Registry fallback: any keyframable scalar field (kClipKfFields)
+            // also sets statically — the static value is eval_prop's fallback
+            // when the prop has no keys. Covers newer props (shape_mirror_fold,
+            // FX params, …) without a dedicated branch each.
+            bool found = false;
+            for (int i = 0; i < kClipKfFieldCount; ++i) {
+                if (prop == kClipKfFields[i].name) {
+                    cl.*(kClipKfFields[i].f) = jval_float(val);
+                    found = true; break;
+                }
+            }
+            if (!found) { err = "unknown prop: " + prop; return {}; }
+        }
         return json::object();
     }
 
@@ -3394,23 +3520,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (mi < 0 || mi >= (int)state.markers.size()) { err = "invalid marker index"; return {}; }
         state.markers.erase(state.markers.begin() + mi);
         return json::object();
-    }
-
-    if (method == "get_markers") {
-        json arr = json::array();
-        for (int mi = 0; mi < (int)state.markers.size(); ++mi) {
-            const auto& m = state.markers[mi];
-            char hex[12];
-            snprintf(hex, sizeof(hex), "#%06X", m.color & 0x00FFFFFFu);
-            json mj;
-            mj["index"] = mi;
-            mj["time"]  = m.time;
-            mj["label"] = m.label;
-            mj["color"] = hex;
-            arr.push_back(mj);
-        }
-        json r; r["markers"] = arr;
-        return r;
     }
 
     if (method == "trigger_pipeline") {
@@ -3667,20 +3776,42 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
-    if (method == "get_shape_path") {
+    if (method == "set_shape_color_keyframes") {
         int ti = params.value("track", -1), ci = params.value("clip", -1);
         if (!check_clip(state, ti, ci, err)) return {};
         Clip& cl = state.tracks[ti].clips[ci];
         if (cl.clip_type != ClipType::Shape) { err = "clip is not a shape"; return {}; }
-        float t = params.value("t", state.playhead);
-        ShapePath path = cl.eval_path(t);
-        json pts = json::array();
-        for (auto& p : path.pts)
-            pts.push_back({{"x", p.x}, {"y", p.y}, {"w", p.width}});
+        std::string prop = params.value("prop", "");
+        if (!shape_style_color_slot(cl.shape_style, prop.c_str())) {
+            err = "prop '" + prop + "' is not a keyframable shape colour "
+                  "(fill_col/stroke_col/grad_col2/glow_col)";
+            return {};
+        }
+        if (!params.contains("keys") || !params["keys"].is_array()) {
+            err = "keys must be an array of {t, v:[r,g,b,a], interp?} (empty clears)";
+            return {};
+        }
+        ColorPropTrack ct;
+        for (auto& k : params["keys"]) {
+            if (!k.contains("t") || !k.contains("v") || !k["v"].is_array() ||
+                k["v"].size() != 4) {
+                err = "each key needs t and v=[r,g,b,a]"; return {};
+            }
+            float t = k["t"].get<float>();
+            if (t < 0.f || t > cl.end - cl.start + 1e-3f) {
+                err = "key t outside clip duration (t is seconds relative to clip start)";
+                return {};
+            }
+            float rgba[4];
+            for (int i = 0; i < 4; ++i) rgba[i] = k["v"][i].get<float>();
+            ct.set(t, rgba, interp_from_str(k.value("interp", "ease_both")));
+        }
+        if (ct.empty()) cl.shape_color_tracks.erase(prop);
+        else            cl.shape_color_tracks[prop] = std::move(ct);
         json r;
-        r["closed"] = path.closed;
-        r["points"] = pts;
-        r["key_count"] = (int)cl.shape_path_keys.keys.size();
+        r["prop"] = prop;
+        r["key_count"] = cl.shape_color_tracks.count(prop)
+                       ? (int)cl.shape_color_tracks[prop].keys.size() : 0;
         return r;
     }
 
@@ -4030,32 +4161,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             [t](const Clip& c){ return c.start >= (float)t; }), clips.end());
         history_push(state, "delete_clips_after");
         return json::object();
-    }
-
-    if (method == "get_stills") {
-        if (!params.contains("paths") || !params["paths"].is_array()) {
-            err = "paths array required"; return {};
-        }
-        std::vector<std::string> paths;
-        for (auto& p : params["paths"]) paths.push_back(p.get<std::string>());
-        if (client_fd < 0) { return json::object(); }
-        fd_mark_busy(client_fd);
-        std::thread([paths, client_fd, req_id]() {
-            json stills = json::array();
-            for (const auto& p : paths) {
-                proxy_ensure_still(p);
-                json entry;
-                entry["path"]  = p;
-                entry["still"] = proxy_still_path(p);
-                entry["ok"]    = std::filesystem::exists(proxy_still_path(p));
-                stills.push_back(std::move(entry));
-            }
-            json r; r["stills"] = stills;
-            send_ok_id(client_fd, req_id, r);
-            agent_done();
-            fd_mark_free(client_fd);
-        }).detach();
-        json sentinel; sentinel["__async"] = true; return sentinel;
     }
 
     err = "unknown method: " + method;

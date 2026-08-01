@@ -1,0 +1,62 @@
+{
+  "id": "wildflower_cover",
+  "name": "Wildflower Cover",
+  "description": "Animated Wildflower album cover: a black field with 30+ flat crisp flowers of all sizes and colours scattered edge-to-edge, warm flowing ribbon bands in the bottom region, one wandering butterfly, and kaleidoscope blooms only at energy peaks. Hard flat fills — no glow, no gradients.",
+  "composition": "field",
+  "backdrop": "#FFFFFF",
+  "time_signature": 4,
+  "palette": [
+    "#E8442E",
+    "#E91E8C",
+    "#F07B1F",
+    "#F2B705",
+    "#F5E6C8",
+    "#1FA8A0",
+    "#4CAF50",
+    "#3FA9F5",
+    "#7E57C2",
+    "#C62828"
+  ],
+  "warm_palette": [
+    "#C62828",
+    "#E8442E",
+    "#F07B1F",
+    "#F2B705",
+    "#F5E6C8"
+  ],
+  "symmetry": {
+    "fold": 6,
+    "reflect": true
+  },
+  "motifs": {
+    "high": [],
+    "mid": [],
+    "low": []
+  },
+  "field": {
+    "flower_count": 30,
+    "min_scale": 0.07,
+    "max_scale": 0.22,
+    "petals": [5, 6],
+    "breathe": 0.06,
+    "drift": 0.02
+  },
+  "ribbons": {
+    "count": 5,
+    "fill_to": 0.08,
+    "rise": true
+  },
+  "butterflies": 1,
+  "canvas_aspect": 0.5625,
+  "peaks": {
+    "motif": "bloom_ring",
+    "fold": 1,
+    "reflect": false,
+    "min_energy": 0.65,
+    "max_blooms": 3,
+    "scale": 0.5,
+    "min_bar": 2,
+    "no_morph": true,
+    "flat": true
+  }
+}

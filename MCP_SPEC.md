@@ -164,6 +164,7 @@ The server registers ~70 tools spanning the full editing surface. **The canonica
 | **Background removal** | `remove_background`, `process_body_fx_masks`, `get_bg_remove_status` |
 | **Media probing** | `get_media_info`, `get_stills`, `describe_video`, `get_video_description` |
 | **Multicam** | `apply_multicam_cuts` |
+| **Style recipes** | `get_song_structure`, `list_style_recipes`, `get_style_recipe`, `animate_section` |
 | **Media operations** | `crop_media`, `extract_clip_segment` |
 | **Vision model** | `download_vision_model`, `get_vision_model_status` |
 | **Playback** | `play`, `pause`, `seek` |

@@ -1902,6 +1902,52 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
             break;
         }
 
+        // ── Shape clips (mirrors render_tick_gl — direct FBO writes, flush first)
+        bool has_shape = false;
+        for (auto& sh_cl : track.clips) {
+            if (sh_cl.clip_type != ClipType::Shape) continue;
+            if (t < sh_cl.start || t >= sh_cl.end) continue;
+            has_shape = true;
+        }
+        if (has_shape) {
+            flush_dl();  // submit pending BG/text draw commands before direct FBO writes
+            for (auto& sh_cl : track.clips) {
+                if (sh_cl.clip_type != ClipType::Shape) continue;
+                if (t < sh_cl.start || t >= sh_cl.end) continue;
+
+                float spx = sh_cl.eval_prop("pos_x",    t);
+                float spy = sh_cl.eval_prop("pos_y",    t);
+                float ssx = sh_cl.eval_prop("scale_x",  t);
+                float ssy = sh_cl.eval_prop("scale_y",  t);
+                float srot = sh_cl.eval_prop("rotation", t);
+                float salpha = sh_cl.eval_prop("opacity", t);
+                float slen = sh_cl.eval_prop("shape_stroke_length", t);
+                float swmul = sh_cl.eval_prop("shape_stroke_width_mul", t);
+                int   sfold = (int)lroundf(sh_cl.eval_prop("shape_mirror_fold", t));
+                bool  srefl = sh_cl.eval_prop("shape_mirror_reflect", t) >= 0.5f;
+                ShapeStyle sstyle = sh_cl.eval_style(t);
+
+                float base = (W < H) ? W : H;
+                float scx = spx * W, scy = spy * H;
+                float shw = base * ssx * 0.5f, shh = base * ssy * 0.5f;
+                float srad = srot * 3.14159265f / 180.f;
+
+                ShapePath spath = sh_cl.eval_path(t);
+                ShapeGeometry sgeom = shape_tessellate(spath, slen, swmul,
+                                                       sstyle.stroke_width,
+                                                       out_w, out_h,
+                                                       scx, scy, shw, shh,
+                                                       cosf(srad), sinf(srad));
+                if (sfold > 1)
+                    sgeom = shape_radial_replicate(sgeom, scx, scy, sfold, srefl);
+                float sfill = slen >= 1.f ? 1.f
+                            : slen <= 0.6f ? 0.f
+                            : (slen - 0.6f) / 0.4f;
+                shape_render_to_fbo(sgeom, sstyle, salpha, sfill,
+                                    fbo, out_w, out_h);
+            }
+        }
+
         // ── Video clips ───────────────────────────────────────────────────────
         const Clip* active = nullptr; int active_ci = -1;
         for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
@@ -3298,6 +3344,9 @@ void render_tick_gl(AppState& state) {
                 float salpha = sh_cl.eval_prop("opacity", t);
                 float slen = sh_cl.eval_prop("shape_stroke_length", t);
                 float swmul = sh_cl.eval_prop("shape_stroke_width_mul", t);
+                int   sfold = (int)lroundf(sh_cl.eval_prop("shape_mirror_fold", t));
+                bool  srefl = sh_cl.eval_prop("shape_mirror_reflect", t) >= 0.5f;
+                ShapeStyle sstyle = sh_cl.eval_style(t);
 
                 float base = (W < H) ? W : H;
                 float scx = spx * W, scy = spy * H;
@@ -3306,14 +3355,16 @@ void render_tick_gl(AppState& state) {
 
                 ShapePath spath = sh_cl.eval_path(t);
                 ShapeGeometry sgeom = shape_tessellate(spath, slen, swmul,
-                                                       sh_cl.shape_style.stroke_width,
+                                                       sstyle.stroke_width,
                                                        g_gl_ex.out_w, g_gl_ex.out_h,
                                                        scx, scy, shw, shh,
                                                        cosf(srad), sinf(srad));
+                if (sfold > 1)
+                    sgeom = shape_radial_replicate(sgeom, scx, scy, sfold, srefl);
                 float sfill = slen >= 1.f ? 1.f
                             : slen <= 0.6f ? 0.f
                             : (slen - 0.6f) / 0.4f;
-                shape_render_to_fbo(sgeom, sh_cl.shape_style, salpha, sfill,
+                shape_render_to_fbo(sgeom, sstyle, salpha, sfill,
                                     g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
             }
         }

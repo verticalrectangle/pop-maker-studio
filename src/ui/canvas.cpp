@@ -1890,6 +1890,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             float alpha = cl.eval_prop("opacity",  state.playhead);
             float stroke_len = cl.eval_prop("shape_stroke_length", state.playhead);
             float width_mul  = cl.eval_prop("shape_stroke_width_mul", state.playhead);
+            int   mirror_fold = (int)lroundf(cl.eval_prop("shape_mirror_fold", state.playhead));
+            bool  mirror_refl = cl.eval_prop("shape_mirror_reflect", state.playhead) >= 0.5f;
+            ShapeStyle style = cl.eval_style(state.playhead);
 
             // Shape size: scale relative to the smaller canvas dimension so a
             // unit scale reads as "fit the shape's bbox into a square centred
@@ -1902,15 +1905,17 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
             ShapePath path = cl.eval_path(state.playhead);
             ShapeGeometry geom = shape_tessellate(path, stroke_len, width_mul,
-                                                  cl.shape_style.stroke_width,
+                                                  style.stroke_width,
                                                   (int)w, (int)h,
                                                   cx, cy, hw, hh,
                                                   cosf(rad), sinf(rad));
+            if (mirror_fold > 1)
+                geom = shape_radial_replicate(geom, cx, cy, mirror_fold, mirror_refl);
             // Fill fades in over the last 40% of the stroke reveal.
             float fill_alpha = stroke_len >= 1.f ? 1.f
                              : stroke_len <= 0.6f ? 0.f
                              : (stroke_len - 0.6f) / 0.4f;
-            scene_add_shape(geom, cl.shape_style, alpha, fill_alpha, (int)w, (int)h);
+            scene_add_shape(geom, style, alpha, fill_alpha, (int)w, (int)h);
         }
 
         // ── Video clip ─────────────────────────────────────────────────────────

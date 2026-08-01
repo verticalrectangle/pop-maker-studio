@@ -3018,15 +3018,52 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
             ShapeStyle& s = clip.shape_style;
 
+            // Colour keyframes: diamond adds/updates a key at the playhead from
+            // the EVALUATED colour (so you can scrub + key like any kf_slider);
+            // editing a swatch with a key at the playhead updates that key
+            // instead of the static base — same auto-key rule as kf_slider.
+            auto ck_button = [&](const char* prop) {
+                float t_local = state.playhead - clip.start;
+                auto it = clip.shape_color_tracks.find(prop);
+                bool has = it != clip.shape_color_tracks.end() &&
+                           it->second.find_nearest(t_local) >= 0;
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushID(prop);
+                if (ui_btn(has ? "\xe2\x97\x86" : "\xe2\x97\x87", false, true)) {
+                    ShapeStyle ev = clip.eval_style(state.playhead);
+                    clip.shape_color_tracks[prop].set(
+                        t_local, shape_style_color_slot(ev, prop));
+                    history_push(state, "Key shape colour");
+                }
+                if (it != clip.shape_color_tracks.end() && !it->second.empty()) {
+                    ImGui::SameLine(0.f, 2.f);
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::Text("%d", (int)it->second.keys.size());
+                    ImGui::PopStyleColor();
+                }
+                ImGui::PopID();
+            };
+            auto ck_on_edit = [&](const char* prop, const float* rgba) {
+                float t_local = state.playhead - clip.start;
+                auto it = clip.shape_color_tracks.find(prop);
+                if (it == clip.shape_color_tracks.end()) return;
+                int ki = it->second.find_nearest(t_local);
+                if (ki >= 0)
+                    for (int i = 0; i < 4; ++i) it->second.keys[ki].v[i] = rgba[i];
+            };
+
             bool fill = s.fill_on;
             if (ImGui::Checkbox("Fill##sh_fill", &fill)) {
                 s.fill_on = fill; history_push(state, "Shape fill");
             }
             if (s.fill_on) {
-                ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(sw - 100.f);
+                ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(sw - 140.f);
                 if (ImGui::ColorEdit4("##sh_fillcol", s.fill_col,
-                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
+                    ck_on_edit("fill_col", s.fill_col);
                     history_push(state, "Shape fill color");
+                }
+                ck_button("fill_col");
             }
 
             ImGui::Dummy({0.f, 2.f});
@@ -3038,10 +3075,13 @@ void panel_clip(AppState& state, float w) {
                 ImGui::SameLine(0.f, 8.f); ImGui::SetNextItemWidth(70.f);
                 if (ImGui::SliderFloat("w##sh_sw", &s.stroke_width, 0.001f, 0.05f, "%.3f"))
                     history_push(state, "Shape stroke width");
-                ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 180.f);
+                ImGui::SameLine(0.f, 4.f); ImGui::SetNextItemWidth(sw - 220.f);
                 if (ImGui::ColorEdit4("##sh_stkcol", s.stroke_col,
-                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
+                    ck_on_edit("stroke_col", s.stroke_col);
                     history_push(state, "Shape stroke color");
+                }
+                ck_button("stroke_col");
             }
 
             ImGui::Dummy({0.f, 4.f});
@@ -3055,10 +3095,13 @@ void panel_clip(AppState& state, float w) {
             }
             if (s.grad_mode != 0) {
                 ImGui::Dummy({0.f, 4.f});
-                ImGui::SetNextItemWidth(sw - 16.f);
+                ImGui::SetNextItemWidth(sw - 56.f);
                 if (ImGui::ColorEdit4("##sh_grad2", s.grad_col2,
-                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
+                    ck_on_edit("grad_col2", s.grad_col2);
                     history_push(state, "Shape gradient color");
+                }
+                ck_button("grad_col2");
                 if (s.grad_mode == 1) {  // angle only meaningful for linear
                     ImGui::Dummy({0.f, 4.f});
                     ImGui::SetNextItemWidth(sw - 16.f);
@@ -3082,12 +3125,62 @@ void panel_clip(AppState& state, float w) {
                 if (ImGui::SliderFloat("intensity##sh_gi", &s.glow_intensity, 0.f, 3.f, "%.2f"))
                     history_push(state, "Shape glow intensity");
                 ImGui::Dummy({0.f, 2.f});
-                ImGui::SetNextItemWidth(sw - 16.f);
+                ImGui::SetNextItemWidth(sw - 56.f);
                 if (ImGui::ColorEdit4("##sh_gcol", s.glow_col,
-                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar))
+                        ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
+                    ck_on_edit("glow_col", s.glow_col);
                     history_push(state, "Shape glow color");
+                }
+                ck_button("glow_col");
             }
             ImGui::Dummy({0.f, 4.f});
+
+            // ── Colour key list: every keyed slot, editable like morph keys ──
+            {
+                int total_ck = 0;
+                for (auto& [p, tr] : clip.shape_color_tracks)
+                    total_ck += (int)tr.keys.size();
+                if (total_ck > 0) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextUnformatted("COLOUR KEYS"); ImGui::PopStyleColor();
+                    ImGui::Dummy({0.f, 4.f});
+                    bool ck_deleted = false;
+                    for (int pi = 0; pi < kShapeColorPropCount && !ck_deleted; ++pi) {
+                        auto it = clip.shape_color_tracks.find(kShapeColorProps[pi]);
+                        if (it == clip.shape_color_tracks.end()) continue;
+                        ColorPropTrack& tr = it->second;
+                        for (int ki = 0; ki < (int)tr.keys.size(); ++ki) {
+                            ImGui::PushID(pi * 1000 + ki);
+                            ColorKeyframe& k = tr.keys[ki];
+                            ImGui::ColorButton("##cksw",
+                                ImVec4(k.v[0], k.v[1], k.v[2], k.v[3]),
+                                ImGuiColorEditFlags_NoTooltip, {14.f, 14.f});
+                            ImGui::SameLine(0.f, 6.f);
+                            char lbl[64];
+                            snprintf(lbl, sizeof(lbl), "%s  t=%.2fs",
+                                     kShapeColorProps[pi], k.time);
+                            ImGui::TextUnformatted(lbl);
+                            ImGui::SameLine(bar_w - 60.f);
+                            if (ui_btn("Delete##ckdel", false, true)) {
+                                tr.keys.erase(tr.keys.begin() + ki);
+                                if (tr.keys.empty())
+                                    clip.shape_color_tracks.erase(it);
+                                history_push(state, "Delete shape colour key");
+                                ImGui::PopID();
+                                ck_deleted = true;
+                                break;
+                            }
+                            ImGui::PopID();
+                        }
+                    }
+                    ImGui::Dummy({0.f, 4.f});
+                    if (ui_btn("Clear all colour keys", false, true)) {
+                        clip.shape_color_tracks.clear();
+                        history_push(state, "Clear shape colour keys");
+                    }
+                    ImGui::Dummy({0.f, 4.f});
+                }
+            }
         }
 
         // ── Animation: draw-on reveal + stroke width multiplier ───────────────
@@ -3099,6 +3192,14 @@ void panel_clip(AppState& state, float w) {
             ImGui::Dummy({0.f, 4.f});
             kf_slider("shape_stroke_width_mul", "Stroke width",
                       &clip.shape_stroke_width_mul, 0.1f, 5.f, "%.2f\xc3\x97");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("shape_mirror_fold", "Kaleidoscope",
+                      &clip.shape_mirror_fold, 1.f, 16.f, "%.0f\xc3\x97");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("shape_mirror_reflect", "Mirror petals",
+                      &clip.shape_mirror_reflect, 0.f, 1.f, "%.0f");
             kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
         }

@@ -96,6 +96,38 @@ struct PathPropTrack {
     int   find_nearest(float t, float tol = 0.1f) const;
 };
 
+// ── Keyframable colours ──────────────────────────────────────────────────────
+// RGBA keyframe on a ShapeStyle colour slot — same conventions as Keyframe
+// (time relative to clip.start, same easing curves, tracks clamp outside the
+// key range). ColorPropTracks live on the Clip (app.h) keyed by slot name; the
+// style struct itself stays plain data so the inspector edits it directly.
+struct ColorKeyframe {
+    float      time   = 0.f;
+    float      v[4]   = {1.f, 1.f, 1.f, 1.f};
+    InterpType interp = InterpType::EaseBoth;
+};
+
+struct ColorPropTrack {
+    std::vector<ColorKeyframe> keys;  // always sorted by time
+
+    bool empty() const { return keys.empty(); }
+    // Evaluate into out[4] (RGBA). Copies base when the track is empty;
+    // otherwise clamps to the nearest key outside the range and lerps (with
+    // the key's easing) inside it — same semantics as PropTrack::eval.
+    void eval(float t, const float base[4], float out[4]) const;
+    void set(float t, const float v[4], InterpType it = InterpType::EaseBoth);
+    void remove_at(float t, float tol = 0.05f);
+    int  find_nearest(float t, float tol = 0.1f) const;
+};
+
+// The ShapeStyle colour slots that accept a ColorPropTrack, in stable order
+// (serialization, IPC validation, and the inspector all iterate this table).
+extern const char* const kShapeColorProps[];  // fill_col / stroke_col / grad_col2 / glow_col
+extern const int kShapeColorPropCount;
+// Mutable pointer to the named slot's 4 floats; nullptr when unknown.
+float* shape_style_color_slot(ShapeStyle& s, const char* name);
+const float* shape_style_color_slot(const ShapeStyle& s, const char* name);
+
 // ── Presets ──────────────────────────────────────────────────────────────────
 // The preset is the STARTING shape baked into a path at creation. It is NOT
 // stored on the clip — the path is the source of truth and is freely editable
@@ -109,7 +141,9 @@ const char* shape_preset_name(ShapePreset p);
 bool        shape_preset_from_name(const std::string& s, ShapePreset& out);
 
 // Bake a preset to a normalised ShapePath.
-//   Star/Burst:    params[0] = point count (>=3), params[1] = inner ratio (0..1)
+//   Star/Burst:    params[0] = point count (>=3), params[1] = inner RADIUS in
+//                  unit-box fractions (outer = 0.5; default 0.22 → a classic
+//                  star. Values approaching 0.5 read as a wobbly polygon).
 //   Polygon/Hex:   params[0] = side count (>=3)
 //   Arrow:         params[0] = stem fraction (0..1), params[1] = head fraction (0..1)
 //   Lightning:     params[0] = jag amplitude (0..0.5)
@@ -142,3 +176,15 @@ ShapeGeometry shape_tessellate(const ShapePath& path,
                                float cx, float cy,     // centre px
                                float hw, float hh,     // half-size px
                                float cos_r, float sin_r);
+
+// ── Kaleidoscope replication ─────────────────────────────────────────────────
+// Replicate tessellated geometry `fold` times around canvas-space centre
+// (cx,cy): replica i is rotated by i·360°/fold about the centre, and when
+// `reflect` is set the odd replicas are mirrored first (dihedral kaleidoscope
+// — the classic mirror-symmetric bloom). Per-vertex u/v are preserved so every
+// replica keeps the original gradient/glow shading. Reflection flips triangle
+// winding, so each reflected triangle's vertex order is swapped to keep the
+// CCW invariant. fold <= 1 returns `g` unchanged (cheap early-out).
+ShapeGeometry shape_radial_replicate(const ShapeGeometry& g,
+                                     float cx, float cy,
+                                     int fold, bool reflect);

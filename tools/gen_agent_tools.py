@@ -66,8 +66,8 @@ def main():
     by_cat: dict[str, list[str]] = {}
     for t in agent_tools:
         by_cat.setdefault(t.get("category", "misc"), []).append(t["name"])
-    cat_order = ["read", "timeline", "text", "shape", "fx", "audio", "transcript",
-                 "export", "project", "capture", "playback", "system", "misc"]
+    cat_order = ["read", "timeline", "text", "shape", "fx", "audio", "style",
+                 "transcript", "export", "project", "capture", "playback", "system", "misc"]
     index_lines = [
         f"{cat}: " + ", ".join(sorted(by_cat[cat]))
         for cat in cat_order if cat in by_cat

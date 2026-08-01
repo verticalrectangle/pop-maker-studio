@@ -45,6 +45,11 @@ from mcp.server.stdio import stdio_server
 from mcp import types
 from mcp.types import Tool, TextContent, ImageContent
 
+# Style-recipe expander lives next to server.py; the script's dir is on sys.path
+# whether run directly (python3 mcp_server/server.py) or imported by the tool
+# scripts (which insert mcp_server/ into sys.path first).
+import style_expander
+
 # ── Registry-driven FX catalog ───────────────────────────────────────────────
 # The add_effect_brick description used to hand-list every shader effect, so new
 # effects in effects/registry.json (cam_shake, glow_up, …) silently went missing
@@ -93,7 +98,8 @@ _CATEGORIES: dict[str, list[str]] = {
         "find_and_add_clip", "find_video_moment", "apply_multicam_cuts",
     ],
     "text": ["set_typography_preset", "set_text_style", "set_transcript"],
-    "shape": ["add_shape", "set_shape_path", "set_shape_style", "set_shape_keyframes", "get_shape_path"],
+    "shape": ["add_shape", "set_shape_path", "set_shape_style", "set_shape_keyframes", "get_shape_path",
+              "set_shape_color_keyframes", "get_shape_style"],
     "fx": [
         "add_effect_brick", "add_multifx_brick", "add_audio_multifx_brick", "add_body_fx_brick",
         "decouple_fx_brick", "set_clip_fx", "process_body_fx_masks", "remove_background",
@@ -102,6 +108,9 @@ _CATEGORIES: dict[str, list[str]] = {
     "audio": [
         "analyze_audio", "get_audio_analysis", "get_audio_perf",
         "set_audio_path", "remove_silence", "cut_filler_words", "find_audio_cue",
+    ],
+    "style": [
+        "get_song_structure", "list_style_recipes", "get_style_recipe", "animate_section",
     ],
     "transcript": [
         "trigger_pipeline", "get_pipeline_status", "get_transcript", "search_transcript",
@@ -336,7 +345,12 @@ def _batch(label: str):
     result = {}
     try:
         yield result
-    finally:
+    except BaseException:
+        # A failed compound edit must not commit a prefix: abort rolls the
+        # state back to the begin_batch snapshot with no history entry.
+        _call("abort_batch", {})
+        raise
+    else:
         result.update(_call("end_batch", {}))
 
 
@@ -1479,6 +1493,75 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="get_song_structure",
+            description=(
+                "Analyse the timeline's song structure: bpm, beats and bars for a section, "
+                "with per-bar energy (0..1, normalised to the section maximum) and downbeat "
+                "flags. Bars are beats_per_bar beats wide, starting at the first beat >= "
+                "start; the first bar is treated as the section's downbeat. Runs audio "
+                "analysis if missing (bounded ~30s); if it can't complete, energies come "
+                "back null with a note. Feeds animate_section."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "start":         {"type": "number", "description": "Section start, seconds (default 0)"},
+                    "end":           {"type": "number", "description": "Section end, seconds (default project end)"},
+                    "beats_per_bar": {"type": "integer", "description": "Beats per bar (default 4)"},
+                },
+            },
+        ),
+        Tool(
+            name="list_style_recipes",
+            description=(
+                "List the available style recipes (mcp_server/recipes/*.json): id, name, "
+                "description. Recipes drive animate_section."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="get_style_recipe",
+            description=(
+                "Return one style recipe as parsed JSON: palette, symmetry (fold/reflect), "
+                "motifs (high/mid/low buckets), colour motion, optional fx layer. "
+                "Validation errors are reported clearly."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "recipe": {"type": "string", "description": "Recipe id (see list_style_recipes)"},
+                },
+                "required": ["recipe"],
+            },
+        ),
+        Tool(
+            name="animate_section",
+            description=(
+                "Generate a style-recipe animation over a timeline section: motifs are "
+                "seeded-picked per bar by RMS energy (high > 0.66, mid > 0.33, else low) "
+                "and expanded into ordinary shape clips with editable keyframes (pos/scale/"
+                "rotation/opacity, path morphs, colour keys, mirror fold/reflect). ALL ops "
+                "land in one undo batch labelled 'Animate section (<recipe>)'. Requires "
+                "beat analysis — runs it once if missing. The target track is created if "
+                "absent. preview=true seeks + snapshots 4 spread points after the batch "
+                "and returns the PNG paths."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "recipe":  {"type": "string", "description": "Recipe id (default 'wildflower')"},
+                    "start":   {"type": "number", "description": "Section start, absolute seconds"},
+                    "end":     {"type": "number", "description": "Section end, absolute seconds"},
+                    "track":   {"type": "string", "description": "Target track name (default 'Wildflower'); created if absent"},
+                    "seed":    {"type": "integer", "description": "RNG seed for deterministic layouts (default 0)"},
+                    "density": {"type": "number", "description": "0..1 fraction of bars that get a motif (default 0.7)"},
+                    "palette": {"type": "array", "description": "Optional hex-colour palette override (8-12 colours)"},
+                    "preview": {"type": "boolean", "description": "Also seek + snapshot 4 spread points, return the PNG paths"},
+                },
+                "required": ["start", "end"],
+            },
+        ),
+        Tool(
             name="find_audio_cue",
             description=(
                 "Find a beat-aligned timestamp matching a description ('first drop', 'chorus', 'outro', etc.).\n"
@@ -2045,6 +2128,43 @@ async def list_tools() -> list[Tool]:
                 "Return the effective path of a shape clip at time t (default: current playhead). "
                 "When path-morph keyframes exist, returns the interpolated path at t; otherwise the "
                 "base path. Points are {x, y, w} in local [0,1]² space. Also returns key_count."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "clip":  {"type": "integer"},
+                    "t":     {"type": "number", "description": "Time in seconds (default playhead)"},
+                },
+                "required": ["track", "clip"],
+            },
+        ),
+        Tool(
+            name="set_shape_color_keyframes",
+            description=(
+                "Replace the colour-keyframe track for one shape colour property — "
+                "fill_col, stroke_col, grad_col2, or glow_col. Each key: {t, v:[r,g,b,a], "
+                "interp?} with t seconds relative to the clip start. Pass an empty keys "
+                "array to clear. Returns {prop, key_count}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "clip":  {"type": "integer"},
+                    "prop":  {"type": "string", "description": "fill_col | stroke_col | grad_col2 | glow_col"},
+                    "keys":  {"type": "array", "description": "Array of {t, v:[r,g,b,a], interp?}"},
+                },
+                "required": ["track", "clip", "prop", "keys"],
+            },
+        ),
+        Tool(
+            name="get_shape_style",
+            description=(
+                "Return the evaluated visual style of a shape clip at time t (default: "
+                "current playhead): fill/stroke/glow colours + flags, grad mode/angle, "
+                "mirror_fold + mirror_reflect, and color_key_counts. Use this to verify "
+                "shape recipes and to round-trip a shape's look."
             ),
             inputSchema={
                 "type": "object",
@@ -3814,6 +3934,298 @@ def _cut_at_phrase(arguments: dict) -> dict:
         return {"trimmed_start": round(timeline_t, 3), "excerpt": match["excerpt"], **result}
 
 
+# ── Style recipes (get_song_structure / list_style_recipes / get_style_recipe / animate_section) ──
+# Declarative style recipes in mcp_server/recipes/*.json are expanded into
+# ordinary shape clips + keyframes by style_expander.py and applied in ONE undo
+# batch, so an agent can say animate_section(recipe='wildflower', start, end)
+# and get fully-editable result, not a cooked video.
+
+_RECIPES_DIR = Path(__file__).resolve().parent / "recipes"
+_HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def _recipe_ids() -> list[str]:
+    """Recipe ids found in mcp_server/recipes/*.json (file stems)."""
+    if not _RECIPES_DIR.is_dir():
+        return []
+    return sorted(p.stem for p in _RECIPES_DIR.glob("*.json"))
+
+
+def _validate_recipe(data: dict, rid: str) -> None:
+    """Schema-check a parsed recipe; raise ValueError with a clear message."""
+    if not isinstance(data, dict):
+        raise ValueError(f"recipe '{rid}' must be a JSON object")
+    for key in ("id", "name", "description", "palette", "symmetry", "motifs"):
+        if key not in data:
+            raise ValueError(f"recipe '{rid}' is missing required key '{key}'")
+    pal = data["palette"]
+    if not (isinstance(pal, list) and 8 <= len(pal) <= 12):
+        raise ValueError(f"recipe '{rid}': palette must be a list of 8-12 hex colours")
+    for h in pal:
+        if not (isinstance(h, str) and _HEX_RE.match(h)):
+            raise ValueError(f"recipe '{rid}': bad hex colour {h!r}")
+    sym = data["symmetry"]
+    if not (isinstance(sym, dict) and isinstance(sym.get("fold"), int) and sym["fold"] >= 1):
+        raise ValueError(f"recipe '{rid}': symmetry.fold must be an integer >= 1")
+    motifs = data["motifs"]
+    if not (isinstance(motifs, dict) and {"high", "mid", "low"} <= set(motifs)):
+        raise ValueError(f"recipe '{rid}': motifs must be an object with high/mid/low buckets")
+    unknown = sorted({m for bucket in motifs.values()
+                      for m in bucket if m not in style_expander.MOTIF_VOCABULARY})
+    if unknown:
+        raise ValueError(f"recipe '{rid}': unknown motif name(s) {unknown} — "
+                         f"vocabulary: {', '.join(style_expander.MOTIF_VOCABULARY)}")
+    weights_all = data.get("motif_weights")
+    if weights_all is not None:
+        if not isinstance(weights_all, dict):
+            raise ValueError(f"recipe '{rid}': motif_weights must be an object of "
+                             "per-bucket {motif: weight} maps")
+        for bk, wmap in weights_all.items():
+            if bk not in ("high", "mid", "low"):
+                raise ValueError(f"recipe '{rid}': motif_weights has unknown bucket '{bk}'")
+            if not isinstance(wmap, dict):
+                raise ValueError(f"recipe '{rid}': motif_weights['{bk}'] must be an object")
+            bad_w = [m for m in wmap if m not in style_expander.MOTIF_VOCABULARY]
+            if bad_w:
+                raise ValueError(f"recipe '{rid}': motif_weights['{bk}'] names unknown "
+                                 f"motif(s) {bad_w}")
+    if data.get("composition") == "field":
+        field = data.get("field")
+        if not (isinstance(field, dict)
+                and isinstance(field.get("flower_count"), int) and field["flower_count"] >= 1):
+            raise ValueError(f"recipe '{rid}': field composition needs field.flower_count "
+                             "(int >= 1)")
+        ribbons = data.get("ribbons")
+        if not (isinstance(ribbons, dict)
+                and isinstance(ribbons.get("count"), int) and ribbons["count"] >= 1):
+            raise ValueError(f"recipe '{rid}': field composition needs ribbons.count (int >= 1)")
+        peaks_m = (data.get("peaks") or {}).get("motif")
+        if peaks_m and peaks_m not in style_expander.MOTIF_VOCABULARY:
+            raise ValueError(f"recipe '{rid}': peaks.motif '{peaks_m}' is not in the "
+                             f"motif vocabulary")
+
+
+def _load_recipe(recipe_id: str) -> dict:
+    """Parse + validate one recipe; raise ValueError on any problem."""
+    if not _RECIPES_DIR.is_dir():
+        raise ValueError(f"recipes dir missing: {_RECIPES_DIR}")
+    path = _RECIPES_DIR / f"{recipe_id}.json"
+    if not path.exists():
+        available = _recipe_ids()
+        raise ValueError(f"unknown recipe '{recipe_id}' — available: "
+                         f"{', '.join(available) or 'none'}")
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        raise ValueError(f"recipe '{recipe_id}' is not valid JSON: {e}") from e
+    _validate_recipe(data, recipe_id)
+    return data
+
+
+async def _ensure_audio_analysis() -> tuple[dict | None, str | None]:
+    """Return (analysis, note). analysis has status 'done' with beats/rms when
+    available; otherwise None plus a note. Triggers analyze_audio once on the
+    project's audio and polls up to ~30s if it was already running."""
+    proj = _call("get_project", {})
+    audio = proj.get("audio_path") or ""
+    analysis = _call("get_audio_analysis", {})
+    if analysis.get("status") != "done" and audio:
+        try:
+            _call("analyze_audio", {"path": audio})  # blocks until done (streaming IPC)
+        except ValueError:
+            pass  # already running — poll below
+        for _ in range(60):  # bounded ~30s
+            await asyncio.sleep(0.5)
+            analysis = _call("get_audio_analysis", {})
+            if analysis.get("status") in ("done", "error"):
+                break
+    if analysis.get("status") != "done":
+        note = ("audio analysis unavailable — energies are null; add audio to the "
+                "timeline and call analyze_audio")
+        if not audio:
+            note += " (the project has no audio_path yet)"
+        return None, note
+    return analysis, None
+
+
+async def _get_song_structure(arguments: dict) -> dict:
+    """bpm + beats + per-bar energy for a section (feeds animate_section)."""
+    start = float(arguments.get("start", 0.0))
+    bpb = max(1, int(arguments.get("beats_per_bar", 4)))
+    beats_resp = _call("get_beats", {})
+    beats = [float(b) for b in (beats_resp.get("beats") or [])]
+    bpm = float(beats_resp.get("bpm") or 0.0)
+    end_arg = arguments.get("end")
+    if end_arg is None:
+        proj = _call("get_project", {})
+        dur = float(proj.get("duration") or 0.0)
+        if dur > 0:
+            end = dur
+        elif beats:
+            spacing = (beats[1] - beats[0]) if len(beats) > 1 else 1.0
+            end = beats[-1] + spacing
+        else:
+            end = 120.0
+    else:
+        end = float(end_arg)
+
+    analysis, note = await _ensure_audio_analysis()
+    # Project-state beats (get_beats) are only committed when beat detect runs
+    # on the timeline audio; an explicit-path analyze_audio leaves them in the
+    # analysis cache only. Fall back to the cache so both routes work.
+    if not beats and analysis and analysis.get("beats"):
+        beats = [float(b) for b in analysis["beats"]]
+        bpm = float(analysis.get("bpm") or bpm)
+    rms = [float(x) for x in (analysis.get("rms") or [])] if analysis else []
+    bars_raw = style_expander._build_bars(beats, start, end, bpb,
+                                          style_expander._normalize_rms(rms, start, end))
+    bars = [{"index": b["index"], "start": b["start"], "end": b["end"],
+             "energy": b["energy"] if analysis else None,
+             "downbeat": b["downbeat"]}
+            for b in bars_raw]
+    energies = [b["energy"] for b in bars if b["energy"] is not None]
+    sec_energy = round(sum(energies) / len(energies), 4) if energies else None
+    sec_beats = [round(x, 4) for x in beats if start - 1e-3 <= x < end]
+    out = {"bpm": bpm, "beats": sec_beats, "bars": bars,
+           "section_energy": sec_energy}
+    if note:
+        out["note"] = note
+    return out
+
+
+def _list_style_recipes(arguments: dict) -> dict:
+    """ids/names/descriptions of every recipe file (broken files reported, not fatal)."""
+    recipes = []
+    for rid in _recipe_ids():
+        try:
+            data = _load_recipe(rid)
+            recipes.append({"id": data.get("id", rid), "name": data.get("name", rid),
+                            "description": data.get("description", "")})
+        except ValueError as e:
+            recipes.append({"id": rid, "error": str(e)})
+    return {"recipes": recipes, "count": len(recipes)}
+
+
+def _get_style_recipe(arguments: dict) -> dict:
+    return _load_recipe(str(arguments["recipe"]))
+
+
+async def _snapshot_at(t: float) -> str:
+    """Seek + take_snapshot at t; return the PNG path (mirrors take_snapshot tool)."""
+    _call("seek", {"time": t})
+    _call("take_snapshot", {})
+    for _ in range(50):
+        await asyncio.sleep(0.2)
+        st = _call("get_snapshot_status", {})
+        if st.get("done"):
+            if "error" in st:
+                raise ValueError(f"Snapshot failed at t={t}: {st['error']}")
+            return st["path"]
+    raise RuntimeError(f"Snapshot timed out at t={t}")
+
+
+async def _animate_section(arguments: dict) -> dict:
+    """Run the style-recipe expander and apply every op in ONE undo batch."""
+    recipe_id = str(arguments.get("recipe", "wildflower"))
+    recipe = _load_recipe(recipe_id)
+    start = float(arguments["start"])
+    end = float(arguments["end"])
+    if end <= start:
+        raise ValueError(f"animate_section: end ({end}) must be after start ({start})")
+    track_name = str(arguments.get("track", "Wildflower"))
+    seed = int(arguments.get("seed", 0))
+    density = float(arguments.get("density", 0.7))
+    palette = arguments.get("palette")
+    preview = bool(arguments.get("preview", False))
+
+    # Beats + RMS: reuse whatever analysis exists; trigger once if missing.
+    beats_resp = _call("get_beats", {})
+    beats = [float(b) for b in (beats_resp.get("beats") or [])]
+    analysis, note = await _ensure_audio_analysis()
+    if analysis and analysis.get("status") == "done":
+        beats_resp = _call("get_beats", {})
+        beats = [float(b) for b in (beats_resp.get("beats") or [])]
+    # Fall back to the analysis cache: explicit-path analyze_audio stores
+    # beats there without committing them to project state (see
+    # _get_song_structure).
+    if not beats and analysis and analysis.get("beats"):
+        beats = [float(b) for b in analysis["beats"]]
+    if not beats:
+        raise ValueError(
+            "no beat data for the project — call analyze_audio on the project audio "
+            "first (add an audio clip to the timeline, then analyze_audio), then retry "
+            "animate_section")
+    rms = [float(x) for x in (analysis.get("rms") or [])] if analysis else []
+
+    proj = _call("get_project", {})
+    fps = float(proj.get("fps") or 30.0)
+    tracks = proj.get("tracks") or []
+    is_field = recipe.get("composition") == "field"
+    if is_field:
+        # Field compositions create their own layer tracks (one per
+        # simultaneous element — shape clips never overlap on a track), so
+        # there is no single target track to find or create here.
+        ti, clip_base, track_is_new = 0, 0, False
+    else:
+        ti = next((int(t["index"]) for t in tracks if t.get("name") == track_name), None)
+        track_is_new = ti is None
+        if track_is_new:
+            ti = len(tracks)  # add_track at the bottom; stable index inside the batch
+            clip_base = 0
+        else:
+            clip_base = len(_call("get_clips", {"track": ti}))
+
+    result = style_expander.expand(
+        recipe, {"start": start, "end": end}, beats, rms,
+        fps=fps, density=density, seed=seed, palette=palette,
+        track=ti, clip_base=clip_base, track_name=track_name,
+    )
+    ops = list(result["ops"])
+    if not any(op["method"] == "add_shape" for op in ops):
+        raise ValueError(
+            "no motifs were placed in this section — check start/end against the "
+            "beat grid and that density > 0")
+    if track_is_new:
+        ops.insert(0, {"method": "add_track",
+                       "params": {"name": track_name, "position": ti}})
+
+    # Everything in ONE undo step; _batch ends the batch in its finally, so a
+    # failing op can't leave a dangling begin_batch on the engine.
+    with _batch(f"Animate section ({recipe_id})"):
+        for op in ops:
+            _call(op["method"], op["params"])
+
+    clips_created = sum(1 for op in ops if op["method"] == "add_shape")
+    if is_field:
+        # Verify every clip landed by counting across the new layer tracks.
+        proj_after = _call("get_project", {})
+        layer_rows = [t for t in (proj_after.get("tracks") or [])
+                      if (t.get("name") or "").startswith(track_name + " ·")]
+        clips_on_track = sum(int(t.get("clip_count") or 0) for t in layer_rows)
+        final_ti = int(layer_rows[0]["index"]) if layer_rows else ti
+    else:
+        final_ti = ti + (1 if result.get("fx") else 0)  # fx track inserted above
+        clips_on_track = len(_call("get_clips", {"track": final_ti}))
+
+    out = {
+        "clips_created": clips_created,
+        "clips_on_track": clips_on_track,
+        "track": track_name,
+        "track_index": final_ti,
+        "bars": result["bars"],
+        "bar_map": result["bar_map"],
+        "fx": result.get("fx"),
+    }
+    if is_field:
+        out["layers"] = result.get("tracks", [])
+    if note:
+        out["note"] = note
+    if preview:
+        points = [round(start + (end - start) * f, 3) for f in (0.2, 0.45, 0.7, 0.95)]
+        out["preview_paths"] = [{"t": t, "path": await _snapshot_at(t)} for t in points]
+    return out
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if name == "trigger_pipeline":
@@ -4443,6 +4855,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             except Exception:
                 pass
         return [TextContent(type="text", text=json.dumps(slim, indent=2))]
+    if name == "get_song_structure":
+        result = await _get_song_structure(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "list_style_recipes":
+        result = _list_style_recipes(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "get_style_recipe":
+        result = _get_style_recipe(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "animate_section":
+        result = await _animate_section(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "set_shape_color_keyframes":
+        result = _call("set_shape_color_keyframes", arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "get_shape_style":
+        result = _call("get_shape_style", arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
     try:
         result = _call(name, arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

@@ -11,8 +11,8 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 65u;
-extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v65: shape clip (ClipType::Shape) — path, style, path morph keys, draw-on
+static const uint32_t VERSION = 66u;
+extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v66: shape colour keyframes + kaleidoscope mirror fold
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry
@@ -308,6 +308,21 @@ static void write_clip(Writer& w, const Clip& c) {
             for (auto& p : k.path.pts) { w.pod(p.x); w.pod(p.y); w.pod(p.width); }
             w.pod((uint8_t)k.path.closed);
             w.pod((int32_t)k.interp);
+        }
+        // v66: kaleidoscope fold/reflect + colour keyframes
+        w.pod(c.shape_mirror_fold);
+        w.pod(c.shape_mirror_reflect);
+        uint32_t nct = (uint32_t)c.shape_color_tracks.size();
+        w.pod(nct);
+        for (auto& [name, track] : c.shape_color_tracks) {
+            w.str(name);
+            uint32_t nk = (uint32_t)track.keys.size();
+            w.pod(nk);
+            for (auto& k : track.keys) {
+                w.pod(k.time);
+                w.pod(k.v[0]); w.pod(k.v[1]); w.pod(k.v[2]); w.pod(k.v[3]);
+                w.pod((uint8_t)k.interp);
+            }
         }
     }
 }
@@ -627,6 +642,26 @@ static Clip read_clip(Reader& r, uint32_t version) {
             }
             c.shape_path_keys.keys[k].path.closed = (bool)r.pod<uint8_t>();
             c.shape_path_keys.keys[k].interp = (InterpType)r.pod<int32_t>();
+        }
+        if (version >= 66u) {
+            c.shape_mirror_fold    = r.pod<float>();
+            c.shape_mirror_reflect = r.pod<float>();
+            uint32_t nct = r.pod<uint32_t>();
+            for (uint32_t i = 0; i < nct && r.ok; ++i) {
+                std::string name = r.str();
+                ColorPropTrack track;
+                uint32_t nk = r.pod<uint32_t>();
+                for (uint32_t k = 0; k < nk && r.ok; ++k) {
+                    ColorKeyframe ck;
+                    ck.time = r.pod<float>();
+                    ck.v[0] = r.pod<float>(); ck.v[1] = r.pod<float>();
+                    ck.v[2] = r.pod<float>(); ck.v[3] = r.pod<float>();
+                    ck.interp = (InterpType)r.pod<uint8_t>();
+                    track.keys.push_back(ck);
+                }
+                if (!track.keys.empty())
+                    c.shape_color_tracks[name] = std::move(track);
+            }
         }
     }
     return c;

@@ -3688,6 +3688,9 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
             float alpha = cl.eval_prop("opacity",  t);
             float stroke_len = cl.eval_prop("shape_stroke_length", t);
             float width_mul  = cl.eval_prop("shape_stroke_width_mul", t);
+            int   mirror_fold = (int)lroundf(cl.eval_prop("shape_mirror_fold", t));
+            bool  mirror_refl = cl.eval_prop("shape_mirror_reflect", t) >= 0.5f;
+            ShapeStyle style = cl.eval_style(t);
 
             float base = (w < h) ? (float)w : (float)h;
             float cx = px * (float)w, cy = py * (float)h;
@@ -3696,14 +3699,16 @@ static int render_scene(id<MTLCommandBuffer> cb, id<MTLTexture> target, int w, i
 
             ShapePath path = cl.eval_path(t);
             ShapeGeometry geom = shape_tessellate(path, stroke_len, width_mul,
-                                                  cl.shape_style.stroke_width,
+                                                  style.stroke_width,
                                                   w, h,
                                                   cx, cy, hw, hh,
                                                   cosf(rad), sinf(rad));
+            if (mirror_fold > 1)
+                geom = shape_radial_replicate(geom, cx, cy, mirror_fold, mirror_refl);
             float fill_alpha = stroke_len >= 1.f ? 1.f
                              : stroke_len <= 0.6f ? 0.f
                              : (stroke_len - 0.6f) / 0.4f;
-            draw_shape(geom, cl.shape_style, alpha, fill_alpha);
+            draw_shape(geom, style, alpha, fill_alpha);
         }
 
         // ── Bus FX: uncoupled bricks filter the accumulated scene ───────────
