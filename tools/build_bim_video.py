@@ -91,47 +91,39 @@ def main() -> None:
         ti += 1
         return ti - 1
 
-    # ── Kaleidoscope FX track (top, frontmost) — stepped psychedelic ramp.
-    # Every kaleidoscope param is keyframed (engine routes fx params to the
-    # chain sub-clip): amount ratchets 0→1 in visible steps over the 2 bars
-    # before the peak, holds full-blown through it, steps back down. Segments
-    # multiply with it, rotation spins continuously, zoom swells at the peak.
+    # ── Kaleidoscope FX track (top, frontmost) — the mandala CONSTRUCTS
+    # itself from the image (no amount crossfade): amount pinned at 1 from the
+    # start, segments subdivide 1→2→3→4→6→8→12 one beat at a time (1 segment
+    # reads as the plain image, each step visibly splits it), zoom settles
+    # from image-framing to mandala-framing, rotation spins the whole way.
+    # Runs to the END of the section — no fade out.
     fx_ti = new_track("BIM · Kaleidoscope")
     beat_len = bars[0]["beats"][1] - bars[0]["beats"][0] if len(bars[0]["beats"]) > 1 else 0.626
-    peak_a, peak_b = bar_at(9), bar_at(10)
-    k_start = snap_s(peak_a["start"] - 2 * beat_len)
-    k_end = snap_e(peak_b["end"] + 2 * beat_len)
+    peak_a = bar_at(9)
+    k_start = snap_s(peak_a["start"] - 6 * beat_len)
+    k_end = snap_e(SEC_END)
     call("add_effect_brick", {"track": fx_ti, "fx_type": "kaleidoscope",
                               "start": k_start, "end": k_end,
-                              "params": {"amount": 0.0}})
+                              "params": {"amount": 1.0}})
     kdur = k_end - k_start
-    beat_at = lambda i: round(i * beat_len, 4)
-    # stepped amount: hold interp = visible ratchet, one step per beat
-    steps = [0.0, 0.0, 0.25, 0.45, 0.65, 0.85, 1.0]
-    amt_keys = [{"t": beat_at(i), "v": steps[min(i, len(steps) - 1)],
-                 "interp": "hold"} for i in range(7)]
-    full_end = round(kdur - 2 * beat_len, 4)
-    amt_keys += [{"t": full_end, "v": 1.0, "interp": "hold"},
-                 {"t": round(full_end + beat_len, 4), "v": 0.4, "interp": "hold"},
-                 {"t": kdur, "v": 0.0, "interp": "ease_in"}]
-    call("set_clip_keyframes", {"track": fx_ti, "clip": 0, **kf("amount", amt_keys)})
-    # segments multiply in steps as it deepens
-    seg_keys = [{"t": beat_at(0), "v": 4.0, "interp": "hold"},
-                {"t": beat_at(3), "v": 6.0, "interp": "hold"},
-                {"t": beat_at(5), "v": 8.0, "interp": "hold"},
-                {"t": beat_at(7), "v": 12.0, "interp": "hold"},
-                {"t": full_end, "v": 6.0, "interp": "hold"}]
+    beat_at = lambda i: round(min(i * beat_len, kdur), 4)
+    call("set_clip_keyframes", {"track": fx_ti, "clip": 0, **kf("amount", [
+        {"t": 0.0, "v": 1.0, "interp": "hold"}, {"t": kdur, "v": 1.0, "interp": "hold"}])})
+    # subdivision construction: one new split per beat, then hold 12 to the end
+    seg_steps = [1.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0]
+    seg_keys = [{"t": beat_at(i), "v": seg_steps[min(i, len(seg_steps) - 1)],
+                 "interp": "hold"} for i in range(9)]
+    seg_keys.append({"t": kdur, "v": 12.0, "interp": "hold"})
     call("set_clip_keyframes", {"track": fx_ti, "clip": 0, **kf("segments", seg_keys)})
-    # rotation: one slow full turn across the window
+    # zoom: image-like wide framing at 1 segment → mandala framing by the peak
+    call("set_clip_keyframes", {"track": fx_ti, "clip": 0, **kf("zoom", [
+        {"t": 0.0, "v": 1.7, "interp": "ease_both"},
+        {"t": beat_at(8), "v": 1.0, "interp": "ease_both"},
+        {"t": kdur, "v": 1.0, "interp": "hold"}])})
+    # rotation: one slow full turn across the whole window
     call("set_clip_keyframes", {"track": fx_ti, "clip": 0, **kf("rotation", [
         {"t": 0.0, "v": 0.0, "interp": "linear"},
         {"t": kdur, "v": 360.0, "interp": "linear"}])})
-    # zoom: swell at full-blown, back out
-    call("set_clip_keyframes", {"track": fx_ti, "clip": 0, **kf("zoom", [
-        {"t": 0.0, "v": 1.0, "interp": "ease_both"},
-        {"t": beat_at(6), "v": 1.35, "interp": "ease_both"},
-        {"t": full_end, "v": 1.35, "interp": "ease_both"},
-        {"t": kdur, "v": 1.0, "interp": "ease_both"}])})
 
     # ── Butterflies: blue L→R from bar 0, orange R→L from bar 6 ─────────────
     for name, mp4, t_in, x0, x1, hue in (
@@ -141,6 +133,11 @@ def main() -> None:
         t0, t1 = snap_s(bar_at(t_in)["start"]), snap_e(SEC_END)
         call("add_clip", {"track": b_ti, "type": "video",
                           "text": str(ASSETS / mp4), "start": t0, "end": t1})
+        # face the direction of travel: the footage flies left-to-right, so
+        # the right-to-left flight gets a true UV flip (else it moonwalks)
+        if x1 < x0:
+            call("set_clip_prop", {"track": b_ti, "clip": 0,
+                                   "prop": "flip_h", "value": True})
         # wait for proxy, then ML-cut the white bg
         for _ in range(90):
             time.sleep(2)
@@ -202,8 +199,10 @@ def main() -> None:
                           "start": SEC_START, "end": SEC_END})
         t_rel = lambda tb: round(tb - SEC_START, 4)
         dur = SEC_END - SEC_START
-        # scale: hold 0 until the bloom beat, pop to full, then beat pops
-        sk = [{"t": 0.0, "v": 0.0, "interp": "hold"},
+        # scale: opener is already full-size at t=0 (no cold open); the rest
+        # hold 0 until their bloom beat, pop to full, then beat pops
+        sk = [{"t": 0.0, "v": scale, "interp": "ease_out"}] if j == 0 else [
+              {"t": 0.0, "v": 0.0, "interp": "hold"},
               {"t": t_rel(bloom_beat), "v": 0.0, "interp": "ease_out"},
               {"t": t_rel(bloom_beat + 0.25), "v": scale, "interp": "ease_out"}]
         for b in beats:
@@ -246,12 +245,14 @@ def main() -> None:
     dur = SEC_END - SEC_START
     for i in range(5):
         crest = 0.06 + (i + 0.5) * (0.92 - 0.06) / 5   # final midline fraction
-        amp = round(rng.uniform(0.10, 0.16), 4)
+        amp = round(rng.uniform(0.12, 0.18), 4)         # visible slosh
         wl = round(rng.uniform(0.9, 1.3), 3)
         phase = round(rng.uniform(0.0, 2.0 * math.pi), 4)
         p_y_final = round(crest + 0.2 * S_Y * ASPECT, 4)
-        p_y_start = round(1.10 + 0.2 * S_Y * ASPECT, 4)
-        settle = round(dur * (0.70 + 0.22 * (i + 1) / 5), 4)
+        # fluid rise: starts just offscreen (visible from the first frames)
+        # and settles over a long smooth arc that completes at the very end
+        p_y_start = round(1.02 + 0.2 * S_Y * ASPECT, 4)
+        settle = round(dur * (0.78 + 0.22 * (i + 1) / 5), 4)
         r_ti = new_track(f"BIM · Ribbon {i + 1}")
         call("add_shape", {"track": r_ti, "start": SEC_START, "end": SEC_END,
                            "preset": "circle"})
