@@ -3247,10 +3247,45 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
         std::string prop = params.value("prop", "");
         if (!check_clip(state, ti, ci, err)) return {};
+        Clip* kf_target = &state.tracks[ti].clips[ci];
+        // MultiFX/AudioMultiFX brick: FX params live on the chain sub-clip that
+        // owns the effect — the render accumulator evals the SUB-CLIP's
+        // ktracks (accum_multifx_effects), never the brick's. Route the track
+        // there: "amount" or a bare param name on a single-effect chain maps
+        // to fx_<id>_<param>; fx_<id>_<param> finds its effect by id.
+        if (kf_target->clip_type == ClipType::MultiFX ||
+            kf_target->clip_type == ClipType::AudioMultiFX) {
+            Clip& brick = *kf_target;
+            Clip* sub = nullptr;
+            if (prop == "amount" || prop.find("fx_") != 0) {
+                if (brick.fx_chain.size() != 1) {
+                    err = "prop '" + prop + "' is ambiguous on a multi-effect "
+                          "chain — use fx_<id>_<param>";
+                    return {};
+                }
+                sub = &brick.fx_chain[0];
+                prop = "fx_" + fx_type_str(sub->fx_type) + "_" + prop;
+            } else {
+                for (auto& se : brick.fx_chain) {
+                    std::string sid = fx_type_str(se.fx_type);
+                    if (prop.rfind("fx_" + sid + "_", 0) == 0) { sub = &se; break; }
+                }
+                if (!sub) {
+                    err = "no effect in this brick's chain owns prop '" + prop + "'";
+                    return {};
+                }
+            }
+            kf_target = sub;
+        } else if (kf_target->clip_type == ClipType::Effect &&
+                   (prop == "amount" || prop.find("fx_") != 0)) {
+            // Single-effect brick: "amount"/bare param names map onto the
+            // effect's own registry fields (fx_<id>_<param>).
+            prop = "fx_" + fx_type_str(kf_target->fx_type) + "_" + prop;
+        }
         // "amount" on a video FX brick is its runtime-shader intensity slider —
         // accept the natural name (the one set_clip_fx uses) and map it to the
         // real keyframe field so you can ride the Amount knob over time.
-        if (prop == "amount" && !state.tracks[ti].clips[ci].runtime_fx_id.empty())
+        if (prop == "amount" && !kf_target->runtime_fx_id.empty())
             prop = "runtime_fx_amount";
         bool ok_prop = (prop == "opacity");          // opacity is special-cased in eval_prop
         for (int i = 0; !ok_prop && i < kClipKfFieldCount; ++i)
@@ -3263,7 +3298,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             err = "keys must be an array of {t, v, interp?} (empty array clears)";
             return {};
         }
-        Clip& cl = state.tracks[ti].clips[ci];
+        Clip& cl = *kf_target;
         PropTrack pt;
         for (auto& k : params["keys"]) {
             if (!k.contains("t") || !k.contains("v")) { err = "each key needs t and v"; return {}; }

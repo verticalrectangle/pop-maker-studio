@@ -285,6 +285,10 @@ def _call(method: str, params: dict | None = None, *, _pms_retries: int = 5) -> 
     """
     for pms_attempt in range(_pms_retries):
         resolved = _resolve_paths(params or {})
+        # quiet: mutations otherwise get their result REPLACED by a full
+        # verbose state dump (auto-batch convention), which on large projects
+        # is tens of MB and reads as a hang. Ignored by read-only handlers.
+        resolved.setdefault("quiet", True)
         payload = json.dumps(
             {"id": str(uuid.uuid4()), "method": method, "params": resolved},
             ensure_ascii=False,
