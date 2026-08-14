@@ -21,7 +21,6 @@
 #include "ui/screens.h"
 #include "ui/panel_terminal.h"
 #include "ui/studio_shared.h"   // last_playable_time
-#include "conform.h"            // conform_cancel
 #include "engine_runtime.h"
 #include <imgui.h>
 #include <algorithm>
@@ -161,7 +160,6 @@ void app_shutdown(AppState& state) {
     ipc_server_stop();
     vrecorder_shutdown();   // kill the camera-capture child so it isn't orphaned
     av_measure_shutdown();  // join any in-flight A/V-offset measurement
-    conform_cancel();       // stop background conform transcodes (no orphan ffmpeg)
     runtime_fx_shutdown();
     audio_shutdown();
     video_close();

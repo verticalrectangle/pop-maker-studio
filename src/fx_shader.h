@@ -135,7 +135,15 @@ uintptr_t fx_preview_gen_effect(FXType ft, uintptr_t src_tex, int w, int h, floa
 //
 // Draw tex to ImGui with Y-flipped UVs: tl=(0,1) tr=(1,1) br=(1,0) bl=(0,0).
 // Uses standard (straight) alpha — no AddCallback/blend-mode change needed.
-static const int kSceneFxSlot = MAX_VIDEO_TRACKS * 2 - 2;  // reserved for global FX
+static const int kSceneFxSlot = MAX_VIDEO_TRACKS * 2 - 2;  // reserved for global FX (live canvas preview)
+// Export/snapshot compositor gets its OWN scene-FX slot. The melt/echo/frame
+// feedback texture is g_out[slot] — sharing kSceneFxSlot with the live canvas
+// (which renders every frame during export at a different canvas size) made
+// out_ensure() delete and recreate the feedback texture on every call, so the
+// temporal trail read fresh black each frame and keyed pixels rendered black.
+// 129 is the only in-bounds slot unused by the canvas decoder range (0..95),
+// the camera paths (63/64), the face-clip bank (65..128) and the picker (130+).
+static const int kSceneFxSlotExport = MAX_VIDEO_TRACKS * 4 + 1;  // = 129
 
 void      scene_begin    (int canvas_w, int canvas_h);
 // u0..v1: source UV window (non-destructive crop) — the quad samples only this

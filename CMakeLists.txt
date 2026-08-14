@@ -14,7 +14,22 @@ if(NOT PMS_HEADLESS)
     pkg_check_modules(FREETYPE REQUIRED freetype2)
 endif()
 if(NOT PMS_ENGINE_ONLY)
-    pkg_check_modules(GLFW REQUIRED glfw3)
+    if(APPLE)
+        pkg_check_modules(GLFW REQUIRED glfw3)
+    else()
+        # System GLFW 3.5.1 (and upstream master) still carries an unfixed
+        # Wayland crash: its wl_data_offer listener only handles the `offer`
+        # event, so a drag from a source that sets actions (niri + any file
+        # manager) delivers source_actions to a NULL listener slot and
+        # libwayland aborts the process — dragging a file onto the app killed
+        # it. Build the vendored copy with the upstream fix (glfw/glfw#2835 /
+        # glfw/glfw#2886) on Linux instead of trusting the system package.
+        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+        set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+        add_subdirectory(vendor/glfw)
+    endif()
     pkg_check_modules(VTERM REQUIRED vterm)
 endif()
 # ffmpeg / aubio / fftw / turbojpeg / OpenGL — desktop capabilities the
@@ -117,7 +132,6 @@ set(PMS_ENGINE_SOURCES
     src/history.cpp
     src/video.cpp
     src/proxy.cpp
-    src/conform.cpp
     src/waveform.cpp
     src/beat_detect.cpp
     src/blender_export.cpp
@@ -128,6 +142,7 @@ set(PMS_ENGINE_SOURCES
     src/noise_reduce.cpp
     src/audio_fx.cpp
     src/hf_api.cpp
+    src/pexels_api.cpp
     src/vc_job.cpp
     src/vc_onnx.cpp
     src/faiss_ivf.cpp
@@ -316,7 +331,7 @@ endif()
 if(NOT PMS_ENGINE_ONLY)
 target_link_libraries(pop-maker-studio PRIVATE
     OpenGL::GL
-    ${GLFW_LIBRARIES}
+    $<IF:$<TARGET_EXISTS:glfw>,glfw,${GLFW_LIBRARIES}>
     ${AVCODEC_LIBRARIES}
     ${AVFORMAT_LIBRARIES}
     ${AVUTIL_LIBRARIES}
@@ -421,6 +436,28 @@ add_custom_command(
 add_custom_target(embed_display DEPENDS ${CMAKE_BINARY_DIR}/display_fonts.h)
 if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_display)
+endif()
+
+# Embed the Japanese subset font (kana + Jōyō kanji + fullwidth + Latin) so
+# CJK text renders in the UI and on-canvas instead of blank. TrueType
+# outlines only — stb_truetype can't rasterize CFF (Noto CJK), hence the
+# subset M PLUS 1p in assets/fonts/cjk/. The codepoint table drives ImGui's
+# glyph-range builder so the atlas bakes exactly the covered glyphs.
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/cjk_font.h
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/embed_cjk.sh
+            ${CMAKE_SOURCE_DIR}/assets/fonts/cjk/MPLUS1p-Subset.ttf
+            ${CMAKE_SOURCE_DIR}/assets/fonts/cjk/cjk_chars.txt
+            ${CMAKE_BINARY_DIR}/cjk_font.h
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/assets/fonts/cjk/MPLUS1p-Subset.ttf
+        ${CMAKE_SOURCE_DIR}/assets/fonts/cjk/cjk_chars.txt
+        ${CMAKE_SOURCE_DIR}/scripts/embed_cjk.sh
+    COMMENT "Embedding CJK subset font"
+)
+add_custom_target(embed_cjk DEPENDS ${CMAKE_BINARY_DIR}/cjk_font.h)
+if(NOT PMS_ENGINE_ONLY)
+add_dependencies(pop-maker-studio embed_cjk)
 endif()
 
 if(NOT PMS_ENGINE_ONLY)

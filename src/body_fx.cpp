@@ -11,7 +11,6 @@
 // Just include the header without the implementation define
 #include "stb_image.h"
 
-#include "bg_remove.h"
 #include "generated/body_fx_preview.h"   // embedded card-preview portrait + body mask
 #endif  // PMS_HAS_GL (GL-only includes)
 #include <cstdio>
@@ -19,6 +18,7 @@
 #include <cstring>
 #include <cmath>
 #include <string>
+#include <sys/stat.h>
 #include <unordered_map>
 #include <list>
 #include <vector>
@@ -1071,6 +1071,7 @@ static struct {
     int w = 0, h = 0;
 } g_out;
 
+
 // Mask texture cache: key = "mask_dir/NNNNNN.png", value = GLuint
 // LRU: list of keys in use order, map for O(1) lookup
 static std::list<std::string>                          g_mask_lru;
@@ -1078,11 +1079,10 @@ static std::unordered_map<std::string, std::pair<GLuint, std::list<std::string>:
 static const int k_mask_cache_max = 128;
 
 // ── MJPEG seek-table cache ────────────────────────────────────────────────────
-// Maps mask_dir → {offsets vector, start_frame}.
+// Maps mask_dir → offsets vector (byte offset of each JPEG in bg_masks.mjpeg).
 // Built lazily on first access; cleared entry when masks are updated (append/rewrite).
 struct MaskIndex {
     std::vector<uint64_t> offsets;
-    int start_frame = 0;
 };
 static std::unordered_map<std::string, MaskIndex> g_mask_index;
 
@@ -1104,7 +1104,19 @@ static const MaskIndex* get_mask_index(const std::string& mask_dir) {
     bool need_build = true;
     {
         FILE* idxf = fopen(idx.c_str(), "rb");
-        if (idxf) { need_build = false; fclose(idxf); }
+        if (idxf) {
+            need_build = false;
+            fclose(idxf);
+            // The .idx is a derived artifact of the .mjpeg: if the mask stream
+            // was regenerated (background job, partial write, crash mid-run)
+            // the stored offsets point into the WRONG bytes — reads then return
+            // garbage or throw (std::length_error on a bogus frame size). Rebuild
+            // whenever the mjpeg is newer than the idx.
+            struct stat ms, is;
+            if (stat(mjpeg.c_str(), &ms) == 0 && stat(idx.c_str(), &is) == 0 &&
+                ms.st_mtime > is.st_mtime)
+                need_build = true;
+        }
     }
 
     if (need_build) {
@@ -1162,7 +1174,6 @@ static const MaskIndex* get_mask_index(const std::string& mask_dir) {
     mi.offsets.resize(cnt);
     fread(mi.offsets.data(), sizeof(uint64_t), cnt, idxf);
     fclose(idxf);
-    mi.start_frame = bg_remove_read_start_frame(mask_dir);
 
     auto& entry = g_mask_index[mask_dir];
     entry = std::move(mi);
@@ -1299,27 +1310,38 @@ unsigned body_fx_mask_texture(const std::string& mask_dir, int frame_idx) {
         return it->second.first;
     }
 
-    // Load from bg_masks.mjpeg via seek table
+    // Load from bg_masks.mjpeg via seek table.
+    // frame_idx is the MASK-STREAM frame (0-based; callers map source time t to
+    // it via round((t - start_time)*fps) with start_time from start_time.txt) —
+    // it indexes bg_masks.mjpeg directly, no start-frame offset.
     const MaskIndex* mi = get_mask_index(mask_dir);
     if (!mi) return 0;
-    int local_idx = frame_idx - mi->start_frame;
+    int local_idx = frame_idx;
     if (local_idx < 0 || local_idx >= (int)mi->offsets.size()) return 0;
 
     std::string mjpeg = mask_dir + "/bg_masks.mjpeg";
     FILE* f = fopen(mjpeg.c_str(), "rb");
     if (!f) return 0;
 
-    if (fseek(f, (long)mi->offsets[local_idx], SEEK_SET) != 0) { fclose(f); return 0; }
+    // Get the real file size up front: a stale/regenerated mask stream can make
+    // the seek-table offsets point past EOF — clamp everything to the file so a
+    // bad read degrades to "no mask this frame" instead of reading garbage or
+    // throwing on an absurd allocation.
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    long file_size = ftell(f);
+    if (file_size <= 0) { fclose(f); return 0; }
+    long off = (long)mi->offsets[local_idx];
+    if (off < 0 || off >= file_size) { fclose(f); return 0; }
+    if (fseek(f, off, SEEK_SET) != 0) { fclose(f); return 0; }
 
-    // Determine JPEG size: distance to next frame offset (or EOF)
-    size_t jpeg_size;
-    if (local_idx + 1 < (int)mi->offsets.size())
-        jpeg_size = (size_t)(mi->offsets[local_idx + 1] - mi->offsets[local_idx]);
-    else {
-        fseek(f, 0, SEEK_END);
-        jpeg_size = (size_t)(ftell(f) - (long)mi->offsets[local_idx]);
-        fseek(f, (long)mi->offsets[local_idx], SEEK_SET);
+    // Determine JPEG size: distance to next frame offset (or EOF), clamped.
+    long next_off = file_size;
+    if (local_idx + 1 < (int)mi->offsets.size()) {
+        long no = (long)mi->offsets[local_idx + 1];
+        if (no > off) next_off = no;
     }
+    size_t jpeg_size = (size_t)(next_off - off);
+    if (jpeg_size > 4 * 1024 * 1024) { fclose(f); return 0; }   // sanity cap
 
     std::vector<unsigned char> jpeg_buf(jpeg_size);
     if (fread(jpeg_buf.data(), 1, jpeg_size, f) != jpeg_size) { fclose(f); return 0; }

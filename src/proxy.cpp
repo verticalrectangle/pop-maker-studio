@@ -50,8 +50,57 @@ static void mark_ready_cached(const std::string& path) {
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
 
-std::string proxy_mjpeg_path(const std::string& vp) { return cache_path(vp, ".proxy.mjpeg"); }
-std::string proxy_idx_path  (const std::string& vp) { return cache_path(vp, ".proxy.idx");   }
+std::string proxy_interm_path(const std::string& vp)     { return cache_path(vp, ".interm.mp4"); }
+std::string proxy_interm_idx_path(const std::string& vp) { return cache_path(vp, ".interm.idx"); }
+static std::string proxy_fail_path(const std::string& vp) { return proxy_interm_path(vp) + ".fail"; }
+
+// Persist a proxy failure, keyed to the source's size+mtime. Writing the
+// source file (a re-export to the same path) makes proxy_failure() see a
+// stale marker, drop it, and allow a fresh attempt — a corrupt file left in
+// place keeps failing fast instead of churning the worker forever.
+static void mark_proxy_failed(const std::string& path, const std::string& err) {
+    std::error_code ec;
+    auto sz = fs::file_size(path, ec);
+    if (ec) return;
+    auto mt = fs::last_write_time(path, ec);
+    if (ec) return;
+    FILE* f = fopen(proxy_fail_path(path).c_str(), "w");
+    if (!f) return;
+    fprintf(f, "%llu %lld\n%s\n", (unsigned long long)sz,
+            (long long)mt.time_since_epoch().count(), err.c_str());
+    fclose(f);
+    fprintf(stderr, "[proxy] FAILED %s: %s\n", path.c_str(), err.c_str());
+}
+
+// Non-empty error string when generation failed and the source hasn't been
+// replaced since. Cheap for the common case (one stat of a missing file).
+std::string proxy_failure(const std::string& video_path) {
+    if (proxy_is_ready(video_path)) return {};   // succeeded — never "failed"
+    std::string fp = proxy_fail_path(video_path);
+    std::error_code ec;
+    if (!fs::exists(fp, ec)) return {};
+    FILE* f = fopen(fp.c_str(), "r");
+    if (!f) return {};
+    char head[128] = {0};
+    char err[512]  = {0};
+    if (!fgets(head, sizeof(head), f) || !fgets(err, sizeof(err), f)) {
+        fclose(f);
+        return {};
+    }
+    fclose(f);
+    unsigned long long sz = 0;
+    long long mt = 0;
+    if (sscanf(head, "%llu %lld", &sz, &mt) != 2) return {};
+    std::error_code sec;
+    bool stale = !fs::exists(video_path, sec) ||
+                 sz  != (unsigned long long)fs::file_size(video_path, sec) ||
+                 mt  != (long long)fs::last_write_time(video_path, sec).time_since_epoch().count();
+    if (stale) { fs::remove(fp); return {}; }
+    std::string e = err;
+    while (!e.empty() && (e.back() == '\n' || e.back() == '\r')) e.pop_back();
+    return e;
+}
+
 // Does this file's CONTENT decode with stb_image (PNG/JPEG/BMP/GIF)? The
 // EXTENSION lies — a ".png" is very often really WebP/HEIC/AVIF, which stb can't
 // read, so loading the "original" renders blank. Magic-byte sniff, cached (this
@@ -147,48 +196,61 @@ static pid_t spawn_ffmpeg(const char** args) {
 }
 
 // ── Seek-table builder ────────────────────────────────────────────────────────
-
-static bool build_seek_table(const std::string& mjpeg_path,
+//
+// The intermediate is all-intra (-g 1), so every packet is a keyframe and the
+// seek table is just the byte offset of each frame's packet inside the mp4,
+// read straight from ffprobe's packet table (the `pos` of every packet whose
+// flags contain "K_"). Layout is identical to the old MJPEG index: u32 frame
+// count + u64 byte offsets, host byte order.
+static bool build_seek_table(const std::string& interm_path,
                               const std::string& idx_path) {
-    FILE* f = fopen(mjpeg_path.c_str(), "rb");
-    if (!f) return false;
-
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    rewind(f);
+    const char* args[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
+                          "-show_entries", "packet=pos,flags", "-of", "json",
+                          interm_path.c_str(), nullptr};
+    int pfd[2];
+    if (pipe(pfd) != 0) return false;
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], STDOUT_FILENO);
+        close(pfd[1]);
+        int dn = open("/dev/null", O_RDWR);
+        if (dn >= 0) { dup2(dn, STDIN_FILENO); dup2(dn, STDERR_FILENO); close(dn); }
+        execvp("ffprobe", const_cast<char**>(args));
+        _exit(127);
+    }
+    close(pfd[1]);
 
     std::vector<uint64_t> offsets;
     offsets.reserve(8192);
-
-    static const size_t BUF = 1 << 20;
-    std::vector<uint8_t> buf(BUF + 2);
-
-    uint8_t carry[2] = {0, 0};
-    long pos = 0;
-
-    while (pos < file_size) {
-        size_t to_read = BUF;
-        if (pos + (long)to_read > file_size)
-            to_read = (size_t)(file_size - pos);
-
-        buf[0] = carry[0];
-        buf[1] = carry[1];
-        size_t got = fread(buf.data() + 2, 1, to_read, f);
-        if (got == 0) break;
-
-        for (size_t i = 0; i + 2 < got + 2; ++i) {
-            if (buf[i] == 0xFF && buf[i+1] == 0xD8 && buf[i+2] == 0xFF) {
-                long abs_off = pos + (long)i - 2;
-                if (abs_off >= 0)
-                    offsets.push_back((uint64_t)abs_off);
+    FILE* f = fdopen(pfd[0], "r");
+    if (f) {
+        char line[512];
+        uint64_t cur_pos = 0;
+        bool have_pos = false, cur_key = false;
+        // ffprobe -of json emits one object per packet; -show_entries order is
+        // pos then flags, and each "pos" line starts a new packet, so reset the
+        // key state there. A packet with no "K_" flag simply never pushes.
+        while (fgets(line, sizeof(line), f)) {
+            unsigned long long p = 0;
+            if (sscanf(line, " \"pos\": \"%llu\"", &p) == 1) {
+                cur_pos = (uint64_t)p;
+                have_pos = true;
+                cur_key = false;   // new packet
+            } else if (strstr(line, "\"flags\": \"") && strstr(line, "K_")) {
+                cur_key = true;
+            }
+            if (have_pos && cur_key) {
+                offsets.push_back(cur_pos);
+                have_pos = false;
+                cur_key = false;
             }
         }
-
-        carry[0] = buf[got];
-        carry[1] = buf[got + 1];
-        pos += (long)got;
+        fclose(f);
+    } else {
+        close(pfd[0]);
     }
-    fclose(f);
+    waitpid(pid, nullptr, 0);
 
     if (offsets.empty()) return false;
 
@@ -217,8 +279,8 @@ bool proxy_is_ready(const std::string& video_path) {
             auto it = g_last_stat_ts.find(video_path);
             if (it != g_last_stat_ts.end() && now - it->second < 2.0) return true;
             g_last_stat_ts[video_path] = now;
-            bool still_there = fs::exists(proxy_mjpeg_path(video_path)) &&
-                               fs::exists(proxy_idx_path(video_path));
+            bool still_there = fs::exists(proxy_interm_path(video_path)) &&
+                               fs::exists(proxy_interm_idx_path(video_path));
             if (still_there) return true;
             g_ready_cache.erase(video_path);   // evicted → callers re-queue proxy_start
             return false;
@@ -227,18 +289,18 @@ bool proxy_is_ready(const std::string& video_path) {
         if (it != g_last_stat_ts.end() && now - it->second < 0.25) return false;
         g_last_stat_ts[video_path] = now;
     }
-    bool ready = fs::exists(proxy_mjpeg_path(video_path)) &&
-                 fs::exists(proxy_idx_path(video_path));
+    bool ready = fs::exists(proxy_interm_path(video_path)) &&
+                 fs::exists(proxy_interm_idx_path(video_path));
     if (ready) mark_ready_cached(video_path);
     return ready;
 }
 
 bool proxy_load(const std::string& video_path, ProxyInfo& out) {
-    out.mjpeg_path = proxy_mjpeg_path(video_path);
-    out.idx_path   = proxy_idx_path(video_path);
-    out.still_path = proxy_still_path(video_path);
+    out.interm_path     = proxy_interm_path(video_path);
+    out.interm_idx_path = proxy_interm_idx_path(video_path);
+    out.still_path      = proxy_still_path(video_path);
 
-    FILE* idx = fopen(out.idx_path.c_str(), "rb");
+    FILE* idx = fopen(out.interm_idx_path.c_str(), "rb");
     if (!idx) return false;
     uint32_t count = 0;
     if (fread(&count, sizeof(count), 1, idx) != 1 || count == 0) {
@@ -253,10 +315,10 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
 
     // Probe sidecar: fps + dims from a previous proxy_load, keyed to the
     // proxy's frame count. Without it, EVERY slot open forked two synchronous
-    // ffprobes (fps/duration on the original + dims on the MJPEG) — ~250 ms of
-    // blocked main thread per source, which is what made opening a
-    // media-heavy project freeze for seconds.
-    std::string cache_path = out.idx_path + ".probe";
+    // ffprobes (fps + dims on the intermediate) — ~250 ms of blocked main
+    // thread per source, which is what made opening a media-heavy project
+    // freeze for seconds.
+    std::string cache_path = out.interm_idx_path + ".probe";
     {
         FILE* c = fopen(cache_path.c_str(), "r");
         if (c) {
@@ -276,19 +338,16 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
         }
     }
 
-    // Determine the proxy's frame rate. Raw MJPEG has no reliable fps
-    // metadata, and the original's r_frame_rate is NOT the proxy's rate
-    // either: the transcode forces "-r 30" (CFR), so a 60 fps screencast
-    // yields a 30 fps proxy — indexing that with the original's rate shows
-    // frames from 2× too deep into the source and diverges from the export.
-    // The proxy's true rate is frame_count / source duration; probe the
-    // ORIGINAL's container duration and derive it, keeping the original's
-    // r_frame_rate only as a fallback when the duration probe fails.
+    // Determine the intermediate's frame rate. Unlike raw MJPEG, the
+    // transcode carries real fps metadata: it's CFR at min(source, 30) via
+    // "-r", so the interm's own r_frame_rate IS the proxy rate — and the
+    // index offsets are into THIS file, so frames must be timed at THIS rate.
+    // Fall back to frame_count / container duration if the stream rate is
+    // missing (keeps the frame-to-time mapping exact).
     {
-        std::string file_arg = "file:" + video_path;
         const char* pargv[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
                                "-show_entries", "stream=r_frame_rate:format=duration",
-                               "-of", "default=nw=1", file_arg.c_str(), nullptr};
+                               "-of", "default=nw=1", out.interm_path.c_str(), nullptr};
         int pfd[2];
         if (pipe(pfd) == 0) {
             pid_t pid = fork();
@@ -303,7 +362,7 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
             }
             close(pfd[1]);
             FILE* probe = fdopen(pfd[0], "r");
-            double src_dur = 0.0;
+            double dur = 0.0;
             if (probe) {
                 char line[256];
                 long long fn = 0, fd = 1;
@@ -313,26 +372,26 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
                         out.fps_den = (int64_t)fd;
                         out.fps     = (double)fn / (double)fd;
                     }
-                    sscanf(line, "duration=%lf", &src_dur);
+                    sscanf(line, "duration=%lf", &dur);
                 }
                 fclose(probe);
             } else { close(pfd[0]); }
             waitpid(pid, nullptr, 0);
 
-            if (src_dur > 0.0 && out.frame_count > 0) {
+            if (out.fps <= 0.0 && dur > 0.0 && out.frame_count > 0) {
                 out.fps_num = (int64_t)out.frame_count * 1000;
-                out.fps_den = (int64_t)std::llround(src_dur * 1000.0);
+                out.fps_den = (int64_t)std::llround(dur * 1000.0);
                 if (out.fps_den <= 0) out.fps_den = 1;
                 out.fps = (double)out.fps_num / (double)out.fps_den;
             }
         }
     }
 
-    // Probe dimensions from the proxy itself (actual half-res pixel size).
+    // Probe dimensions from the intermediate itself (actual full-res pixel size).
     {
         const char* dargv[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
                                "-show_entries", "stream=width,height",
-                               "-of", "default=nw=1", out.mjpeg_path.c_str(), nullptr};
+                               "-of", "default=nw=1", out.interm_path.c_str(), nullptr};
         int dfd[2];
         if (pipe(dfd) == 0) {
             pid_t pid = fork();
@@ -432,8 +491,15 @@ void proxy_ensure_still(const std::string& video_path) {
 }
 
 // ── Frame count probe (for progress %) ───────────────────────────────────────
+//
+// Also exposes the target intermediate rate (min(source fps, 30)) as a double
+// plus an exact rational — the worker feeds the rational to "-r" so a
+// 24000/1001 source stays exactly 24000/1001 in the intermediate.
 
-static int probe_total_frames(const std::string& video_path) {
+static int probe_total_frames(const std::string& video_path,
+                              double* out_fps = nullptr,
+                              int64_t* out_fps_num = nullptr,
+                              int64_t* out_fps_den = nullptr) {
     std::string src = "file:" + video_path;
     const char* args[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
                           "-show_entries", "stream=r_frame_rate,duration",
@@ -465,39 +531,50 @@ static int probe_total_frames(const std::string& video_path) {
     if (dur <= 0.0 || fd2 <= 0) return 0;
     double src_fps = (double)fn / (double)fd2;
     double proxy_fps = std::min(src_fps, 30.0);  // proxy is capped at 30
+    if (out_fps) *out_fps = proxy_fps;
+    if (out_fps_num && out_fps_den) {
+        if (src_fps > 30.0) { *out_fps_num = 30; *out_fps_den = 1; }   // clamped
+        else                { *out_fps_num = (int64_t)fn; *out_fps_den = (int64_t)fd2; }
+    }
     return (int)(dur * proxy_fps + 0.5);
 }
 
-// ── Proxy encode (one attempt) ────────────────────────────────────────────────
+// ── Intermediate encode (one attempt) ────────────────────────────────────────
 //
-// Runs ffmpeg to build the half-res MJPEG, polling -progress for the % bar.
-// Returns true on a clean exit. Split out so the worker can retry:
+// Runs ffmpeg to build the full-res all-intra H.264 intermediate, polling
+// -progress for the % bar. Returns true on a clean exit. Split out so the
+// worker can retry:
 //   • use_hwaccel=true  → -hwaccel auto (GPU decode: vaapi/nvdec/qsv/…)
 //   • use_hwaccel=false → pure software decode
 // -hwaccel auto picks a backend that *fails outright* on some codecs/profiles/
 // GPUs (VAAPI on AMD chokes on assorted H.264/HEVC profiles), and when it fails
 // ffmpeg exits non-zero and the proxy silently never appears. Retrying in
 // software is deterministic and always available — that's the fix for "some
-// clips never get a proxy." -fps_mode cfr + -r 30 forces a constant-rate proxy
-// so VFR / NTSC sources (24000/1001, 2997003/125000, 90000/2999 …) can't emit a
-// broken, unindexable MJPEG.
+// clips never get a proxy." -g 1 makes every frame an independent keyframe (no
+// frame chains, so each frame's byte offset is a clean seek point); -r <fps>
+// forces the constant rate (ffmpeg's default fps_mode is cfr) so VFR / NTSC
+// sources (24000/1001, 2997003/125000, 90000/2999 …) can't emit a broken,
+// unindexable intermediate.
 static bool proxy_encode_once(const std::string& path, const std::string& src,
-                              const std::string& mj, const std::string& prog_file,
-                              const std::string& threads_str, int total_frames,
-                              bool use_hwaccel) {
+                              const std::string& interm, const std::string& prog_file,
+                              const std::string& threads_str, const std::string& fps_arg,
+                              int total_frames, bool use_hwaccel) {
     std::vector<const char*> a;
     a.push_back("ffmpeg"); a.push_back("-hide_banner");
     a.push_back("-loglevel"); a.push_back("error");
     if (use_hwaccel) { a.push_back("-hwaccel"); a.push_back("auto"); }
     a.push_back("-threads"); a.push_back(threads_str.c_str());
     a.push_back("-y"); a.push_back("-i"); a.push_back(src.c_str());
-    a.push_back("-vf"); a.push_back("scale=min(iw/2\\,960):-2:flags=fast_bilinear");
-    a.push_back("-r"); a.push_back("30");
-    a.push_back("-fps_mode"); a.push_back("cfr");
-    a.push_back("-c:v"); a.push_back("mjpeg"); a.push_back("-q:v"); a.push_back("16");
+    a.push_back("-map"); a.push_back("0:v:0");
     a.push_back("-an");
+    a.push_back("-c:v"); a.push_back("libx264");
+    a.push_back("-g"); a.push_back("1");
+    a.push_back("-crf"); a.push_back("16");
+    a.push_back("-preset"); a.push_back("veryfast");
+    a.push_back("-pix_fmt"); a.push_back("yuv420p");
+    a.push_back("-r"); a.push_back(fps_arg.c_str());
     a.push_back("-progress"); a.push_back(prog_file.c_str());
-    a.push_back(mj.c_str());
+    a.push_back(interm.c_str());
     a.push_back(nullptr);
 
     pid_t pp = spawn_ffmpeg(a.data());
@@ -567,34 +644,52 @@ static void proxy_worker_fn() {
         if (proxy_is_ready(path)) { release_active(); continue; }
         if (g_shutdown.load())    { release_active(); break;    }
 
-        // Sweep stale incomplete mjpeg (mjpeg exists but no idx)
-        std::string mj  = proxy_mjpeg_path(path);
-        std::string idx = proxy_idx_path(path);
-        if (fs::exists(mj) && !fs::exists(idx)) fs::remove(mj);
+        // Sweep stale incomplete intermediate (interm exists but no idx)
+        std::string interm = proxy_interm_path(path);
+        std::string idx    = proxy_interm_idx_path(path);
+        if (fs::exists(interm) && !fs::exists(idx)) fs::remove(interm);
+
+        // Probe total frame count for accurate progress percentage AND to fail
+        // fast on unreadable sources: ffprobe prints nothing for a corrupt or
+        // truncated file (no moov atom, etc.), so a 0 result means "cannot
+        // decode" — spawn neither the still extractor nor the encoder, and
+        // record a persistent failure instead of churning the queue forever
+        // (the per-frame re-queue loop was re-launching ffmpeg against dead
+        // files endlessly, flashing "building preview…"). The probe also
+        // yields the target rate (min(source, 30)) as an exact rational for
+        // "-r".
+        double proxy_fps = 0.0;
+        int64_t fps_num = 0, fps_den = 1;
+        int total_frames = probe_total_frames(path, &proxy_fps, &fps_num, &fps_den);
+        if (total_frames <= 0 || proxy_fps <= 0.0) {
+            mark_proxy_failed(path, "source file corrupt or truncated (unreadable) — replace or re-export it");
+            release_active();
+            continue;
+        }
 
         // Generate still so the preview panel shows something immediately
         proxy_ensure_still(path);
 
-        // Probe total frame count for accurate progress percentage
-        int total_frames = probe_total_frames(path);
-
-        // Encode the proxy, GPU-decode first. -threads K caps per-process thread
-        // count so N workers × K threads stays near hardware_concurrency. The
-        // fast_bilinear scaler trades a little chroma fidelity for ~20% faster
-        // scaling (fine at preview quality); -q:v 16 shaves bytes with no visible
-        // difference at half-res. If hardware decode fails (bad VAAPI/NVDEC
-        // support for this codec) retry ONCE in pure software — deterministic and
-        // always available, so a clip can't be left permanently proxy-less.
-        std::string prog_file = mj + ".prog";
+        // Encode the intermediate, GPU-decode first. -threads K caps
+        // per-process thread count so N workers × K threads stays near
+        // hardware_concurrency. Full-res all-intra H.264 (-g 1 → every frame
+        // is a keyframe, so each byte offset in the seek table is a clean
+        // decode point) at min(source fps, 30) CFR, rotation baked, no audio.
+        // If hardware decode fails (bad VAAPI/NVDEC support for this codec)
+        // retry ONCE in pure software — deterministic and always available, so
+        // a clip can't be left permanently proxy-less.
+        std::string fps_arg = fps_den == 1 ? std::to_string(fps_num)
+                                           : std::to_string(fps_num) + "/" + std::to_string(fps_den);
+        std::string prog_file = interm + ".prog";
         std::string src = "file:" + path;
 
-        bool ok = proxy_encode_once(path, src, mj, prog_file, threads_str,
-                                    total_frames, /*use_hwaccel=*/true);
+        bool ok = proxy_encode_once(path, src, interm, prog_file, threads_str,
+                                    fps_arg, total_frames, /*use_hwaccel=*/true);
         if (!ok && !g_shutdown.load()) {
-            fs::remove(mj);
+            fs::remove(interm);
             fprintf(stderr, "[proxy] hw decode failed, retrying software: %s\n", path.c_str());
-            ok = proxy_encode_once(path, src, mj, prog_file, threads_str,
-                                   total_frames, /*use_hwaccel=*/false);
+            ok = proxy_encode_once(path, src, interm, prog_file, threads_str,
+                                   fps_arg, total_frames, /*use_hwaccel=*/false);
         }
 
         fs::remove(prog_file);
@@ -602,11 +697,14 @@ static void proxy_worker_fn() {
         if (!ok) {
             if (!g_shutdown.load())
                 fprintf(stderr, "[proxy] generation FAILED (both hw+sw): %s\n", path.c_str());
-            fs::remove(mj);
-        } else if (!build_seek_table(mj, idx)) {
+            fs::remove(interm);
+            mark_proxy_failed(path, "transcode failed (hardware and software decode both errored)");
+        } else if (!build_seek_table(interm, idx)) {
             fprintf(stderr, "[proxy] seek-table build failed: %s\n", path.c_str());
-            fs::remove(mj);
+            fs::remove(interm);
+            mark_proxy_failed(path, "seek-table build failed");
         } else {
+            fs::remove(proxy_fail_path(path));   // clear any earlier failure
             mark_ready_cached(path);
         }
 
@@ -644,7 +742,7 @@ void proxy_start(const std::string& video_path) {
     std::error_code source_error;
     if (video_path.empty() || !fs::is_regular_file(video_path, source_error)) return;
     if (is_image_ext(video_path)) {
-        // Images: just generate a still, no MJPEG needed
+        // Images: just generate a still, no intermediate needed
         std::string still = proxy_still_path(video_path);
         if (fs::exists(still)) return;
         if (is_svg_ext(video_path)) {   // vector → librsvg rasterize, off-thread
@@ -682,6 +780,11 @@ void proxy_start(const std::string& video_path) {
 
     if (proxy_is_ready(video_path)) return;
 
+    // A source whose generation failed (corrupt/truncated file) stays skipped
+    // until the file itself changes — proxy_failure() returns empty once the
+    // source is overwritten, allowing a fresh attempt.
+    if (!proxy_failure(video_path).empty()) return;
+
     int workers_to_spawn = 0;
     {
         std::lock_guard<std::mutex> lk(g_mu);
@@ -712,6 +815,12 @@ ProxyJobStatus proxy_job_status(const std::string& video_path) {
     ProxyJobStatus st;
     st.path = video_path;
     if (proxy_is_ready(video_path)) { st.state = ProxyJobStatus::State::Ready; return st; }
+    std::string fail = proxy_failure(video_path);
+    if (!fail.empty()) {
+        st.state = ProxyJobStatus::State::Failed;
+        st.error = fail;
+        return st;
+    }
     std::lock_guard<std::mutex> lk(g_mu);
     if (g_active.count(video_path)) {
         st.state = ProxyJobStatus::State::Generating;

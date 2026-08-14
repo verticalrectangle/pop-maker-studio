@@ -798,7 +798,7 @@ void import_file(AppState& state, const std::string& path) {
             if (proxy_is_ready(path)) {
                 ProxyInfo pi;
                 if (proxy_load(path, pi)) {
-                    video_open_proxy(slot, pi);
+                    video_open_intermediate(slot, pi);
                     state.proxy_ready = true;
                 }
             }

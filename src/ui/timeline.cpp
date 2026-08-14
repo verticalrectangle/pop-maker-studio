@@ -5175,6 +5175,19 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                      ci>=0 && ci<(int)state.tracks[ti].clips.size();
         Track* ct = valid ? &state.tracks[ti] : nullptr;
         Clip*  cc = valid ? &ct->clips[ci]    : nullptr;
+        // Menu items below mutate the clip/track vectors (duplicate/split
+        // insert into clips, decouple inserts whole tracks, merge erases) —
+        // these raw pointers would dangle for the rest of this frame's menu
+        // build. Only one item activates per frame, but every read AFTER it
+        // still runs this frame, so re-derive the pointers after each mutation
+        // (heap-use-after-free at the Lyrics check below; caught by ASan via
+        // "Duplicate clip").
+        auto refresh_ctx = [&]() {
+            valid = ti >= 0 && ti < (int)state.tracks.size() &&
+                    ci >= 0 && ci < (int)state.tracks[ti].clips.size();
+            ct = valid ? &state.tracks[ti] : nullptr;
+            cc = valid ? &ct->clips[ci]    : nullptr;
+        };
 
         // ── Rip audio (video clips only) ─────────────────────────────────────
         if (cc && cc->clip_type==ClipType::Video) {
@@ -5238,9 +5251,9 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     if (ImGui::MenuItem(rm.label, nullptr, cur)) {
                         state.subtitle_mode = rm.m;
                         apply_subtitle_mode(state);
+                        refresh_ctx();   // rebuilt the text track's clips
                         history_push(state, std::string("Grouping — ") + rm.label);
                     }
-                    if (!has_json) ImGui::EndDisabled();
                 }
                 ImGui::EndMenu();
             }
@@ -5273,6 +5286,7 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     // index first so the earlier indices stay valid.
                     std::sort(fxk.begin(), fxk.end(), std::greater<int>());
                     for (int k : fxk) decouple_fx_to_new_track(state, ti, k);
+                    refresh_ctx();   // tracks vector reallocated, clip possibly moved
                     history_push(state, "Decouple FX");
                 }
                 if (ImGui::MenuItem(many ? "Remove FX bricks" : "Remove FX brick")) {
@@ -5286,8 +5300,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
         if (cc && cc->fx_coupled && is_fx_clip(*cc)) {
             if (ImGui::MenuItem("Decouple Multi-FX brick")) {
                 // Lift the freed brick onto a fresh track just below the content
-                // so it becomes a clean, movable global brick (keeps its span).
                 decouple_fx_to_new_track(state, ti, ci);
+                refresh_ctx();   // tracks vector reallocated
                 history_push(state, "Decouple Multi-FX brick");
             }
             if (ImGui::MenuItem("Remove effect")) {
@@ -5303,12 +5317,16 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 float cut = state.playhead;
                 if (cut > cc->start+0.02f && cut < cc->end-0.02f) {
                     clip_split_with_fx(state, ti, ci, cut);
+                    refresh_ctx();   // clips vector grew — cc dangles
                     history_push(state, "Split clip");
                 }
             }
         }
         if (ImGui::MenuItem("Duplicate clip")) {
-            if (duplicate_selected_clips(state)) history_push(state, "Duplicate clip");
+            if (duplicate_selected_clips(state)) {
+                refresh_ctx();   // clips vector grew — cc dangles (ASan: UAF)
+                history_push(state, "Duplicate clip");
+            }
         }
         // ── Grouping: clips sharing a group_id select and drag as one ─────────
         {
@@ -5371,6 +5389,8 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                 ct->clips.insert(ct->clips.begin() + mids[0], merged);
                 state.clip_selection.clear();
                 state.selected_track = ti; state.selected_clip = mids[0];
+                ci = mids[0];        // selection now points at the merged brick
+                refresh_ctx();       // erase+insert reallocated the clips vector
                 history_push(state, "Merge lyric bricks");
             }
         }

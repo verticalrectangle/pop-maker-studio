@@ -7,10 +7,10 @@
 
 // Video preview — two separate paths:
 //
-// PREVIEW (proxy-based, stb_image, main thread only):
-//   video_open_still()  — show a single JPEG while proxy is generating
-//   video_open_proxy()  — open MJPEG + seek table; scrub is fseek + stb_image
-//   video_get_texture() — decode current frame, upload to GL, return texture ID
+// PREVIEW (intermediate-based, libav, main thread only):
+//   video_open_still()       — show a single JPEG while the intermediate is generating
+//   video_open_intermediate()— open all-intra H.264 + seek table; scrub is byte-seek + decode
+//   video_get_texture()      — decode current frame, upload to GL, return texture ID
 //   video_close()
 //
 // EXPORT (FFmpeg, original file, frame-accurate):
@@ -41,12 +41,13 @@ struct VideoInfo {
 // track_id=-1 in video_close() closes all slots.
 //
 // Each slot is in one of these states. Still and Native are openable before the
-// MJPEG proxy finishes transcoding; screen_studio's per-frame loop swaps to
-// Proxy once it's ready because proxy decode is the fastest steady-state path.
+// all-intra H.264 intermediate finishes transcoding; screen_studio's per-frame
+// loop swaps to Proxy once it's ready because the intermediate is all-keyframe
+// (byte-seek + one-packet decode is the fastest steady-state path).
 enum class PreviewSource { None, Still, Proxy, Native };
 
 void          video_open_still (int track_id, const std::string& jpeg_path);
-bool          video_open_proxy (int track_id, const ProxyInfo& proxy);
+bool          video_open_intermediate(int track_id, const ProxyInfo& proxy);
 bool          video_open_native(int track_id, const std::string& path);
 // Animated GIF → full-res RGBA frames (lossless, alpha); preview shows the frame
 // at the playhead. video_is_gif() reports whether a slot already holds one.
@@ -57,13 +58,9 @@ bool          video_is_open    (int track_id = 0);
 PreviewSource video_source     (int track_id);
 VideoInfo     video_info       (int track_id = 0);
 uintptr_t     video_get_texture(int track_id, double playhead);
-// Proxy frame index for a playhead on an open slot — same mapping as
-// video_get_texture, but with NO ffprobe fork, so it is safe in the render path.
-// Returns -1 if the slot is closed.
-int           video_proxy_frame_idx(int track_id, double playhead);
 
 // Parallel pre-decode for multiple tracks. Each pair is (track_id, playhead).
-// Runs JPEG decode + CPU FX in worker threads, then performs the GL uploads
+// Runs libav decode + CPU FX in worker threads, then performs the GL uploads
 // serially on the calling (main) thread. Subsequent video_get_texture() calls
 // for the same (track, playhead) return the pre-decoded texture without
 // redoing work. Safe to call with 0 or 1 entries (it falls through to direct
@@ -75,7 +72,7 @@ int           video_proxy_frame_idx(int track_id, double playhead);
 struct VideoPrefetchReq { int track_id; double playhead; int max_frames = 0; };
 void video_prefetch_frames(const VideoPrefetchReq* reqs, int n);
 
-// Thumbnail for the scrub bar hover — always uses track 0's proxy.
+// Thumbnail for the scrub bar hover — always uses track 0's intermediate.
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h);
 
 

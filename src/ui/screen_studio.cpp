@@ -12,6 +12,7 @@
 #include "panel_terminal.h"
 #include "panel_agent.h"
 #include "../agent_harness.h"
+#include "../pexels_api.h"
 #include "../recorder.h"
 #include "../video_recorder.h"
 #include "export_ui.h"
@@ -553,7 +554,7 @@ void ui_studio(AppState& state) {
         std::string src = source_from_key(key);
         if (is_animated_image(src)) {
             // GIF: decode to full-res RGBA frames once (lossless + alpha) and show
-            // the frame at the playhead — no lossy mp4 conform / MJPEG proxy that
+            // the frame at the playhead — no lossy mp4 conform / intermediate that
             // softened them and dropped transparency.
             if (!video_is_gif(slot)) video_open_gif(slot, src);
             continue;
@@ -592,7 +593,7 @@ void ui_studio(AppState& state) {
         if (proxy_is_ready(src)) {
             ProxyInfo pi;
             if (!proxy_load(src, pi)) continue;
-            video_open_proxy(slot, pi);
+            video_open_intermediate(slot, pi);
             // Retry bg_remove for any clips that were waiting on this proxy
             for (int ti2 = 0; ti2 < (int)state.tracks.size(); ++ti2)
                 for (int ci2 = 0; ci2 < (int)state.tracks[ti2].clips.size(); ++ci2) {
@@ -635,6 +636,10 @@ void ui_studio(AppState& state) {
                 if (cl.text.empty() ||
                     (is_image_path(cl.text) && !is_animated_image(cl.text))) continue;
                 if (!proxy_is_ready(cl.text)) {
+                    // Corrupt/unreadable sources can never build a preview —
+                    // skip instead of re-queueing them every frame (that
+                    // looped ffmpeg against dead files endlessly).
+                    if (!proxy_failure(cl.text).empty()) continue;
                     proxy_start(cl.text);
                     started = true;
                     break;
@@ -1330,6 +1335,49 @@ void ui_studio(AppState& state) {
                 }
             }
 
+            // ── Pexels (stock media) ──────────────────────────────────────────
+            ImGui::PushFont(g_font_bold);
+            ImGui::TextUnformatted("Pexels");
+            ImGui::PopFont();
+            ImGui::Dummy({0.f, 4.f});
+            {
+                float lx = ImGui::GetStyle().WindowPadding.x + 8.f;
+                static char s_pexels_key_buf[256] = {};
+                ImGui::SetCursorPosX(lx);
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextWrapped("API keys come from pexels.com/api (free), stored in the "
+                    "system keyring; the PEXELS_API_KEY environment variable overrides.");
+                ImGui::PopStyleColor();
+                ImGui::Dummy({0.f, 6.f});
+                ImGui::SetCursorPosX(lx);
+                if (!pexels_key_available()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                    ImGui::TextWrapped("secret-tool not found — install "
+                        "libsecret to store the API key in the system keyring.");
+                    ImGui::PopStyleColor();
+                } else {
+                    bool has_key = pexels_key_present();
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                        has_key ? IM_COL32(100, 220, 130, 255) : to_u32(Col::muted));
+                    ImGui::TextUnformatted(has_key ? "API key: stored in keyring"
+                                                   : "API key: not set");
+                    ImGui::PopStyleColor();
+                    ImGui::SetCursorPosX(lx);
+                    ImGui::SetNextItemWidth(260.f);
+                    ImGui::InputText("##pexels_key", s_pexels_key_buf, sizeof(s_pexels_key_buf),
+                                     ImGuiInputTextFlags_Password);
+                    ImGui::SameLine(0.f, 6.f);
+                    if (ui_btn("Save key", false, true) && s_pexels_key_buf[0]) {
+                        if (pexels_key_store(s_pexels_key_buf))
+                            memset(s_pexels_key_buf, 0, sizeof(s_pexels_key_buf));
+                    }
+                    if (has_key) {
+                        ImGui::SameLine(0.f, 6.f);
+                        if (ui_btn("Clear", false, true)) pexels_key_clear();
+                    }
+                }
+            }
+
             ImGui::Dummy({0.f, 16.f});
             ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
             if (ui_btn("Close", false, false)) {
@@ -1738,11 +1786,24 @@ void ui_studio(AppState& state) {
         // The hover transport pill is gone (it cluttered the preview and ate
         // clicks) — playback lives in the timeline transport. Long-running ops
         // still surface here so "why is it silent/blank" is always answered.
+        // A proxy build that FAILED (unreadable/corrupt source) is surfaced the
+        // same way instead of an eternal "building preview…" retry loop.
         {
             bool busy = audio_loading() || proxy_is_generating() || state.extract_running;
-            if (busy) {
+            std::string fail_msg;
+            if (!busy) {
+                for (auto& tr : state.tracks)
+                    for (auto& cl : tr.clips) {
+                        if (!clip_is_videolike_type(cl.clip_type) || cl.text.empty()) continue;
+                        if (is_image_path(cl.text) && !is_animated_image(cl.text)) continue;
+                        fail_msg = proxy_failure(cl.text);
+                        if (!fail_msg.empty()) break;
+                    }
+            }
+            if (busy || !fail_msg.empty()) {
                 const char* st = audio_loading()       ? "loading audio…"
                                : proxy_is_generating() ? "building preview…"
+                               : !fail_msg.empty()     ? fail_msg.c_str()
                                                        : "extracting…";
                 ui_canvas_progress_banner(ImGui::GetWindowDrawList(), stage_p, sw, sh,
                                           st, -1.f, IM_COL32(120, 170, 255, 255));

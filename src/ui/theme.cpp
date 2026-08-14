@@ -10,12 +10,16 @@
 #include "inter_font.h"
 #include "mono_font.h"
 #include "display_fonts.h"   // generated: g_embedded_fonts[] (display typefaces)
+#include "cjk_font.h"        // generated: Japanese subset (kana + Jōyō kanji + Latin)
 
 ImFont* g_font_regular = nullptr;
 ImFont* g_font_bold    = nullptr;
 // g_font_black is DEFINED engine-side (text_renderer.cpp, with the font
 // registry); theme_apply() assigns it after building the atlas.
 extern ImFont* g_font_black;
+// Same pattern: CJK-capable canvas face, defined engine-side in
+// text_renderer.cpp, assigned here after the atlas build.
+extern ImFont* g_font_cjk;
 ImFont* g_font_mono    = nullptr;
 
 // Registered display faces, parallel to g_embedded_fonts[]. Filled in theme_apply
@@ -37,6 +41,35 @@ void theme_apply() {
         (void*)inter_bold_ttf, (int)inter_bold_ttf_size, 16.f, &cfg);
     g_font_black = io.Fonts->AddFontFromMemoryTTF(
         (void*)inter_black_ttf, (int)inter_black_ttf_size, 16.f, &cfg);
+
+    // ── CJK support ──────────────────────────────────────────────────────────
+    // The embedded faces are Latin-only, so Japanese text rendered blank.
+    // Merge the Japanese subset (kana + Jōyō kanji + fullwidth + Latin) into
+    // the UI faces (text fields, inputs, terminal) and register a dedicated
+    // 44px CJK face that the on-canvas text renderer substitutes for CJK
+    // strings (see text_renderer.cpp). Range table is static: the atlas keeps
+    // the pointer after Build(). Atlas cost is bounded by the subset (~2.5k
+    // glyphs — the full 20k kanji range would blow the texture).
+    static ImVector<ImWchar> s_cjk_ranges;
+    if (s_cjk_ranges.empty()) {
+        ImFontGlyphRangesBuilder b;
+        for (unsigned i = 0; i < cjk_codepoints_size; ++i)
+            b.AddChar((ImWchar)cjk_codepoints[i]);
+        b.BuildRanges(&s_cjk_ranges);
+    }
+    ImFontConfig mcfg;
+    mcfg.FontDataOwnedByAtlas = false;
+    mcfg.MergeMode            = true;
+    mcfg.GlyphRanges          = s_cjk_ranges.Data;
+    io.Fonts->AddFontFromMemoryTTF((void*)cjk_font_ttf, (int)cjk_font_ttf_size,
+                                   16.f, &mcfg);   // merge into regular
+    io.Fonts->AddFontFromMemoryTTF((void*)cjk_font_ttf, (int)cjk_font_ttf_size,
+                                   16.f, &mcfg);   // merge into bold
+    io.Fonts->AddFontFromMemoryTTF((void*)cjk_font_ttf, (int)cjk_font_ttf_size,
+                                   16.f, &mcfg);   // merge into black
+    mcfg.MergeMode = false;
+    g_font_cjk = io.Fonts->AddFontFromMemoryTTF(
+        (void*)cjk_font_ttf, (int)cjk_font_ttf_size, 44.f, &cfg, s_cjk_ranges.Data);
 
     // JetBrains Mono for the embedded terminal. Glyph ranges cover what fish,
     // zsh, and TUIs actually emit: extended Latin, general punctuation
@@ -64,6 +97,13 @@ void theme_apply() {
     g_font_mono = io.Fonts->AddFontFromMemoryTTF(
         (void*)jetbrains_mono_regular_ttf, (int)jetbrains_mono_regular_ttf_size,
         20.f, &cfg, mono_ranges);
+    // CJK merge for the embedded terminal (kana/kanji typed or pasted there).
+    ImFontConfig mcfg2;
+    mcfg2.FontDataOwnedByAtlas = false;
+    mcfg2.MergeMode            = true;
+    mcfg2.GlyphRanges          = s_cjk_ranges.Data;
+    io.Fonts->AddFontFromMemoryTTF((void*)cjk_font_ttf, (int)cjk_font_ttf_size,
+                                   20.f, &mcfg2);
 
     // Bundled display typefaces for typography presets. Baked at 44px (lyrics
     // text upscales from the atlas; 44 keeps big on-canvas type crisp without

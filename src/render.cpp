@@ -18,7 +18,7 @@
 #include "stb_image_write.h"  // impl in stb_impl.cpp (always compiled)
 
 #include "stb_image.h"  // declarations only — implementation lives in video.cpp
-#include "proxy.h"      // proxy_load — the counted frame rate the bg masks are keyed by
+#include "proxy.h"      // proxy_still_path — exotic-format still fallback
 
 #include <fstream>
 #include <sstream>
@@ -1211,7 +1211,7 @@ static std::vector<std::string> build_args(AppState& state) {
             if (cl.clip_type == ClipType::Effect || cl.clip_type == ClipType::MultiFX) {
                 continue;  // applied per-layer via collect_effects, not as a render layer
             } else if (cl.clip_type == ClipType::Video) {
-                std::string vsrc = clip_video_src(state, cl);  // conformed copy if ready
+                std::string vsrc = clip_video_src(state, cl);  // intermediate if proxy ready, else source
                 if (vsrc.empty() || !fs::exists(vsrc)) continue;
                 int arr_idx = get_vid_input(vsrc, cl.start, cl.end);
                 RLayer rl; rl.kind = RLayer::Vid;
@@ -1414,7 +1414,7 @@ static std::vector<std::string> build_snapshot_args(AppState& state,
             const Clip& cl = state.tracks[ti].clips[ci];
             if (cl.clip_type == ClipType::Effect || cl.clip_type == ClipType::MultiFX) continue;
             if (cl.clip_type == ClipType::Video) {
-                std::string vsrc = clip_video_src(state, cl);  // conformed copy if ready
+                std::string vsrc = clip_video_src(state, cl);  // intermediate if proxy ready, else source
                 if (vsrc.empty() || !fs::exists(vsrc)) continue;
                 int arr_idx = get_vid_input(vsrc);
                 RLayer rl; rl.kind = RLayer::Vid;
@@ -1854,7 +1854,7 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
               cfx.any_cfx || cfx.any_gen_fx)) return;
         flush_dl();                                   // below-tracks → FBO
         glBindFramebuffer(GL_FRAMEBUFFER, 0);         // detach so col_tex is readable
-        uintptr_t out = fx_apply((uintptr_t)col_tex, kSceneFxSlot, out_w, out_h, ea, cfx, t);
+        uintptr_t out = fx_apply((uintptr_t)col_tex, kSceneFxSlotExport, out_w, out_h, ea, cfx, t);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glViewport(0, 0, out_w, out_h);
         if (out != (uintptr_t)col_tex) fx_blit(out, fbo, out_w, out_h);
@@ -2037,6 +2037,9 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
         // This track's text, drawn right after its video so it layers at the
         // track's z-order (foreground tracks composite on top of it next).
         draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+        // Same shared ping-pong concern as the export: flush this track's quads
+        // while the body-FX/fx textures are still valid.
+        flush_dl();
         apply_track_fx(ti);   // standalone FX bricks process the tracks below
     }
     video_close_export_all();
@@ -2161,26 +2164,30 @@ static void clear_ex_still_tex() {
     g_ex_still_tex.clear();
 }
 
-// Map an export source-time to the proxy frame index the bg-removal masks are keyed
-// by. The masks are indexed by the proxy's COUNTED rate (frames÷duration, e.g. 29.97),
-// the same rate the preview uses (video.cpp:1002 / playhead_to_frame_idx) and that
-// start_frame is computed in. fps.txt instead records the raw proxy MJPEG's CONTAINER
-// rate (a forced 30, see proxy.cpp:238) — using it drifts the mask out of sync as time
-// grows. Cache the rational rate per source path (proxy_load spawns ffprobe).
-static int export_proxy_frame_idx(const std::string& video_path, double t) {
-    static std::map<std::string, std::pair<int64_t,int64_t>> s_cache;  // path → (num, den)
-    auto it = s_cache.find(video_path);
+// Map an export source-time to the bg-mask frame index. Masks are keyed by TIME
+// now: the mask dir carries fps.txt plus start_time.txt (the clip's in_point in
+// seconds, written by the mask job), and the mask frame for source time t is
+// round((t - start_time) * fps). Cache the (start_time, fps) pair per mask dir —
+// the files don't change during a render and fopen per frame is hot.
+static int mask_frame_for_time(const std::string& mask_dir, double src_t) {
+    struct MaskRate { double start_time = 0.0; double fps = 30.0; };
+    static std::map<std::string, MaskRate> s_cache;  // mask_dir → (start_time, fps)
+    auto it = s_cache.find(mask_dir);
     if (it == s_cache.end()) {
-        int64_t num = 0, den = 1;
-        ProxyInfo pi;
-        if (proxy_load(video_path, pi) && pi.fps_num > 0 && pi.fps_den > 0) {
-            num = pi.fps_num; den = pi.fps_den;
+        MaskRate mr;
+        if (FILE* f = fopen((mask_dir + "/fps.txt").c_str(), "r")) {
+            double v = 30.0;
+            if (fscanf(f, "%lf", &v) == 1 && v > 0.0) mr.fps = v;
+            fclose(f);
         }
-        it = s_cache.insert({video_path, {num, den}}).first;
+        if (FILE* f = fopen((mask_dir + "/start_time.txt").c_str(), "r")) {
+            double v = 0.0;
+            if (fscanf(f, "%lf", &v) == 1 && v >= 0.0) mr.start_time = v;
+            fclose(f);
+        }
+        it = s_cache.insert({mask_dir, mr}).first;
     }
-    int64_t num = it->second.first, den = it->second.second;
-    return (num > 0 && den > 0) ? (int)((int64_t)(t * (double)num) / den)
-                                : (int)(t * 30.0);
+    return (int)std::llround((src_t - it->second.start_time) * it->second.fps);
 }
 
 static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
@@ -2319,9 +2326,6 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, vf->data);
     int vid_w = vf->width, vid_h = vf->height;
-    double vid_pts = vf->pts;   // the decoded frame's ACTUAL timestamp; the bg mask is
-                                // indexed off this (not the requested src_t) so the cutout
-                                // tracks the exact frame rendered — no temporal lag.
     video_free_frame(vf);
 
     // Pre-composite: glass FX/adjustments on the same track as this video clip.
@@ -2338,11 +2342,11 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // Both use the video clip's own bg_remove masks (hires at export time).
     if (cl->bg_remove_status == BgRemoveStatus::Ready && !cl->bg_remove_mask_dir.empty()) {
         std::string mask_dir = cl->bg_remove_mask_dir;
-        // Index by the proxy's COUNTED rate (matches the preview + start_frame), NOT
-        // fps.txt's container rate. Use the DECODED frame's pts, not the requested
-        // src_t: the decoder snaps to the nearest source frame, and keying the mask off
-        // the request rather than the delivered frame is what made the export mask lag.
-        int frame_i = export_proxy_frame_idx(cl->text, vid_pts);
+        // Masks are keyed by TIME: the mask dir's fps.txt + start_time.txt (the
+        // clip's in_point) map a source time to the mask frame, so the cutout
+        // tracks the exact source frame requested (src_t) — no proxy frame-rate
+        // bookkeeping.
+        int frame_i = mask_frame_for_time(mask_dir, (double)src_t);
         // Bounding box (keep-region in v_uv — y is bottom-up, so flip t/b) + softness,
         // fed into the RemoveBackground brick shader (was the CPU alpha-bake's job).
         float bg_box[4] = {0.f, 1.f, 0.f, 1.f};
@@ -2391,6 +2395,21 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                                         se.body_fx_amount, at_time, bg_box, bg_soft);
                 if (is_rmbg) bg_removed = true;
             }
+        }
+
+        // A clip with bg_remove_on + ready masks cuts its background even when
+        // no RemoveBackground brick/sub-effect exists: the flag IS the intent
+        // (the filtergraph path cuts every bg_remove_on layer this way), and a
+        // non-rmbg body-FX on the same clip must not silently cancel the
+        // cutout. Skipped when a RemoveBackground already applied this frame —
+        // the bg_removed guard keeps the mask from squaring (alpha^2 smudge).
+        if (!bg_removed) {
+            unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
+            if (mask_tex)
+                cur_tex = body_fx_apply(BodyFXType::RemoveBackground, cur_tex,
+                                        mask_tex, vid_w, vid_h,
+                                        /*params=*/nullptr, 1.f, at_time,
+                                        bg_box, bg_soft);
         }
     }
 
@@ -3261,7 +3280,7 @@ void render_tick_gl(AppState& state) {
               cfx.any_cfx || cfx.any_gen_fx)) return;
         flush_dl();                                   // below-tracks → FBO
         glBindFramebuffer(GL_FRAMEBUFFER, 0);         // detach so color_tex is readable
-        uintptr_t out = fx_apply((uintptr_t)g_gl_ex.color_tex, kSceneFxSlot,
+        uintptr_t out = fx_apply((uintptr_t)g_gl_ex.color_tex, kSceneFxSlotExport,
                                  g_gl_ex.out_w, g_gl_ex.out_h, ea, cfx, t);
         glBindFramebuffer(GL_FRAMEBUFFER, g_gl_ex.fbo);
         glViewport(0, 0, g_gl_ex.out_w, g_gl_ex.out_h);
@@ -3465,6 +3484,12 @@ void render_tick_gl(AppState& state) {
         }
         // This track's text at its z-order (foreground tracks composite over it).
         draw_text_overlays(&dl, state, t, {0.f, 0.f}, W, H, ti);
+
+        // The body-FX / fx ping-pong textures (g_out) are SHARED: the next
+        // clip's fx_apply/body_fx_apply overwrites them, so a quad left in the
+        // draw list would sample the wrong content (bg cutout silently lost).
+        // Flush this track's quads now, while the textures are still valid.
+        flush_dl();
         apply_track_fx(ti);   // standalone FX bricks process the tracks below
     }
 

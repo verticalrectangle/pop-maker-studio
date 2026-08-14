@@ -10,7 +10,6 @@
 #include "history.h"
 #include "paths.h"
 #include "proxy.h"
-#include "conform.h"
 #include "project.h"
 #include "video.h"
 #include <algorithm>
@@ -46,10 +45,16 @@ int group_head_of(const AppState& state, int ti) {
     return -1;
 }
 
+// The single decode/export source for a video clip: the all-intra H.264
+// intermediate when its proxy is ready, otherwise the original source. The
+// intermediate is CFR at min(source fps, 30) with rotation baked and no
+// audio, so export and preview derive from the same frames.
 std::string clip_video_src(const AppState& state, const Clip& cl) {
-    if (clip_needs_conform(cl, state.fps) &&
-        conform_is_ready(cl.text, state.fps, cl.conform_smooth, cl.clip_loop))
-        return conform_path(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
+    (void)state;
+    if (proxy_is_ready(cl.text)) {
+        ProxyInfo pi;
+        if (proxy_load(cl.text, pi)) return pi.interm_path;
+    }
     return cl.text;
 }
 
@@ -283,18 +288,6 @@ static bool audio_fx_from_brick(const Clip& cl, AudioFX& out) {
     return audio_fx_from_brick_impl(cl, out);
 }
 
-// ── Frame-rate conform ────────────────────────────────────────────────────────
-bool clip_needs_conform(const Clip& cl, int project_fps) {
-    if (project_fps <= 0 || cl.src_fps <= 0.f) return false;  // 0=unprobed, -1=still
-    // No image is conformed. Stills report a phantom frame rate from ffprobe (a
-    // PNG comes back as 25/1) and would be re-encoded into an alpha-stripped,
-    // softened mp4; GIFs now render as full-res RGBA frames (video_open_gif) in
-    // preview and via libav on export, so the lossy mp4 conform is unwanted there
-    // too — it was the main thing degrading GIF quality.
-    if (is_image_path(cl.text)) return false;
-    return std::fabs(cl.src_fps - (float)project_fps) > (float)project_fps * 0.01f;
-}
-
 bool audio_fx_from_brick_impl(const Clip& cl, AudioFX& out) {
     out.mix = cl.audio_fx.mix;   // brick dry/wet applies to every audio FX kind
     switch (cl.fx_type) {
@@ -365,10 +358,10 @@ static std::vector<std::pair<int, std::string>> collect_slot_opens(AppState& sta
     for (auto& tr : state.tracks) {
         for (auto& cl : tr.clips) {
             if (!clip_is_videolike_type(cl.clip_type) || cl.text.empty()) continue;
-            // Decode the conformed copy when ready, else the original. (Stills
-            // are never conformed, so `src` keeps the .png/.gif extension and the
-            // image branch of the opener still fires for them; a conformed clip's
-            // `src` is a .mp4 and falls through to the proxy/native video path.)
+            // Decode the intermediate when ready, else the original. (Stills
+            // keep the .png/.gif extension and the image branch of the opener
+            // still fires for them; a clip with a ready proxy has `src` = the
+            // .interm.mp4 and falls through to the native video path.)
             std::string src = clip_video_src(state, cl);
             std::string key = clip_slot_key(src, cl.start);
             int slot = slot_for_video(state, key, src);
@@ -396,7 +389,7 @@ static void open_video_slot_now(AppState& state, int slot, const std::string& sr
     // Animated images (.gif) fall through to the proxy path below.
     if (is_animated_image(src)) {
         // GIF: decode to full-res RGBA frames once (lossless + alpha) and
-        // show the frame at the playhead — no lossy mp4 conform / MJPEG.
+        // show the frame at the playhead — no lossy intermediate.
         if (!video_is_gif(slot)) video_open_gif(slot, src);
         return;
     }
@@ -408,7 +401,7 @@ static void open_video_slot_now(AppState& state, int slot, const std::string& sr
     if (proxy_is_ready(src)) {
         ProxyInfo pi;
         if (proxy_load(src, pi)) {
-            video_open_proxy(slot, pi);
+            video_open_intermediate(slot, pi);
             if (slot == 0) state.proxy_ready = true;
             return;
         }
@@ -496,35 +489,24 @@ void gc_video_slots(AppState& state) {
     }
 }
 
-void conform_tick(AppState& state) {
-    bool reopen = false, probed_one = false;
+// Per-frame lazy source probe: fill in src_fps / src_duration for video clips
+// (0 = unprobed, -1 = probed-but-none, so we don't retry forever). At most one
+// ffprobe per frame so a load of many clips doesn't hitch. Also re-probe a
+// loaded clip that's missing its duration: src_fps is serialized but
+// src_duration (v46 projects) is not, so a saved clip needs its duration
+// recovered.
+void clip_probe_tick(AppState& state) {
+    bool probed_one = false;
     for (auto& tr : state.tracks) {
         for (auto& cl : tr.clips) {
             if (cl.clip_type != ClipType::Video || cl.text.empty()) continue;
-            // Lazy native-fps probe — at most one ffprobe per frame so a load of
-            // many clips doesn't hitch.
-            // Probe when unprobed (src_fps 0). Also re-probe a loaded looping
-            // clip that's missing its duration: src_fps is serialized but
-            // src_duration (v46 projects) is not, so a saved GIF needs its loop
-            // length recovered. -1 = probed-but-none, so we don't retry forever.
-            if ((cl.src_fps == 0.f ||
-                 (cl.clip_loop && cl.src_duration == 0.f)) && !probed_one) {
+            if ((cl.src_fps == 0.f || cl.src_duration == 0.f) && !probed_one) {
                 MediaFileInfo mi = video_probe_file(cl.text);
                 cl.src_fps = (mi.fps > 0.0) ? (float)mi.fps : -1.f;
                 cl.src_duration = (mi.duration > 0.0) ? (float)mi.duration : -1.f;
-                // Animated GIFs are loops by nature — default to seamless conform.
-                if (mi.fps > 0.0 && is_animated_image(cl.text)) cl.clip_loop = true;
                 migrate_clean_sidecars(cl.text);   // sweep old scattered files
                 probed_one = true;
             }
-            if (!clip_needs_conform(cl, state.fps)) continue;
-            conform_start(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
-            bool ready = conform_is_ready(cl.text, state.fps, cl.conform_smooth, cl.clip_loop);
-            if (ready) proxy_start(conform_path(cl.text, state.fps, cl.conform_smooth, cl.clip_loop));
-            // Edge-trigger a slot reopen so the preview swaps to the conform the
-            // moment it lands (and back to the original if it ever goes away).
-            if (ready != cl.conform_ready_cache) { cl.conform_ready_cache = ready; reopen = true; }
         }
     }
-    if (reopen) { gc_video_slots(state); reopen_video_slots(state); }
 }

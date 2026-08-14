@@ -184,14 +184,10 @@ inline float struct_field_default(const T& obj, const float* v) {
     return *(const float*)((const char*)&s_def + off);
 }
 
-// ── Frame-rate conform ────────────────────────────────────────────────────────
-// True if this clip's native fps differs enough from the project to warrant a
-// conform (src_fps must already be probed; stills/src_fps<=0 are never conformed).
-// The file the proxy/export should actually decode for this clip: the conformed
-// copy when it's ready, otherwise the original (clip.text).
+// ── Clip source resolution ────────────────────────────────────────────────────
+// The file the proxy/export should actually decode for this clip: the all-intra
+// H.264 intermediate when its proxy is ready, otherwise the original (clip.text).
 std::string clip_video_src(const AppState& state, const Clip& cl);
-// Per-frame: probe native fps lazily, kick conforms, and reopen video slots when
-// a conform becomes ready so the preview/export swap to it. Call from app_frame.
 float project_end(const AppState& state);
 bool  is_audio_file(const std::string& path);
 

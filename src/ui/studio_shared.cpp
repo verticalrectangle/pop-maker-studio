@@ -5,7 +5,6 @@
 #include "audio.h"
 #include "video.h"
 #include "proxy.h"
-#include "conform.h"
 #include "history.h"
 #include "project.h"
 #include "fx_shader.h"
@@ -778,7 +777,7 @@ void add_clip_to_track(AppState& state, int ti, const std::string& path, ClipTyp
         if (slot >= 0) {
             if (proxy_is_ready(path)) {
                 ProxyInfo pi;
-                if (proxy_load(path, pi)) video_open_proxy(slot, pi);
+                if (proxy_load(path, pi)) video_open_intermediate(slot, pi);
             } else if (!video_open_native(slot, path)) {
                 video_open_still(slot, proxy_still_path(path));
             }

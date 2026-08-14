@@ -23,7 +23,7 @@ std::string media_cache_dir();
 std::string projects_dir();
 // A cache file path for `source` + `suffix`, keyed by a hash of the source path
 // (stable, collision-resistant; the source's stem is kept as a readable prefix).
-// e.g. cache_path("/x/clip.mp4", ".proxy.mjpeg") -> <cache>/clip.<hash>.proxy.mjpeg
+// e.g. cache_path("/x/clip.mp4", ".interm.mp4") -> <cache>/clip.<hash>.proxy.mjpeg
 std::string cache_path(const std::string& source, const std::string& suffix);
 
 // ── Cache maintenance ─────────────────────────────────────────────────────────

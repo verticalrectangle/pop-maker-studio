@@ -8,6 +8,7 @@
 // engine (text renderer, overlay renderer, typography pipeline) resolves
 // faces by id. Storage engine-side so typo_font_get links into pms-engine.
 ImFont* g_font_black = nullptr;   // assigned by the app after atlas build
+ImFont* g_font_cjk   = nullptr;   // CJK-capable canvas face (app assigns after atlas build)
 namespace {
     struct TypoFace { const char* name; ImFont* font; };
     std::vector<TypoFace> g_typo_faces;
@@ -21,6 +22,33 @@ ImFont* typo_font_get(const char* id) {
         for (const auto& f : g_typo_faces)
             if (f.font && strcmp(f.name, id) == 0) return f.font;
     return g_font_black;   // default lyrics face / graceful fallback
+}
+
+// Does `s` contain CJK codepoints (kana, kanji, JP punctuation, fullwidth)?
+// The Latin display faces have none of these, so such strings need the
+// merged CJK face or every glyph renders blank.
+static bool text_has_cjk(const char* s) {
+    if (!s) return false;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        unsigned cp = *p;
+        int len = 1;
+        if ((*p & 0xE0) == 0xC0) { cp = *p & 0x1F; len = 2; }
+        else if ((*p & 0xF0) == 0xE0) { cp = *p & 0x0F; len = 3; }
+        else if ((*p & 0xF8) == 0xF0) { cp = *p & 0x07; len = 4; }
+        else if (*p < 0x80) { len = 1; }
+        else return true;              // malformed UTF-8 — hand it to the CJK face
+        if (len > 1 && p[1] != 0) {
+            for (int i = 1; i < len; ++i) cp = (cp << 6) | (p[i] & 0x3F);
+        }
+        // CJK ideographs + compatibility, kana, CJK punctuation, fullwidth forms
+        if ((cp >= 0x2E80 && cp <= 0x9FFF) ||
+            (cp >= 0x3000 && cp <= 0x30FF) ||
+            (cp >= 0xFF00 && cp <= 0xFFEF))
+            return true;
+        p += len;
+    }
+    return false;
 }
 
 
@@ -230,6 +258,16 @@ void render_text_block(TextRenderCtx ctx, const std::vector<std::string>& lines)
     float       anim_dx   = ctx.anim_dx;
     const Clip* clip      = ctx.clip;
     const TextStyle& ts   = clip->ts;
+
+    // Japanese text (or any CJK string) has no glyphs in the Latin display
+    // faces — swap in the CJK-capable face so it renders instead of blank.
+    // Mixed blocks (Latin + kana) render fully from the CJK face, which also
+    // carries Latin. Measured widths below use the same font, so layout stays
+    // consistent with what's actually drawn.
+    if (g_font_cjk) {
+        for (const auto& ln : lines)
+            if (text_has_cjk(ln.c_str())) { font = g_font_cjk; break; }
+    }
 
     float track = clip->tracking;
 

@@ -66,7 +66,7 @@ static std::vector<uint64_t> scan_soi(const std::string& path) {
 
 struct Index {
     std::vector<uint64_t> offsets;
-    int start_frame = 0;
+    float start_time = 0.f;
 };
 
 // Mirror of body_fx.cpp:get_mask_index — prefer bg_masks.idx, else scan the MJPEG.
@@ -84,7 +84,7 @@ static bool load_index(const std::string& dir, Index& ix) {
     }
     if (ix.offsets.empty())
         ix.offsets = scan_soi(dir + "/bg_masks.mjpeg");
-    ix.start_frame = atoi(read_text(dir + "/start_frame.txt").c_str());
+    ix.start_time = atof(read_text(dir + "/start_time.txt").c_str());
     return !ix.offsets.empty();
 }
 
@@ -149,8 +149,8 @@ int main(int argc, char** argv) {
     }
     std::string fps = read_text(dir + "/fps.txt");
     while (!fps.empty() && (fps.back() == '\n' || fps.back() == ' ')) fps.pop_back();
-    printf("MASKS  frames=%d  start_frame=%d  fps.txt=%s\n",
-           (int)ix.offsets.size(), ix.start_frame, fps.c_str());
+    printf("MASKS  frames=%d  start_time=%.3f  fps.txt=%s\n",
+           (int)ix.offsets.size(), ix.start_time, fps.c_str());
 
     std::vector<uint64_t> poffs;
     if (!proxy.empty()) {
@@ -177,7 +177,7 @@ int main(int argc, char** argv) {
         if (pct < worst_pct) worst_pct = pct;
 
         if (!proxy.empty() && !poffs.empty()) {
-            int pframe = ix.start_frame + s;   // proxy frame = mask local + start_frame
+            int pframe = s;   // mask-local frame index (time-keyed)
             int pw, ph;
             unsigned char* rgb = decode_frame(proxy, poffs, pframe, 3, pw, ph);
             if (rgb) {

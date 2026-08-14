@@ -21,7 +21,6 @@
 #include "ipc_server.h"
 #include "agent_harness.h"
 #include "globals.h"
-#include "conform.h"            // conform_cancel
 #include <algorithm>
 #include <chrono>
 #include <cmath>

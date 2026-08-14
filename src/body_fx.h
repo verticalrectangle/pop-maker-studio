@@ -52,7 +52,10 @@ const BodyFXInfo* body_fx_info_list();
 int               body_fx_info_count();
 const BodyFXInfo* body_fx_find_info(BodyFXType t);
 
-// Load (and cache) the per-frame mask PNG as a GL texture.
+// Load (and cache) the per-frame mask as a GL texture from the mask dir's
+// bg_masks.mjpeg. frame_idx is the MASK-STREAM frame (0-based) — callers map
+// source time t to it via round((t - start_time)*fps) using the mask dir's
+// start_time.txt (clip in_point, seconds) + fps.txt.
 // Returns 0 if the mask file doesn't exist yet.
 unsigned body_fx_mask_texture(const std::string& mask_dir, int frame_idx);
 

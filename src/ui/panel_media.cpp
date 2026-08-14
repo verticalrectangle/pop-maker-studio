@@ -13,6 +13,7 @@
 #include "transcribe.h"
 #include "noise_reduce.h"
 #include "bg_remove.h"
+#include "pexels_api.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "json.hpp"
@@ -20,6 +21,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <fstream>
+#include <map>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -194,65 +196,43 @@ int bin_used_count(const AppState& state, const std::string& path) {
 
 
 
-// ── Timeline ──────────────────────────────────────────────────────────────────
-void panel_media_browser(AppState& state, float w, bool is_video) {
-    ImGui::Dummy({0.f, 8.f});
-
-    // Header
-    ImGui::PushStyleColor(ImGuiCol_Text, is_video ? IM_COL32(255,180,60,255)
-                                                   : IM_COL32(60,220,190,255));
-    ImGui::TextUnformatted(is_video ? "Videos" : "Images");
-    ImGui::PopStyleColor();
-
-    // Browse button right-aligned
-    {
-        float bw = ImGui::CalcTextSize("Browse…").x + 20.f;
-        ImGui::SameLine(w - bw - 4.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.f, 3.f});
-        ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(30,30,46,255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(50,50,72,255));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(60,60,90,255));
-        if (ImGui::SmallButton("Browse…")) {
-            std::string picked = is_video
-                ? filepicker_open("Open video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm *.gif")
-                : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp *.heic *.heif *.gif *.svg");
-            if (!picked.empty()) {
-                recent_media_push(picked, is_video ? MediaKind::Video : MediaKind::Image);
-                // Clip at playhead — reuse an empty track if one exists,
-                // otherwise insert a new track at the top.
-                float dur = is_video ? video_probe_duration(picked) : 0.f;
-                if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
-                Clip cl; cl.clip_type = ClipType::Video; cl.text = picked;
-                cl.source_id = picked; cl.start = state.playhead; cl.end = cl.start + dur;
-                s_source_durations[picked] = dur;
-                int target = find_empty_track(state);
-                if (target < 0) {
-                    Track nt; nt.name = fs::path(picked).stem().string();
-                    state.tracks.insert(state.tracks.begin(), std::move(nt));
-                    target = 0;
-                }
-                state.tracks[target].clips.push_back(cl);
-                state.selected_track = target;
-                state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
-                clip_flash(state, target, state.selected_clip, /*reveal=*/true);
-                proxy_start(picked);
-                int slot = slot_for_video(state, clip_slot_key(picked, cl.start), picked);
-                if (slot >= 0) video_open_still(slot, proxy_still_path(picked));
-                state.video_loaded = true;
-                s_panel_view = PanelView::Clip;
-                history_push(state, (is_video ? "Import video: " : "Import image: ") +
-                             fs::path(picked).filename().string());
-            }
-        }
-        ImGui::PopStyleColor(3);
-        ImGui::PopStyleVar();
+// ── Shared insert-at-playhead ─────────────────────────────────────────────────
+// Place a local media file at the playhead on an empty track (a new track at
+// the top if none is free) and open the preview slot for it. Shared by the
+// recents grid "+", the Browse… handler and the Pexels panel (auto-insert on
+// download completion and the already-downloaded "+" click). `dur_hint` is the
+// fallback when probing fails: Pexels passes the API-reported duration, recents
+// pass 0 → the old 4s/5s default.
+static void insert_media_at_playhead(AppState& state, const std::string& path,
+                                     bool is_video, float dur_hint) {
+    float dur = is_video ? video_probe_duration(path) : 0.f;
+    if (dur <= 0.f) dur = (dur_hint > 0.f) ? dur_hint : (is_video ? 4.f : 5.f);
+    fs::path fp(path);
+    Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
+    cl.source_id = path; cl.start = state.playhead; cl.end = cl.start + dur;
+    s_source_durations[path] = dur;
+    int target = find_empty_track(state);
+    if (target < 0) {
+        Track nt; nt.name = fp.stem().string();
+        state.tracks.insert(state.tracks.begin(), std::move(nt));
+        target = 0;
     }
+    state.tracks[target].clips.push_back(cl);
+    state.selected_track = target;
+    state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
+    clip_flash(state, target, state.selected_clip, /*reveal=*/true);
+    proxy_start(path);
+    int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
+    if (slot >= 0) video_open_still(slot, proxy_still_path(path));
+    state.video_loaded = true;
+    recent_media_push(path, is_video ? MediaKind::Video : MediaKind::Image);
+    s_panel_view = PanelView::Clip;
+}
 
-    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-    ImGui::TextWrapped("Drag onto a track, or tap + to add at the playhead.");
-    ImGui::PopStyleColor();
-    ImGui::Dummy({0.f, 8.f});
-
+// The "My Media" tab body — the cross-project recents grid. Moved verbatim out
+// of panel_media_browser() so the Pexels sub-mode shares the tab header and the
+// insert-at-playhead helper without duplicating the grid.
+static void draw_recents_grid(AppState& state, float w, bool is_video) {
     auto& recents = is_video ? recent_media().videos : recent_media().images;
 
     // Filter out missing files
@@ -367,27 +347,7 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
 
         // "+" → add clip at playhead on an empty track (new track if none)
         if (ui_card_add_btn(cp, COL_W, i)) {
-            float dur = is_video ? video_probe_duration(path) : 0.f;
-            if (dur <= 0.f) dur = is_video ? 4.f : 5.f;
-            Clip cl; cl.clip_type = ClipType::Video; cl.text = path;
-            cl.source_id = path; cl.start = state.playhead; cl.end = cl.start + dur;
-            s_source_durations[path] = dur;
-            int target = find_empty_track(state);
-            if (target < 0) {
-                Track nt; nt.name = fp.stem().string();
-                state.tracks.insert(state.tracks.begin(), std::move(nt));
-                target = 0;
-            }
-            state.tracks[target].clips.push_back(cl);
-            state.selected_track = target;
-            state.selected_clip  = (int)state.tracks[target].clips.size() - 1;
-            clip_flash(state, target, state.selected_clip, /*reveal=*/true);
-            proxy_start(path);
-            int slot = slot_for_video(state, clip_slot_key(path, cl.start), path);
-            if (slot >= 0) video_open_still(slot, proxy_still_path(path));
-            state.video_loaded = true;
-            recent_media_push(path, is_video ? MediaKind::Video : MediaKind::Image);
-            s_panel_view = PanelView::Clip;
+            insert_media_at_playhead(state, path, is_video, 0.f);
             history_push(state, (is_video ? "Add video: " : "Add image: ") + fp.filename().string());
         }
 
@@ -398,6 +358,343 @@ void panel_media_browser(AppState& state, float w, bool is_video) {
     int rows = ((int)valid.size() + 1) / 2;
     ImGui::SetCursorPosY(base_y + rows * (CARD_H + GAP) + 4.f);
     ImGui::Dummy({0.f, 0.f});
+}
+
+// ── Pexels stock-media sub-mode (Videos/Images library tabs) ─────────────────
+// Depends only on pexels_api.h: search/download run on detached threads and
+// the UI polls status every frame. All state is indexed by (int)is_video so
+// the Videos and Images tabs remember query/filters/results independently.
+static char                     s_px_query[2][64] = {};
+static char                     s_px_prev[2][64]  = {};
+static float                    s_px_debounce[2]  = {};
+static PexelsFilters            s_px_filter[2];
+static PexelsSearch             s_px_search[2];
+static std::vector<PexelsItem>  s_px_results[2];
+static int                      s_px_page[2] = {};  // last accumulated page (0 = none)
+static int                      s_px_want[2] = {};  // page of the in-flight request (0 = idle)
+static bool                     s_px_more[2] = {};
+static std::map<long long, PexelsDownload> s_px_dl[2];
+
+// Fire a search for `page` (page 1 replaces accumulated results on completion,
+// page > 1 appends). Cancels any in-flight request first, like the HF panel.
+static void pexels_search_begin(int ki, PexelsKind kind, int page) {
+    pexels_search_cancel(s_px_search[ki]);
+    pexels_search(kind, s_px_query[ki], s_px_filter[ki], page, s_px_search[ki]);
+    s_px_want[ki] = page;
+}
+
+// Fold a completed search into the accumulated grid. Runs every frame; a Done
+// whose page matches the one we asked for is absorbed exactly once.
+static void pexels_search_absorb(int ki) {
+    PexelsSearch& s = s_px_search[ki];
+    if (s.status.load(std::memory_order_acquire) != PexelsSearch::Status::Done) return;
+    if (s_px_want[ki] <= 0 || s.page != s_px_want[ki]) return;
+    if (s.page <= 1) s_px_results[ki] = s.results;
+    else {
+        std::vector<PexelsItem>& acc = s_px_results[ki];
+        acc.insert(acc.end(), s.results.begin(), s.results.end());
+    }
+    s_px_page[ki] = s.page;
+    s_px_more[ki] = s.has_more;
+    s_px_want[ki] = 0;
+}
+
+static void draw_pexels_panel(AppState& state, float w, bool is_video) {
+    const int ki = (int)is_video;
+    const PexelsKind kind = is_video ? PexelsKind::Video : PexelsKind::Photo;
+
+    // No key → just the hint; nothing else in the panel.
+    if (!pexels_key_present()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Add your Pexels API key in File → Settings");
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    // ── Search box — 0.8s debounce + Enter fires now (HF box pattern) ────────
+    ImGui::SetNextItemWidth(w - 8.f);
+    if (ImGui::InputTextWithHint("##pxq", "Search Pexels…", s_px_query[ki],
+                                 sizeof(s_px_query[ki]))) {
+        if (strcmp(s_px_query[ki], s_px_prev[ki]) != 0) {
+            memcpy(s_px_prev[ki], s_px_query[ki], sizeof(s_px_query[ki]));
+            s_px_debounce[ki] = s_px_query[ki][0] ? 0.8f : 0.f;
+            if (!s_px_query[ki][0]) pexels_search_cancel(s_px_search[ki]);
+        }
+    }
+    if (ImGui::IsItemActive() &&
+        (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))) {
+        if (s_px_query[ki][0]) {
+            memcpy(s_px_prev[ki], s_px_query[ki], sizeof(s_px_query[ki]));
+            pexels_search_begin(ki, kind, 1);
+            s_px_debounce[ki] = 0.f;
+        }
+    }
+    if (s_px_debounce[ki] > 0.f) {
+        s_px_debounce[ki] -= ImGui::GetIO().DeltaTime;
+        if (s_px_debounce[ki] <= 0.f) {
+            if (s_px_query[ki][0]) pexels_search_begin(ki, kind, 1);
+            s_px_debounce[ki] = 0.f;
+        }
+    }
+
+    // ── Filters — compact chips, active = filled like the fps segmented
+    // control in the Project tab. Changing one re-runs the (debounced)
+    // search from page 1.
+    ImGui::Dummy({0.f, 8.f});
+    bool filter_changed = false;
+    PexelsFilters& f = s_px_filter[ki];
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextUnformatted("Orientation");
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0.f, 8.f);
+    const char* ori_labels[] = {"Any##pxo0", "Landscape##pxo1", "Portrait##pxo2", "Square##pxo3"};
+    for (int o = 0; o < 4; ++o) {
+        if (o > 0) ImGui::SameLine(0.f, 4.f);
+        if (ui_btn(ori_labels[o], f.orientation == o, true) && f.orientation != o) {
+            f.orientation = o; filter_changed = true;
+        }
+    }
+    ImGui::NewLine();
+    if (filter_changed) {
+        if (s_px_query[ki][0]) s_px_debounce[ki] = 0.8f;
+        else pexels_search_cancel(s_px_search[ki]);
+    }
+
+    // ── Status — poll + absorb completed results, then Running/Error line ────
+    pexels_search_absorb(ki);
+    auto st = s_px_search[ki].status.load(std::memory_order_acquire);
+    ImGui::Dummy({0.f, 8.f});
+    if (st == PexelsSearch::Status::Running) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextUnformatted("Searching…");
+        ImGui::PopStyleColor();
+    } else if (st == PexelsSearch::Status::Error) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(230,90,90,255));
+        ImGui::TextWrapped("%s", s_px_search[ki].error.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    const auto& items = s_px_results[ki];
+    if (items.empty()) {
+        if (st != PexelsSearch::Status::Error) {
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+            ImGui::TextWrapped(s_px_query[ki][0] ? "No matches." : "Search Pexels to find stock media.");
+            ImGui::PopStyleColor();
+        }
+        return;
+    }
+
+    // ── 2-column result grid — same layout language as the recents grid ──────
+    const float GAP     = 6.f;
+    const float COL_W   = floorf((w - GAP * 3.f) * 0.5f);
+    const float THUMB_H = floorf(COL_W * 9.f / 16.f);
+    const float CARD_H  = THUMB_H + 46.f;   // room for a wrapped (up to 2-line) title
+    float base_y = ImGui::GetCursorPosY();
+
+    for (int i = 0; i < (int)items.size(); ++i) {
+        const PexelsItem& item = items[i];
+        int  col = i % 2;
+        int  row = i / 2;
+        float cx_ = GAP + col * (COL_W + GAP);
+        float cy_ = base_y + row * (CARD_H + GAP);
+
+        ImGui::SetCursorPos({cx_, cy_});
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        ImGui::PushID(i);
+        ImGui::SetNextItemAllowOverlap();
+        ImGui::InvisibleButton("##px", {COL_W, CARD_H});
+        bool hov = ImGui::IsItemHovered();
+
+        // Card background
+        ImU32 bg = hov ? IM_COL32(34,34,52,255) : IM_COL32(18,18,28,255);
+        dl->AddRectFilled(cp, {cp.x+COL_W, cp.y+CARD_H}, bg, 6.f);
+
+        // Thumbnail — queued for a background fetch every frame (deduped
+        // server-side); load it once the file lands in the media cache.
+        pexels_thumb_fetch(item.id, item.thumb_url);
+        int tw = 0, th = 0;
+        std::string tp = pexels_thumb_path(item.id);
+        uintptr_t tex = fs::exists(tp) ? video_load_thumb(tp, &tw, &th) : 0;
+        if (tex) {
+            float aspect = (tw > 0 && th > 0) ? (float)tw / (float)th : 16.f/9.f;
+            float disp_w = COL_W, disp_h = COL_W / aspect;
+            if (disp_h > THUMB_H) { disp_h = THUMB_H; disp_w = THUMB_H * aspect; }
+            float ox = (COL_W - disp_w) * 0.5f;
+            float oy = (THUMB_H - disp_h) * 0.5f;
+            ImVec2 img0 = {cp.x + ox, cp.y + oy};
+            ImVec2 img1 = {img0.x + disp_w, img0.y + disp_h};
+            dl->PushClipRect(cp, {cp.x+COL_W, cp.y+THUMB_H}, true);
+            dl->AddImageRounded((ImTextureID)(uintptr_t)tex,
+                                img0, img1,
+                                {0,0},{1,1}, IM_COL32(255,255,255,220), 6.f,
+                                ImDrawFlags_RoundCornersTop);
+            dl->PopClipRect();
+        } else {
+            // Placeholder — gentle gradient while the thumb downloads
+            ImU32 ph0 = is_video ? IM_COL32(35,22,8,255)  : IM_COL32(8,28,28,255);
+            ImU32 ph1 = is_video ? IM_COL32(55,38,16,255) : IM_COL32(14,46,44,255);
+            dl->AddRectFilledMultiColor(cp, {cp.x+COL_W, cp.y+THUMB_H}, ph0, ph0, ph1, ph1);
+            const char* lbl = is_video ? "loading…" : "·";
+            ImVec2 tsz = ImGui::CalcTextSize(lbl);
+            dl->AddText({cp.x+(COL_W-tsz.x)*0.5f, cp.y+(THUMB_H-tsz.y)*0.5f},
+                        IM_COL32(90,80,70,200), lbl);
+        }
+
+        // Badge over the thumb — videos: "12s · 1920x1080", photos: photographer
+        {
+            char b[96];
+            if (is_video)
+                snprintf(b, sizeof(b), "%ds · %dx%d",
+                         item.duration, item.width, item.height);
+            else {
+                std::string ph = item.photographer.empty() ? item.alt : item.photographer;
+                if ((int)ph.size() > 28) ph = ph.substr(0, 25) + "…";
+                snprintf(b, sizeof(b), "%s", ph.c_str());
+            }
+            ImVec2 bsz = ImGui::CalcTextSize(b);
+            float bw_ = bsz.x + 10.f;
+            dl->AddRectFilled({cp.x+6.f, cp.y+THUMB_H-20.f},
+                              {cp.x+6.f+bw_, cp.y+THUMB_H-6.f}, IM_COL32(0,0,0,140), 4.f);
+            dl->AddText({cp.x+11.f, cp.y+THUMB_H-18.f}, IM_COL32(255,255,255,235), b);
+        }
+
+        // Title line — alt text (clamped) or photographer
+        std::string title = !item.alt.empty() ? item.alt : item.photographer;
+        if (title.empty()) title = is_video ? "Pexels video" : "Pexels photo";
+
+        // Download state for this item
+        bool downloaded = pexels_downloaded(item, kind);
+        PexelsDownload& dlp = s_px_dl[ki][item.id];
+        pexels_download_poll(dlp);
+        auto dst = dlp.status.load(std::memory_order_acquire);
+
+        // Download finished → drop it at the playhead exactly like recents "+"
+        if (dst == PexelsDownload::Status::Done) {
+            std::string out = !dlp.out_path.empty() ? dlp.out_path
+                                                    : pexels_download_path(item, kind);
+            insert_media_at_playhead(state, out, is_video, (float)item.duration);
+            history_push(state, (is_video ? "Pexels video: " : "Pexels photo: ") + title);
+            dlp.status.store(PexelsDownload::Status::Idle, std::memory_order_release);
+            downloaded = true;
+        }
+
+        // Right side of the title strip — progress bar (draw_vc_card's bar in
+        // panel_fx.cpp) while running, "Downloaded" label once present.
+        float title_max = COL_W - 10.f;
+        if (downloaded) {
+            dl->AddText({cp.x + COL_W - 88.f, cp.y + THUMB_H + 14.f},
+                        IM_COL32(60,200,140,210), "Downloaded");
+            title_max -= 96.f;
+        } else if (dst == PexelsDownload::Status::Running) {
+            float prog = dlp.progress();
+            float bx0 = cp.x + COL_W - 94.f, bx1 = cp.x + COL_W - 8.f;
+            float by  = cp.y + THUMB_H + 10.f;
+            dl->AddRectFilled({bx0,by},{bx1,by+5.f}, IM_COL32(20,60,45,255), 2.f);
+            dl->AddRectFilled({bx0,by},{bx0+(bx1-bx0)*prog,by+5.f}, IM_COL32(30,200,150,255), 2.f);
+            dl->AddText({bx0, by+8.f}, IM_COL32(80,180,140,180), "Downloading…");
+            title_max -= 96.f;
+        }
+
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), {cp.x+5.f, cp.y+THUMB_H+6.f},
+                    hov ? IM_COL32(255,255,255,230) : IM_COL32(190,190,205,200),
+                    title.c_str(), nullptr, title_max);
+
+        // Border
+        dl->AddRect(cp, {cp.x+COL_W, cp.y+CARD_H},
+                    hov ? IM_COL32(255,255,255,160) : IM_COL32(48,48,68,180),
+                    6.f, 0, hov ? 1.5f : 1.f);
+
+        // "+" → add at playhead when downloaded, otherwise start a background
+        // download (or show the progress bar while one is running).
+        if (ui_card_add_btn(cp, COL_W, i)) {
+            if (downloaded) {
+                insert_media_at_playhead(state, pexels_download_path(item, kind),
+                                         is_video, (float)item.duration);
+                history_push(state, (is_video ? "Pexels video: " : "Pexels photo: ") + title);
+            } else if (dst != PexelsDownload::Status::Running) {
+                pexels_download(item, kind, dlp);
+            }
+        }
+
+        ImGui::PopID();
+    }
+
+    // Advance cursor past all cards — Dummy() required so ImGui registers the height extension
+    int rows = ((int)items.size() + 1) / 2;
+    ImGui::SetCursorPosY(base_y + rows * (CARD_H + GAP) + 4.f);
+    ImGui::Dummy({0.f, 0.f});
+
+    // Pagination — next page keeps query + filters
+    if (s_px_more[ki] && st != PexelsSearch::Status::Running) {
+        ImGui::Dummy({0.f, 4.f});
+        float bw = ImGui::CalcTextSize("More…").x + 24.f;
+        ImGui::SetCursorPosX(fmaxf(4.f, (w - bw) * 0.5f));
+        if (ui_btn("More…##pxmore", false, true))
+            pexels_search_begin(ki, kind, s_px_page[ki] + 1);
+        ImGui::Dummy({0.f, 4.f});
+    }
+
+    // API guidelines ask for a visible credit line.
+    ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+    ImGui::TextWrapped("Photos provided by Pexels");
+    ImGui::PopStyleColor();
+}
+
+// ── Timeline ──────────────────────────────────────────────────────────────────
+void panel_media_browser(AppState& state, float w, bool is_video) {
+    ImGui::Dummy({0.f, 8.f});
+
+    // Header
+    ImGui::PushStyleColor(ImGuiCol_Text, is_video ? IM_COL32(255,180,60,255)
+                                                   : IM_COL32(60,220,190,255));
+    ImGui::TextUnformatted(is_video ? "Videos" : "Images");
+    ImGui::PopStyleColor();
+
+    // Browse button right-aligned
+    {
+        float bw = ImGui::CalcTextSize("Browse…").x + 20.f;
+        ImGui::SameLine(w - bw - 4.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {8.f, 3.f});
+        ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(30,30,46,255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(50,50,72,255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(60,60,90,255));
+        if (ImGui::SmallButton("Browse…")) {
+            std::string picked = is_video
+                ? filepicker_open("Open video", "Video", "*.mp4 *.mov *.mkv *.avi *.webm *.gif")
+                : filepicker_open("Open image", "Image", "*.jpg *.jpeg *.png *.bmp *.webp *.heic *.heif *.gif *.svg");
+            if (!picked.empty()) {
+                insert_media_at_playhead(state, picked, is_video, 0.f);
+                history_push(state, (is_video ? "Import video: " : "Import image: ") +
+                             fs::path(picked).filename().string());
+            }
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
+    }
+
+    ImGui::Dummy({0.f, 6.f});
+
+    // Sub-mode toggle: My Media / Pexels — remembers per kind (Videos vs
+    // Images) via s_px_mode. Same small segmented control as the fps buttons
+    // in the Project tab; Browse… above works in both modes.
+    static bool s_px_mode[2] = {};
+    int ki = (int)is_video;
+    if (ui_btn("My Media##pxm0", !s_px_mode[ki], true)) s_px_mode[ki] = false;
+    ImGui::SameLine(0.f, 4.f);
+    if (ui_btn("Pexels##pxm1", s_px_mode[ki], true)) s_px_mode[ki] = true;
+    ImGui::Dummy({0.f, 8.f});
+
+    if (!s_px_mode[ki]) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Drag onto a track, or tap + to add at the playhead.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 8.f});
+        draw_recents_grid(state, w, is_video);
+    } else {
+        draw_pexels_panel(state, w, is_video);
+    }
 }
 
 // ── Right panel: Bin tab ──────────────────────────────────────────────────────

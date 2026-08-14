@@ -28,8 +28,8 @@ std::string bg_remove_proxy_dir(const std::string& video_path);
 // Read fps.txt written by the script; returns 30.0 on failure.
 float bg_remove_read_fps(const std::string& mask_dir);
 
-// Read start_frame.txt; returns 0 on failure.
-int bg_remove_read_start_frame(const std::string& mask_dir);
+// Read start_time.txt (float seconds = clip in_point); returns 0.0 on failure.
+float bg_remove_read_start_time(const std::string& mask_dir);
 
 // Return number of mask frames stored in bg_masks.idx (builds .idx if missing).
 // Returns 0 if no masks exist.

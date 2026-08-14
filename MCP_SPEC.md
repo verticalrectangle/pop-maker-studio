@@ -161,6 +161,7 @@ The server registers ~70 tools spanning the full editing surface. **The canonica
 | **Markers** | `add_chapter_marker`, `remove_chapter_marker`, `generate_chapters` |
 | **ML pipeline** | `trigger_pipeline`, `get_pipeline_status`, `get_transcript`, `read_transcript_context`, `search_transcript`, `analyze_audio`, `get_audio_analysis`, `find_audio_cue` |
 | **Search / discovery** | `find_and_add_clip`, `find_video_moment`, `cut_at_phrase`, `cut_filler_words`, `remove_silence` |
+| **Stock media** | `pexels_search`, `pexels_add_clip` |
 | **Background removal** | `remove_background`, `process_body_fx_masks`, `get_bg_remove_status` |
 | **Media probing** | `get_media_info`, `get_stills`, `describe_video`, `get_video_description` |
 | **Multicam** | `apply_multicam_cuts` |
@@ -178,6 +179,8 @@ The server registers ~70 tools spanning the full editing surface. **The canonica
 **Async-first.** Long-running mutations return immediately with a stage hint. `trigger_pipeline`, `analyze_audio`, `remove_background`, `find_and_add_clip`, `process_body_fx_masks` all return `{stage: "running"}` (or equivalent) and the caller polls a status endpoint (`get_pipeline_status`, `get_audio_analysis`, `get_bg_remove_status`, etc.) until `stage` is `done` or `error`. This keeps the MCP socket free during ML work.
 
 **Auto-batching.** See Section 2 — single mutations are wrapped in an implicit batch labelled with the method name. `begin_batch`/`end_batch` is only needed when coalescing a sequence as one undo step.
+
+**Stock media (Pexels).** `pexels_search` is read-only — no batch needed. It queries photos (`/v1/search`) or videos (`/v1/videos/search`), 15 per page, returning `{results: [{id, photographer, alt, duration, width, height}], page, has_more}`; the API key comes from `PEXELS_API_KEY` or the keyring (`secret-tool lookup service pexels key api`). `pexels_add_clip` resolves an id from the most recent search (search first!), downloads it to `~/.local/share/pop-maker-studio/pexels/{videos,photos}/pexels-<id>-<slug>.<ext>` — the same path the app's C++ Pexels browser uses, so files dedupe — then places the clip at the playhead on an empty/new track in one undo step.
 
 **Bin vs timeline.** `add_to_bin` makes a media file available to the project without placing it. `add_clip` actually places. `add_clip` on a video/audio path automatically mirrors the file into the bin, so for direct placements just call `add_clip` and skip the bin step.
 

@@ -652,6 +652,11 @@ static json clip_to_json_slim(int idx, const Clip& c) {
     j["in_point"] = c.in_point;
     if (!c.source_id.empty()) j["source"] = c.source_id;
     if (!c.text.empty())      j["text"]   = c.text;
+    if ((c.clip_type == ClipType::Video || c.clip_type == ClipType::Record ||
+         c.clip_type == ClipType::VideoRecord) && !c.text.empty()) {
+        std::string perr = proxy_failure(c.text);
+        if (!perr.empty()) j["proxy_error"] = perr;
+    }
     if (c.clip_type == ClipType::Record ||
         c.clip_type == ClipType::VideoRecord) {
         j["takes"]         = c.rec_takes;
@@ -699,6 +704,14 @@ static json clip_to_json(int idx, const Clip& c) {
     j["crop_b"]      = c.crop_b;
     j["flip_h"]      = c.flip_h;
     j["flip_v"]      = c.flip_v;
+    // Preview proxy state for video sources: "proxy_error" is non-empty when
+    // the preview could not be built (corrupt/unreadable source) and stays so
+    // until the source file is replaced.
+    if ((c.clip_type == ClipType::Video || c.clip_type == ClipType::Record ||
+         c.clip_type == ClipType::VideoRecord) && !c.text.empty()) {
+        std::string perr = proxy_failure(c.text);
+        if (!perr.empty()) j["proxy_error"] = perr;
+    }
     j["clip_style"]  = anim_style_str(c.clip_style);
     j["font_size"]   = c.font_size;
     j["karaoke"]     = c.karaoke;
@@ -1190,7 +1203,7 @@ static int ipc_autocouple_fx(AppState& state, int ti, int ci) {
 // mouse steps; the main loop feeds exactly one per frame into ImGui (after
 // the GLFW backend's events, so an injected position wins the frame). Used
 // for agent-driven UI testing; everything runs on the main thread.
-struct InputStep { float x = 0, y = 0; bool has_pos = false; int btn = -1; float wheel = 0; };  // btn: 0 down, 1 up
+struct InputStep { float x = 0, y = 0; bool has_pos = false; int btn = -1; float wheel = 0; int mouse = 0; };  // btn: 0 down, 1 up; mouse: 0 left, 1 right
 static std::deque<InputStep> g_input_steps;
 
 void ipc_debug_input_tick() {
@@ -1199,8 +1212,8 @@ void ipc_debug_input_tick() {
     g_input_steps.pop_front();
     ImGuiIO& io = ImGui::GetIO();
     if (s.has_pos)     io.AddMousePosEvent(s.x, s.y);
-    if (s.btn == 0)    io.AddMouseButtonEvent(0, true);
-    else if (s.btn == 1) io.AddMouseButtonEvent(0, false);
+    if (s.btn == 0)    io.AddMouseButtonEvent(s.mouse, true);
+    else if (s.btn == 1) io.AddMouseButtonEvent(s.mouse, false);
     if (s.wheel != 0.f)  io.AddMouseWheelEvent(0.f, s.wheel);
 }
 
@@ -2044,6 +2057,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
             if (st.value("down", false))     s.btn = 0;
             else if (st.value("up", false))  s.btn = 1;
+            s.mouse  = st.value("right", false) ? 1 : 0;
             s.wheel = st.value("wheel", 0.f);
             g_input_steps.push_back(s);
         }

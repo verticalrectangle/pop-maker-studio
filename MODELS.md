@@ -1,6 +1,6 @@
 # Models
 
-All ML models run locally. None are bundled with the binary — they are downloaded on first use (or on the Setup screen) and stored in `~/.cache/pop-maker-studio/`. No model data is uploaded or transmitted anywhere.
+All ML models run locally. Most sit in `models/` next to the binary (see `app_models_dir()` in `src/paths.cpp`); voice models downloaded via the HuggingFace browser go to `~/.cache/pop-maker-studio/rvc/`. No model data is uploaded or transmitted anywhere.
 
 ---
 
@@ -10,7 +10,7 @@ All ML models run locally. None are bundled with the binary — they are downloa
 |---|---|
 | **File** | `ggml-large-v3-turbo-q5_0.bin` |
 | **Size** | ~584 MB |
-| **Cache path** | `~/.cache/pop-maker-studio/whisper/` |
+| **Path** | `models/` next to the binary |
 | **Source** | [huggingface.co/ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | **Original model** | OpenAI Whisper large-v3-turbo (quantised to Q5_0 by ggerganov) |
 | **License** | [MIT](https://github.com/openai/whisper/blob/main/LICENSE) |
@@ -26,7 +26,7 @@ Used for word-level transcription with DTW token timestamps via whisper.cpp. No 
 |---|---|
 | **File** | `Kim_Vocal_2.onnx` |
 | **Size** | ~64 MB |
-| **Cache path** | `~/.cache/pop-maker-studio/mdx/` |
+| **Path** | `models/` next to the binary |
 | **Source** | [huggingface.co/Politrees/UVR_resources](https://huggingface.co/Politrees/UVR_resources/resolve/main/models/MDXNet/Kim_Vocal_2.onnx) |
 | **Original model** | MDX-Net architecture, trained by KimberleyJensen — widely used UVR5 community model |
 | **License** | Community model; see source repository |
@@ -42,7 +42,7 @@ Used to separate vocals from instrumental. Instrumental is derived as `original 
 |---|---|
 | **File** | `u2net_human_seg.onnx` |
 | **Size** | ~176 MB |
-| **Cache path** | `~/.u2net/` (rembg convention) |
+| **Path** | `models/` next to the binary (rembg's `~/.u2net/` copy can be hardlinked in) |
 | **Source** | [github.com/danielgatis/rembg](https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx) |
 | **Original model** | U²-Net (Qin et al., 2020), fine-tuned for human segmentation |
 | **License** | [Apache 2.0](https://github.com/danielgatis/rembg/blob/main/LICENSE) |
@@ -58,7 +58,7 @@ Used for per-frame alpha mask generation. Output is streamed as grayscale MJPEG 
 |---|---|
 | **File** | `hubert.onnx` |
 | **Size** | ~190 MB |
-| **Cache path** | `~/.cache/pop-maker-studio/hubert/` |
+| **Path** | `models/` next to the binary |
 | **Source** | Must be placed manually — not auto-downloaded |
 | **Original model** | Soft-VC HuBERT content encoder, as used by RVC |
 | **License** | [MIT](https://github.com/bshall/soft-vc) |
@@ -66,7 +66,7 @@ Used for per-frame alpha mask generation. Output is streamed as grayscale MJPEG 
 
 HuBERT extracts phonetic content embeddings from the source audio. The voice model (`.pth`) is loaded and exported to ONNX entirely in C++ — no Python, no libtorch. HuBERT itself must be provided as a pre-exported ONNX file.
 
-**To enable voice conversion:** download `hubert.onnx` from [github.com/bshall/soft-vc](https://github.com/bshall/soft-vc) or an RVC distribution and place it at `~/.cache/pop-maker-studio/hubert/hubert.onnx`.
+**To enable voice conversion:** download `hubert_base.pt` from an RVC distribution (e.g. [huggingface.co/lj1995/VoiceConversionWebUI](https://huggingface.co/lj1995/VoiceConversionWebUI)) and export it with the bundled tool: `./build/export-hubert hubert_base.pt models/hubert.onnx`.
 
 ---
 
@@ -75,7 +75,7 @@ HuBERT extracts phonetic content embeddings from the source audio. The voice mod
 | | |
 |---|---|
 | **Files** | `{voice_id}.onnx` + `{voice_id}.onnx.json` |
-| **Cache path** | `~/.cache/pop-maker-studio/piper/` |
+| **Cache path** | `models/piper/` next to the binary |
 | **Source** | [huggingface.co/rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) |
 | **License** | [MIT](https://github.com/rhasspy/piper/blob/master/LICENSE.md) (Piper); individual voice licenses vary — see source repository |
 | **When downloaded** | Automatically on first TTS use for a given voice |

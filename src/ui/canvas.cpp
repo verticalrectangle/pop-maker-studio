@@ -42,6 +42,51 @@ extern ImFont* g_font_black;
 // s_scrub_until is declared extern in canvas.h, defined here
 double s_scrub_until = 0.0;
 
+// ── bg_remove mask time→frame mapping (cached) ───────────────────────────────
+// Masks are keyed by TIME: mask_dir/start_time.txt (float seconds = clip in_point)
+// + mask_dir/fps.txt. The mask frame for source time t is round((t - start_time)*fps).
+// Cache per mask_dir, re-reading when either file changes (a mask rebuild rewrites
+// them). Pure file I/O — NO ffprobe fork — so it is safe in the render path
+// (proxy_load() here used to fork and deadlock Mesa, freezing the app).
+// Returns -1 when the mapping is unavailable.
+struct MaskTimeInfo {
+    float start_time = 0.f;
+    float fps        = 30.f;
+    bool  valid      = false;
+    fs::file_time_type start_mtime{};
+    fs::file_time_type fps_mtime{};
+};
+static std::unordered_map<std::string, MaskTimeInfo> g_mask_time;
+static int bg_mask_frame_for_time(const std::string& mask_dir, double t) {
+    auto it = g_mask_time.find(mask_dir);
+    fs::path sp = fs::path(mask_dir) / "start_time.txt";
+    fs::path fp = fs::path(mask_dir) / "fps.txt";
+    std::error_code ec;
+    auto sm = fs::last_write_time(sp, ec);
+    bool s_ok = !ec;
+    ec.clear();
+    auto fm = fs::last_write_time(fp, ec);
+    bool f_ok = !ec;
+    if (it != g_mask_time.end() && it->second.valid &&
+        it->second.start_mtime == sm && it->second.fps_mtime == fm)
+        return (int)std::lround((t - it->second.start_time) * it->second.fps);
+
+    MaskTimeInfo mi;
+    mi.start_mtime = sm;
+    mi.fps_mtime   = fm;
+    if (s_ok && f_ok) {
+        FILE* f = fopen(sp.c_str(), "r");
+        if (f) { fscanf(f, "%f", &mi.start_time); fclose(f); }
+        f = fopen(fp.c_str(), "r");
+        if (f) { fscanf(f, "%f", &mi.fps); fclose(f); }
+        mi.valid = (mi.start_time >= 0.f && mi.fps > 0.f && mi.fps < 1000.f);
+    }
+    auto& e = g_mask_time[mask_dir];
+    e = mi;
+    if (!mi.valid) return -1;
+    return (int)std::lround((t - mi.start_time) * mi.fps);
+}
+
 // ── Social (TikTok/Reels/Shorts) safe-zone model ──────────────────────────────
 // One conservative envelope covering all three vertical feeds — their exact UI
 // pixels drift per release, so we approximate the chrome rather than chase one
@@ -1967,12 +2012,12 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     cl_ptr->bg_remove_status == BgRemoveStatus::Ready &&
                     !cl_ptr->bg_remove_mask_dir.empty()) {
                     std::string mask_dir = cl_ptr->bg_remove_mask_dir;
-                    // Index the masks by the SAME proxy frame the displayed texture
-                    // decoded — video_proxy_frame_idx reads the cached proxy rate with
-                    // NO ffprobe fork. (proxy_load() here used to fork inside the render
-                    // and deadlock Mesa, freezing the app. The masks are 1:1 with the
-                    // proxy, so this index is exact.)
-                    int frame_i = video_proxy_frame_idx(slot, (double)(src_t + lookahead));
+                    // Masks are keyed by TIME now: index by the mask frame for the
+                    // SAME source time the displayed texture decoded (src_t + lookahead),
+                    // round((t - start_time)*fps) with start_time/fps from the mask dir —
+                    // cached, NO ffprobe fork. (proxy_load() here used to fork inside
+                    // the render and deadlock Mesa, freezing the app.)
+                    int frame_i = bg_mask_frame_for_time(mask_dir, (double)(src_t + lookahead));
                     if (frame_i < 0)
                         frame_i = (int)(src_t * bg_remove_read_fps(mask_dir));
                     // Box (keep-region in v_uv; y bottom-up → flip t/b) + softness → brick.
@@ -2025,6 +2070,16 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                                                 bg_box, bg_soft);
                             if (is_rmbg) bg_removed = true;
                         }
+                    }
+                    // bg_remove_on means "cut this clip" even without a
+                    // RemoveBackground brick (mirrors the export/filter paths).
+                    if (!bg_removed) {
+                        unsigned mask_tex = body_fx_mask_texture(mask_dir, frame_i);
+                        if (mask_tex)
+                            tex = body_fx_apply(BodyFXType::RemoveBackground, tex,
+                                                mask_tex, bw, bh,
+                                                /*params=*/nullptr, 1.f, t_anim,
+                                                bg_box, bg_soft);
                     }
                 }
 

@@ -38,7 +38,6 @@ MediaKind kind_for_path(const std::string& path);
 bool bin_contains(const AppState& state, const std::string& path);
 float tl_fps(const AppState& state);
 float last_playable_time(const AppState& state);
-bool clip_needs_conform(const Clip& cl, int project_fps);
 bool is_animated_image(const std::string& p);
 
 // ── Frame-grid snapping (pure engine logic, MOVED here from ui) ──────────────
@@ -86,7 +85,7 @@ void mark_project_clean(AppState& state);
 void queue_video_slot_opens(AppState& state);
 void tick_video_slot_opens(AppState& state, double budget_ms = 20.0);
 void reopen_video_slots(AppState& state);
-void conform_tick(AppState& state);
+void clip_probe_tick(AppState& state);
 void gc_video_slots(AppState& state);
 
 // ── Overlap resolution shared by UI drops and IPC adds (ui/studio_shared.cpp)

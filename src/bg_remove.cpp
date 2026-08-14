@@ -92,14 +92,14 @@ float bg_remove_read_fps(const std::string& mask_dir) {
     return (fps > 0.f && fps < 1000.f) ? fps : 30.f;
 }
 
-int bg_remove_read_start_frame(const std::string& mask_dir) {
-    std::string fp = mask_dir + "/start_frame.txt";
+float bg_remove_read_start_time(const std::string& mask_dir) {
+    std::string fp = mask_dir + "/start_time.txt";
     FILE* f = fopen(fp.c_str(), "r");
-    if (!f) return 0;
-    int sf = 0;
-    fscanf(f, "%d", &sf);
+    if (!f) return 0.f;
+    float st = 0.f;
+    fscanf(f, "%f", &st);
     fclose(f);
-    return sf;
+    return st;
 }
 
 int bg_remove_read_frame_count(const std::string& mask_dir) {
@@ -282,9 +282,11 @@ static void run_job(std::shared_ptr<JobData> data,
             if (f) { fprintf(f, "%.6f\n", fps); fclose(f); }
         }
         {
-            int sf = (start_frame >= 0) ? start_frame : (int)(start_time * fps);
-            FILE* f = fopen((output_dir + "/start_frame.txt").c_str(), "w");
-            if (f) { fprintf(f, "%d\n", sf); fclose(f); }
+            // start_time.txt = clip in_point (float seconds). The mask stream's
+            // first frame is the source frame at start_time; callers map source
+            // time t -> mask frame via round((t - start_time)*fps) (fps.txt).
+            FILE* f = fopen((output_dir + "/start_time.txt").c_str(), "w");
+            if (f) { fprintf(f, "%.6f\n", start_time); fclose(f); }
         }
     }
 
@@ -347,7 +349,7 @@ static void run_job(std::shared_ptr<JobData> data,
             int ef = start_frame + num_frames - 1;
             select_filter = "select='between(n," + std::to_string(start_frame)
                             + "," + std::to_string(ef) + ")'";
-            fargv.insert(fargv.end(), {"-vf", select_filter.c_str(), "-vsync", "vfr"});
+            fargv.insert(fargv.end(), {"-vf", select_filter.c_str(), "-fps_mode", "vfr"});
         } else if (start_time > 0.001f) {
             char ss[32]; snprintf(ss, sizeof(ss), "%.6f", start_time);
             ss_val = ss;
@@ -531,7 +533,7 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
     if (clip.bg_remove_status == BgRemoveStatus::Processing)
         return;
 
-    std::string mjpeg = proxy_mjpeg_path(clip.text);
+    std::string mjpeg = proxy_interm_path(clip.text);
     if (!fs::exists(mjpeg)) {
         clip.bg_remove_status = BgRemoveStatus::WaitingForProxy;
         ensure_remove_bg_brick(state, track_idx, clip_idx);  // brick rides it even pre-proxy
@@ -547,7 +549,12 @@ void bg_remove_start(AppState& state, int track_idx, int clip_idx) {
 
     if (fs::exists(mdir)) {
         fs::remove(mdir + "/bg_masks.mjpeg");
-        fs::remove(mdir + "/start_frame.txt");
+        fs::remove(mdir + "/start_time.txt");
+        fs::remove(mdir + "/start_frame.txt");   // pre-time-keying leftovers
+        // Drop the seek table too: it indexes the OLD mjpeg's byte offsets, so
+        // keeping it during a rebuild reads garbage (or throws on a bogus frame
+        // size) until get_mask_index notices the new mjpeg. Remove it up front.
+        fs::remove(mdir + "/bg_masks.idx");
     }
     // The cached seek table indexes the OLD mjpeg's byte offsets; drop it now so the
     // render rebuilds from the regenerated file (stale offsets read garbage = smudge).

@@ -6,7 +6,6 @@
 #include "face_track.h"
 #include "recorder.h"
 #include "video_recorder.h"
-#include "conform.h"
 #include "runtime_fx.h"
 #include "render.h"
 #include "pipeline_core.h"
@@ -106,9 +105,9 @@ void engine_tick(AppState& state, double dt, bool gl_ready) {
     // and deletions all resolve here instead of in each edit path.
     fx_coupling_tick(state);
 
-    // Frame-rate conform: probe native fps, transcode mismatched clips in the
-    // background, swap preview/export to the conformed copy when it lands.
-    conform_tick(state);
+    // Lazy per-clip source probe (src_fps / src_duration). The proxy pipeline
+    // generates intermediates; clip_video_src() picks them up when ready.
+    clip_probe_tick(state);
 
     // Hot-reload custom effects.
     runtime_fx_poll(g_managed_dir + "/effects");

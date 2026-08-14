@@ -31,6 +31,9 @@ import sys
 import threading
 import time
 import uuid
+import urllib.error
+import urllib.parse
+import urllib.request
 
 # call_tool assigns a local named `time` (take_snapshot's argument), which
 # shadows the module inside that whole function — handlers there must use
@@ -87,7 +90,7 @@ _CATEGORIES: dict[str, list[str]] = {
     "read": [
         "get_project", "get_clips", "get_all_clips", "get_media_info", "list_dir", "get_stills",
         "get_video_description", "describe_video", "get_canvas_geometry",
-        "get_face_track", "verify_clips", "make_contact_sheet",
+        "get_face_track", "verify_clips", "make_contact_sheet", "pexels_search",
     ],
     "timeline": [
         "add_clip", "add_clip_sequence", "add_track", "delete_clip", "delete_clips_after",
@@ -95,7 +98,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "set_clip_prop", "set_clip_props", "set_clip_keyframes", "rename_track", "add_to_bin",
         "remove_from_bin", "set_format", "set_loop_region", "add_callout", "add_chapter_marker",
         "remove_chapter_marker", "get_chapter_markers", "generate_chapters", "crop_media",
-        "find_and_add_clip", "find_video_moment", "apply_multicam_cuts",
+        "find_and_add_clip", "find_video_moment", "apply_multicam_cuts", "pexels_add_clip",
     ],
     "text": ["set_typography_preset", "set_text_style", "set_transcript"],
     "shape": ["add_shape", "set_shape_path", "set_shape_style", "set_shape_keyframes", "get_shape_path",
@@ -1703,6 +1706,57 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="pexels_search",
+            description=(
+                "Search Pexels stock media (photos or videos) by keyword. "
+                "Read-only — no batch needed.\n\n"
+                "kind: 'photo' or 'video'. Returns {results: [{id, photographer, alt, "
+                "duration, width, height}], page, has_more} — 15 results per page; pass "
+                "page+1 while has_more to keep paging. duration is the video length in "
+                "seconds (0 for photos).\n\n"
+                "API key: PEXELS_API_KEY env var, else the keyring (secret-tool, "
+                "service=pexels key=api). Search rate limit is 200 requests/hour.\n\n"
+                "To add a result to the timeline, call pexels_add_clip(kind, id)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "kind":        {"type": "string", "enum": ["photo", "video"], "description": "Search photos or videos"},
+                    "query":       {"type": "string", "description": "Search term (e.g. 'ocean waves', 'city night')"},
+                    "orientation": {"type": "string", "enum": ["any", "landscape", "portrait", "square"], "default": "any"},
+                    "page":        {"type": "integer", "default": 1, "description": "Page number (>= 1)"},
+                },
+                "required": ["kind", "query"],
+            },
+        ),
+        Tool(
+            name="pexels_add_clip",
+            description=(
+                "Download a Pexels item found by pexels_search and place it on the "
+                "timeline at the playhead on an empty track (or a new one).\n\n"
+                "kind/id must come from a recent pexels_search call — the server resolves "
+                "ids against its per-kind search cache (last ~200 results); unknown ids "
+                "error with 'Search first with pexels_search'.\n\n"
+                "Downloads to ~/.local/share/pop-maker-studio/pexels/{videos,photos}/"
+                "pexels-<id>-<slug>.<ext> — the SAME path the app's own Pexels browser "
+                "uses, so already-downloaded files are reused instead of re-fetched. "
+                "Videos pick the best mp4 variant (largest width <= 1920); photos use "
+                "src.large2x.\n\n"
+                "Clip placement: videos use the Pexels duration; photos default to 5s. "
+                "Track selection + clip placement land in ONE undo step.\n\n"
+                "Returns the clip's track/index, the local file path, and a summary "
+                "including the photographer attribution."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["photo", "video"], "description": "Match the kind used in pexels_search"},
+                    "id":   {"type": "integer", "description": "Pexels media id from a pexels_search result"},
+                },
+                "required": ["kind", "id"],
+            },
+        ),
+        Tool(
             name="get_transcript",
             description=(
                 "Return the word-level transcript produced by the transcription pipeline. "
@@ -2579,9 +2633,10 @@ async def list_tools() -> list[Tool]:
             name="ui_input",
             description=(
                 "Inject scripted mouse steps into the real UI input stream (one step per UI "
-                "frame): {x, y} moves the cursor, down/up press/release the left button, wheel "
-                "scrolls. A drag = move, down, N moves, up. Hold a position by repeating the "
-                "same x/y. Use take_snapshot source=ui + get_canvas_geometry to find targets. "
+                "frame): {x, y} moves the cursor, down/up press/release the left button "
+                "(right: true for the right button, e.g. context menus), wheel scrolls. A "
+                "drag = move, down, N moves, up. Hold a position by repeating the same x/y. "
+                "Use take_snapshot source=ui + get_canvas_geometry to find targets. "
                 "This drives the actual ImGui input path — what you see is what a user gets."
             ),
             inputSchema={
@@ -2596,6 +2651,7 @@ async def list_tools() -> list[Tool]:
                                 "y":     {"type": "number"},
                                 "down":  {"type": "boolean"},
                                 "up":    {"type": "boolean"},
+                                "right": {"type": "boolean"},
                                 "wheel": {"type": "number"},
                             },
                         },
@@ -3488,6 +3544,304 @@ async def _add_clip(arguments: dict) -> dict:
             arguments = {**arguments, "text": dst, "in_point": 0.0}
 
     return _call("add_clip", arguments)
+
+
+# ── Pexels stock media (pexels_search / pexels_add_clip) ──────────────────────
+# Search results are cached per kind so pexels_add_clip can resolve an id without
+# re-searching. Each cached item mirrors PexelsItem in src/pexels_api.h:
+# {id, photographer, alt, duration, width, height, thumb_url, download_url}.
+# Download paths must byte-match pexels_download_path() in src/pexels_api.cpp so
+# the MCP server and the app's Pexels browser share files (no duplicate downloads).
+
+_PEXELS_SEARCH_CACHE: dict[str, dict[int, dict]] = {"video": {}, "photo": {}}
+_PEXELS_CACHE_CAP = 200
+
+
+def _pexels_api_key() -> str:
+    """PEXELS_API_KEY env wins; else keyring lookup (secret-tool service=pexels key=api).
+
+    Mirrors key_lookup() in src/pexels_api.cpp. Returns "" when no key exists.
+    """
+    env = os.environ.get("PEXELS_API_KEY", "").strip()
+    if env:
+        return env
+    try:
+        out = subprocess.run(
+            ["secret-tool", "lookup", "service", "pexels", "key", "api"],
+            capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        out = None
+    if out is None or out.returncode != 0:
+        return ""
+    return out.stdout.strip()
+
+
+def _pexels_get(url: str, key: str) -> dict:
+    """Authenticated GET; mirrors pexels_api_get() error semantics in pexels_api.cpp."""
+    req = urllib.request.Request(
+        url, headers={"Authorization": key, "User-Agent": "PopMakerStudio/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise ValueError("Invalid Pexels API key")
+        raise ValueError(f"Unexpected response: HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        raise ValueError(f"Pexels request failed: {getattr(e, 'reason', e)}") from e
+    try:
+        data = json.loads(body)
+    except ValueError:
+        snippet = body.strip()[:120]
+        raise ValueError(f"Unexpected response: {snippet or 'empty body'}") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected response: {body.strip()[:120]}")
+    return data
+
+
+def _pexels_cache_trim(cache: dict) -> None:
+    """Keep only the most recent _PEXELS_CACHE_CAP entries (dict = insertion order)."""
+    while len(cache) > _PEXELS_CACHE_CAP:
+        cache.pop(next(iter(cache)))
+
+
+def _pexels_slug(photographer: str) -> str:
+    """Byte-identical to make_slug() in src/pexels_api.cpp: lowercased photographer,
+    non-alphanumeric runs collapsed to '-', trimmed, empty ⇒ 'pexels'."""
+    slug = ""
+    prev_dash = False
+    for ch in photographer or "":
+        c = ch.lower()
+        if ("a" <= c <= "z") or ("0" <= c <= "9"):
+            slug += c
+            prev_dash = False
+        elif slug and not prev_dash:
+            slug += "-"
+            prev_dash = True
+    while slug.endswith("-"):
+        slug = slug[:-1]
+    return slug or "pexels"
+
+
+def _pexels_download_path(kind: str, item: dict) -> Path:
+    """~/.local/share/pop-maker-studio/pexels/{videos,photos}/pexels-<id>-<slug>.<ext>
+    — byte-identical to pexels_download_path() in src/pexels_api.cpp."""
+    home = os.environ.get("HOME") or "/tmp"
+    sub = "videos" if kind == "video" else "photos"
+    ext = ".mp4" if kind == "video" else ".jpg"
+    return (Path(home) / ".local" / "share" / "pop-maker-studio" / "pexels" / sub
+            / f"pexels-{int(item['id'])}-{_pexels_slug(item.get('photographer', ''))}{ext}")
+
+
+def _pexels_parse_items(kind: str, data: dict) -> tuple[list[dict], bool]:
+    """Parse a search response into normalized PexelsItem dicts (mirrors
+    parse_search_body() in src/pexels_api.cpp) and cache them by id.
+
+    Returns (items, has_more); has_more = next_page non-empty.
+    """
+    cache = _PEXELS_SEARCH_CACHE[kind]
+    items = []
+    if kind == "photo":
+        for ph in data.get("photos") or []:
+            if not isinstance(ph, dict):
+                continue
+            src = ph.get("src") or {}
+            item = {
+                "id":           int(ph.get("id") or 0),
+                "photographer": str(ph.get("photographer") or ""),
+                "alt":          str(ph.get("alt") or ""),
+                "duration":     0,
+                "width":        int(ph.get("width") or 0),
+                "height":       int(ph.get("height") or 0),
+                "thumb_url":    str(src.get("small") or ""),
+                "download_url": str(src.get("large2x") or ""),
+            }
+            if item["id"]:
+                cache[item["id"]] = item
+                _pexels_cache_trim(cache)
+            items.append(item)
+    else:
+        for v in data.get("videos") or []:
+            if not isinstance(v, dict):
+                continue
+            user = v.get("user") or {}
+            # Best mp4 variant: largest width <= 1920, tie-break fps.
+            best_w, best_fps = -1, -1.0
+            width, height, download_url = 0, 0, ""
+            for vf in v.get("video_files") or []:
+                if not isinstance(vf, dict):
+                    continue
+                if vf.get("file_type") != "video/mp4":
+                    continue
+                w = int(vf.get("width") or 0)   # null (hls) → 0, skipped
+                if w <= 0 or w > 1920:
+                    continue
+                fps = float(vf.get("fps") or 0.0)
+                if w > best_w or (w == best_w and fps > best_fps):
+                    best_w, best_fps = w, fps
+                    download_url = str(vf.get("link") or "")
+                    width, height = w, int(vf.get("height") or 0)
+            item = {
+                "id":           int(v.get("id") or 0),
+                "photographer": str(user.get("name") or ""),
+                "alt":          "",
+                "duration":     int(v.get("duration") or 0),
+                "width":        width,
+                "height":       height,
+                "thumb_url":    str(v.get("image") or ""),
+                "download_url": download_url,
+            }
+            if item["id"]:
+                cache[item["id"]] = item
+                _pexels_cache_trim(cache)
+            items.append(item)
+    return items, bool(data.get("next_page"))
+
+
+def _pexels_result_row(item: dict) -> dict:
+    """The search-result view of a cached item (the MCP result contract)."""
+    return {
+        "id":           item["id"],
+        "photographer": item["photographer"],
+        "alt":          item["alt"],
+        "duration":     item["duration"],
+        "width":        item["width"],
+        "height":       item["height"],
+    }
+
+
+def _pexels_search(arguments: dict) -> dict:
+    """Search Pexels (photos: /v1/search, videos: /v1/videos/search). Read-only — no batch."""
+    kind = str(arguments.get("kind", "")).lower()
+    if kind not in ("video", "photo"):
+        raise ValueError("kind must be 'video' or 'photo'")
+    query = str(arguments.get("query", "")).strip()
+    if not query:
+        raise ValueError("query is required")
+    orientation = str(arguments.get("orientation", "any")).lower()
+    if orientation not in ("any", "landscape", "portrait", "square"):
+        raise ValueError("orientation must be one of: any, landscape, portrait, square")
+    try:
+        page = int(arguments.get("page", 1))
+    except (TypeError, ValueError):
+        raise ValueError("page must be an integer >= 1")
+    if page < 1:
+        raise ValueError("page must be >= 1")
+
+    key = _pexels_api_key()
+    if not key:
+        raise ValueError(
+            "No Pexels API key — set the PEXELS_API_KEY environment variable, or "
+            "store one in the keyring with:\n"
+            "  secret-tool store --label 'Pop Maker Studio Pexels' service pexels key api")
+
+    params = {"query": query, "per_page": 15, "page": page}
+    if orientation != "any":
+        params["orientation"] = orientation
+    # Same endpoint scheme as pexels_search() in src/pexels_api.cpp (the legacy
+    # /videos path is deprecated; /v1/videos is canonical).
+    url = ("https://api.pexels.com/v1/search" if kind == "photo"
+           else "https://api.pexels.com/v1/videos/search")
+    url += "?" + urllib.parse.urlencode(params)
+    data = _pexels_get(url, key)
+    items, has_more = _pexels_parse_items(kind, data)
+    return {
+        "results": [_pexels_result_row(it) for it in items],
+        "page":    page,
+        "has_more": has_more,
+    }
+
+
+async def _pexels_add_clip(arguments: dict) -> dict:
+    """Download a cached search result and place it at the playhead on an empty/new
+    track. Mirrors the C++ download naming so files dedupe with the app browser."""
+    kind = str(arguments.get("kind", "")).lower()
+    if kind not in ("video", "photo"):
+        raise ValueError("kind must be 'video' or 'photo'")
+    try:
+        item_id = int(arguments["id"])
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("id is required and must be an integer")
+
+    item = _PEXELS_SEARCH_CACHE[kind].get(item_id)
+    if item is None:
+        raise ValueError(
+            f"Pexels {kind} id {item_id} is not in the search cache — search first "
+            "with pexels_search (only the most recent ~200 results per kind are kept)")
+
+    # Download to the app-shared path (user content — never the media cache).
+    path = _pexels_download_path(kind, item)
+    downloaded = False
+    if not (path.exists() and path.stat().st_size > 0):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".part")
+        try:
+            req = urllib.request.Request(
+                item["download_url"], headers={"User-Agent": "PopMakerStudio/1.0"})
+            with urllib.request.urlopen(req, timeout=600) as resp, open(tmp, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+        except Exception as e:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise ValueError(
+                f"Pexels download failed — media URL may be expired or unreachable ({e})") from e
+        if tmp.stat().st_size == 0:
+            tmp.unlink()
+            raise ValueError("Pexels download failed — empty file")
+        os.replace(tmp, path)
+        downloaded = True
+
+    # Place at the playhead on the first empty track, else a fresh one.
+    proj = _call("get_project", {})
+    start = float(proj.get("playhead") or 0.0)
+    duration = float(item.get("duration") or 0.0) if kind == "video" else 0.0
+    if duration <= 0.0:
+        duration = 5.0   # images default 5s
+    end = start + duration
+
+    # Track selection + clip placement in ONE undo step (add_clip alone would be
+    # auto-batched; the pair must not split across two undo entries).
+    with _batch(f"Add Pexels {kind}"):
+        tracks = proj.get("tracks") or []
+        ti = next((int(t["index"]) for t in tracks
+                   if int(t.get("clip_count") or 0) == 0), None)
+        if ti is None:
+            ti = len(tracks)   # add_track at the bottom; stable index inside the batch
+            ti = int(_call("add_track", {"name": f"Pexels {kind}", "position": ti})["track"])
+        result = await _add_clip({
+            "track": ti,
+            "type":  "video",
+            "start": start,
+            "end":   end,
+            "text":  str(path),
+        })
+
+    photographer = item.get("photographer") or ""
+    title = item.get("alt") or photographer
+    summary = (
+        f"Added Pexels {kind} '{title}' by {photographer} "
+        f"(pexels-{item_id}) to track {ti} [{start:.2f}s – {end:.2f}s]"
+        + ("" if downloaded else " — file already downloaded, reused")
+    )
+    return {
+        "status":       "added",
+        "kind":         kind,
+        "id":           item_id,
+        "photographer": photographer,
+        "path":         str(path),
+        "track":        ti,
+        "clip":         int(result["clip"]),
+        "start":        round(start, 3),
+        "end":          round(end, 3),
+        "downloaded":   downloaded,
+        "summary":      summary,
+    }
 
 
 # ── find_and_add_clip ─────────────────────────────────────────────────────────
@@ -4876,6 +5230,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     if name == "get_shape_style":
         result = _call("get_shape_style", arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "pexels_search":
+        result = _pexels_search(arguments)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    if name == "pexels_add_clip":
+        result = await _pexels_add_clip(arguments)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
     try:
         result = _call(name, arguments)

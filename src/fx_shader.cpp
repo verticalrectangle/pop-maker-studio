@@ -629,6 +629,9 @@ int fx_face_preview_slot(int filter_id) {
 static struct {
     GLuint fbo = 0, tex = 0;
     int w = 0, h = 0;
+    // False until the slot has been written once since (re)allocation — the
+    // feedback FX (melt/echo) must not read the texture before then.
+    bool primed = false;
 } g_out[kMaxSlots];
 
 // Per-slot BG output FBOs (for bg_render_to_texture)
@@ -684,7 +687,6 @@ static void pp_ensure(int w, int h) {
     make_tex_fbo(g_pp.tex[1], g_pp.fbo[1], w, h);
     g_pp.w = w; g_pp.h = h;
 }
-
 static void out_ensure(int slot, int w, int h) {
     if (slot < 0 || slot >= kMaxSlots) return;
     auto& s = g_out[slot];
@@ -692,6 +694,7 @@ static void out_ensure(int slot, int w, int h) {
     if (s.fbo) { glDeleteFramebuffers(1, &s.fbo); glDeleteTextures(1, &s.tex); s.fbo = s.tex = 0; }
     make_tex_fbo(s.tex, s.fbo, w, h);
     s.w = w; s.h = h;
+    s.primed = false;  // fresh texture holds null (black) data — don't feed it back yet
 }
 
 // Draw a fullscreen pass from src_tex into fbo.  The caller sets program uniforms first.
@@ -1803,6 +1806,19 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
 
     // ── Generated effects ─────────────────────────────────────────────────────
 #include "generated/fx_shader_apply.h"
+    // ── Feedback prime ───────────────────────────────────────────────────────
+    // melt/echo read g_out[slot] as "previous frame". On the first frame through
+    // a freshly (re)allocated slot that texture holds null data (black) — with
+    // persist ≈ 0.95 the keyed region then decays from black slower than the
+    // effect window itself, so the whole window renders near-black. This bit the
+    // first export after app start (preview warms its own slots, export has its
+    // own — so the preview looked right while the export was black). Seed the
+    // slot with the current chain result: the first feedback frame is then the
+    // frame itself (trail == cur), matching a slot that was always warm.
+    if ((need_melt || need_echo) && !g_out[slot].primed) {
+        draw_pass(g_out[slot].fbo, cur, w, h, g_prog.blit);
+        g_out[slot].primed = true;
+    }
 
     // ── Chroma melt: feed the keyed frame back into the persistent slot for a
     //    deliberate temporal smear — the old GL_BLEND "ghost", now on purpose and
