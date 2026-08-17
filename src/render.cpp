@@ -3000,7 +3000,16 @@ void render_start_gl(AppState& state) {
             args.push_back("-c:a");  args.push_back("aac");
             args.push_back("-b:a");  args.push_back(std::to_string(state.render_settings.audio_bitrate) + "k");
         }
-        args.push_back("-shortest");
+        // Cap the output at the timeline duration instead of `-shortest`.
+        // `-shortest` hangs at the very end with a rawvideo pipe input combined
+        // with adelay-delayed audio: adelay extends the audio past its input
+        // duration, so ffmpeg's shortest-stream tracking keeps waiting for the
+        // already-EOF'd video to catch up and the export never finalizes. We know
+        // the exact output duration — cap it deterministically (matches build_args).
+        {
+            char tbuf[64]; snprintf(tbuf, sizeof(tbuf), "%.6f", (double)state.duration);
+            args.push_back("-t"); args.push_back(tbuf);
+        }
         args.push_back(state.out_mp4);
     }
 
