@@ -28,6 +28,9 @@ extern "C" {
 
 namespace fs = std::filesystem;
 
+static bool file_has_alpha(const std::string& path);
+static bool file_has_alpha_cached(const std::string& path);
+
 // ── Ready-state cache ─────────────────────────────────────────────────────────
 //
 // Without this, proxy_is_ready() and proxy_job_status() are called from the
@@ -271,6 +274,22 @@ static bool build_seek_table(const std::string& interm_path,
 // ── Public API — path/ready/load (unchanged) ──────────────────────────────────
 
 bool proxy_is_ready(const std::string& video_path) {
+    // Alpha video must never use the yuv420p proxy — it would discard transparency
+    // and preview would show black where export shows the BG. Fall through to
+    // native decode which now preserves yuva→RGBA.
+    if (file_has_alpha_cached(video_path)) {
+        // Clean up any stale yuv420p proxy left from before the fix
+        std::error_code ec;
+        fs::remove(proxy_interm_path(video_path), ec);
+        fs::remove(proxy_interm_idx_path(video_path), ec);
+        // Also clear from ready cache so callers don't hit a stale positive
+        {
+            std::lock_guard<std::mutex> lk(g_ready_cache_mu);
+            g_ready_cache.erase(video_path);
+            g_last_stat_ts.erase(video_path);
+        }
+        return false;
+    }
     double now = mono_now_seconds();
     {
         std::lock_guard<std::mutex> lk(g_ready_cache_mu);
@@ -762,6 +781,22 @@ static bool file_has_alpha(const std::string& path) {
     return has;
 }
 
+static std::unordered_map<std::string, bool> g_alpha_cache;
+static std::mutex g_alpha_cache_mu;
+static bool file_has_alpha_cached(const std::string& path) {
+    {
+        std::lock_guard<std::mutex> lk(g_alpha_cache_mu);
+        auto it = g_alpha_cache.find(path);
+        if (it != g_alpha_cache.end()) return it->second;
+    }
+    bool v = file_has_alpha(path);
+    {
+        std::lock_guard<std::mutex> lk(g_alpha_cache_mu);
+        g_alpha_cache[path] = v;
+    }
+    return v;
+}
+
 void proxy_start(const std::string& video_path) {
     // Synthetic timeline clips and media deleted outside the app have no
     // decodable source. Do not launch ffmpeg workers for them; callers may
@@ -771,7 +806,7 @@ void proxy_start(const std::string& video_path) {
     // Alpha video (ProRes 4444, VP9 yuva, PNG video) must stay native — the
     // intermediate is all-intra H.264 yuv420p which cannot store alpha, so a
     // proxied copy would permanently lose transparency.
-    if (file_has_alpha(video_path)) return;
+    if (file_has_alpha_cached(video_path)) return;
     if (is_image_ext(video_path)) {
         std::string still = proxy_still_path(video_path);
         if (fs::exists(still)) return;
