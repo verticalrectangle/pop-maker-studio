@@ -2,6 +2,11 @@
 #include "platform.h"
 #include "paths.h"
 
+extern "C" {
+#include <libavformat/avformat.h>
+#include <libavutil/pixdesc.h>
+}
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -735,14 +740,39 @@ void proxy_cancel() {
         if (pp > 0) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); }
 }
 
+static bool file_has_alpha(const std::string& path) {
+    AVFormatContext* ctx = nullptr;
+    if (avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) < 0) return false;
+    if (avformat_find_stream_info(ctx, nullptr) < 0) { avformat_close_input(&ctx); return false; }
+    bool has = false;
+    for (unsigned i = 0; i < ctx->nb_streams; ++i) {
+        if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            AVPixelFormat fmt = (AVPixelFormat)ctx->streams[i]->codecpar->format;
+            if (fmt != AV_PIX_FMT_NONE) {
+                const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(fmt);
+                if (desc && (desc->flags & AV_PIX_FMT_FLAG_ALPHA)) has = true;
+            } else {
+                // Fallback: ffprobe pix_fmt string may be more reliable for some containers
+                // where codecpar format is NONE; try average pix_fmt via codecpar->profile? Skip
+            }
+            break;
+        }
+    }
+    avformat_close_input(&ctx);
+    return has;
+}
+
 void proxy_start(const std::string& video_path) {
     // Synthetic timeline clips and media deleted outside the app have no
     // decodable source. Do not launch ffmpeg workers for them; callers may
     // still submit their own layer frames (as the Metal renderer tests do).
     std::error_code source_error;
     if (video_path.empty() || !fs::is_regular_file(video_path, source_error)) return;
+    // Alpha video (ProRes 4444, VP9 yuva, PNG video) must stay native — the
+    // intermediate is all-intra H.264 yuv420p which cannot store alpha, so a
+    // proxied copy would permanently lose transparency.
+    if (file_has_alpha(video_path)) return;
     if (is_image_ext(video_path)) {
-        // Images: just generate a still, no intermediate needed
         std::string still = proxy_still_path(video_path);
         if (fs::exists(still)) return;
         if (is_svg_ext(video_path)) {   // vector → librsvg rasterize, off-thread

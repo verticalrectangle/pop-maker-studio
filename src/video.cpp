@@ -47,6 +47,30 @@ extern "C" {
 namespace fs = std::filesystem;
 
 
+static bool fmt_has_alpha(AVPixelFormat fmt) {
+    const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(fmt);
+    return desc && (desc->flags & AV_PIX_FMT_FLAG_ALPHA);
+}
+static bool file_has_alpha_video(const std::string& path) {
+    AVFormatContext* ctx = nullptr;
+    if (avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) < 0) return false;
+    if (avformat_find_stream_info(ctx, nullptr) < 0) { avformat_close_input(&ctx); return false; }
+    bool has = false;
+    for (unsigned i = 0; i < ctx->nb_streams; ++i) {
+        if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            AVPixelFormat fmt = (AVPixelFormat)ctx->streams[i]->codecpar->format;
+            if (fmt != AV_PIX_FMT_NONE) {
+                const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(fmt);
+                if (desc && (desc->flags & AV_PIX_FMT_FLAG_ALPHA)) has = true;
+            }
+            break;
+        }
+    }
+    avformat_close_input(&ctx);
+    return has;
+}
+
+
 // ── CPU pixel FX helpers ──────────────────────────────────────────────────────
 
 static inline uint32_t uhash(uint32_t x) {
@@ -553,6 +577,8 @@ struct PreviewState {
     AVBufferRef*     hw_dev_ctx       = nullptr;
     AVPixelFormat    hw_pix_fmt       = AV_PIX_FMT_NONE;
     SwsContext*      sws              = nullptr;
+    AVPixelFormat    sws_src_fmt      = AV_PIX_FMT_NONE;
+    bool             sws_is_rgba      = false;
     int              stream_idx       = -1;
     AVRational       stream_tb        = {0, 1};
     double           last_decoded_pts = -1.0;
@@ -1261,6 +1287,7 @@ static void prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int fram
     PixelFX pfx;
     uint64_t stamp_at_decode = 0;
     int out_w = 0, out_h = 0;
+    bool src_has_alpha = false;
 
     // ── Phase 1 (locked): demux + decode + sws_scale ────────────────────────
     {
@@ -1311,21 +1338,36 @@ static void prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int fram
                 // (Re)build the scaler if input format or geometry changed.
                 int sw = src->width, sh = src->height;
                 AVPixelFormat sfmt = (AVPixelFormat)src->format;
-                if (!pv.sws || pv.preview_w == 0) {
+                bool has_alpha = fmt_has_alpha(sfmt);
+                AVPixelFormat dst_fmt = has_alpha ? AV_PIX_FMT_RGBA : AV_PIX_FMT_RGB24;
+                if (!pv.sws || pv.preview_w == 0 || pv.sws_src_fmt != sfmt || pv.sws_is_rgba != has_alpha) {
                     if (pv.sws) { sws_freeContext(pv.sws); pv.sws = nullptr; }
                     pv.preview_w = (sw > 1920) ? sw / 2 : (sw > 960 ? 960 : sw);
                     pv.preview_h = (int)((double)sh * pv.preview_w / (double)sw + 0.5);
                     if (pv.preview_h & 1) pv.preview_h--;  // even rows for swscaler
                     pv.sws = sws_getContext(sw, sh, sfmt,
-                                            pv.preview_w, pv.preview_h, AV_PIX_FMT_RGB24,
+                                            pv.preview_w, pv.preview_h, dst_fmt,
                                             SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                    pv.sws_src_fmt = sfmt;
+                    pv.sws_is_rgba = has_alpha;
                 }
                 if (pv.sws) {
-                    f.rgb.resize((size_t)pv.preview_w * pv.preview_h * 3);
-                    uint8_t* dst[1] = { f.rgb.data() };
-                    int      lsz[1] = { pv.preview_w * 3 };
-                    sws_scale(pv.sws, (const uint8_t* const*)src->data, src->linesize,
-                              0, sh, dst, lsz);
+                    if (has_alpha) {
+                        f.rgba_buf.resize((size_t)pv.preview_w * pv.preview_h * 4);
+                        uint8_t* dst[1] = { f.rgba_buf.data() };
+                        int      lsz[1] = { pv.preview_w * 4 };
+                        sws_scale(pv.sws, (const uint8_t* const*)src->data, src->linesize,
+                                  0, sh, dst, lsz);
+                        src_has_alpha = true;
+                        f.rgb.clear();
+                    } else {
+                        f.rgb.resize((size_t)pv.preview_w * pv.preview_h * 3);
+                        uint8_t* dst[1] = { f.rgb.data() };
+                        int      lsz[1] = { pv.preview_w * 3 };
+                        sws_scale(pv.sws, (const uint8_t* const*)src->data, src->linesize,
+                                  0, sh, dst, lsz);
+                        src_has_alpha = false;
+                    }
                     out_w = pv.preview_w; out_h = pv.preview_h;
                     got_pts = pts;
                     got = true;
@@ -1344,6 +1386,48 @@ static void prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int fram
     }
 
     // ── Phase 2 (unlocked): pixel FX + optional RGBA composite ──────────────
+    if (src_has_alpha) {
+        int n = out_w * out_h;
+        // Save original alpha
+        std::vector<uint8_t> orig_alpha((size_t)n);
+        for (int i = 0; i < n; ++i) orig_alpha[(size_t)i] = f.rgba_buf[(size_t)i * 4 + 3];
+        // Extract RGB for FX
+        f.rgb.resize((size_t)n * 3);
+        for (int i = 0; i < n; ++i) {
+            f.rgb[(size_t)i * 3 + 0] = f.rgba_buf[(size_t)i * 4 + 0];
+            f.rgb[(size_t)i * 3 + 1] = f.rgba_buf[(size_t)i * 4 + 1];
+            f.rgb[(size_t)i * 3 + 2] = f.rgba_buf[(size_t)i * 4 + 2];
+        }
+        bool fx_wants_rgba = false;
+        std::vector<uint8_t> fx_rgba;
+        apply_pixel_fx_rgb(f.rgb.data(), out_w, out_h, &pfx,
+                           nullptr, 0, 0, 0.f,
+                           fx_rgba, f.corr_alpha, fx_wants_rgba);
+        if (fx_wants_rgba) {
+            f.rgba_buf.resize((size_t)n * 4);
+            for (int i = 0; i < n; ++i) {
+                f.rgba_buf[(size_t)i * 4 + 0] = fx_rgba[(size_t)i * 4 + 0];
+                f.rgba_buf[(size_t)i * 4 + 1] = fx_rgba[(size_t)i * 4 + 1];
+                f.rgba_buf[(size_t)i * 4 + 2] = fx_rgba[(size_t)i * 4 + 2];
+                uint8_t fa = fx_rgba[(size_t)i * 4 + 3];
+                f.rgba_buf[(size_t)i * 4 + 3] = (uint8_t)((int)orig_alpha[(size_t)i] * (int)fa / 255);
+            }
+        } else {
+            f.rgba_buf.resize((size_t)n * 4);
+            for (int i = 0; i < n; ++i) {
+                f.rgba_buf[(size_t)i * 4 + 0] = f.rgb[(size_t)i * 3 + 0];
+                f.rgba_buf[(size_t)i * 4 + 1] = f.rgb[(size_t)i * 3 + 1];
+                f.rgba_buf[(size_t)i * 4 + 2] = f.rgb[(size_t)i * 3 + 2];
+                f.rgba_buf[(size_t)i * 4 + 3] = orig_alpha[(size_t)i];
+            }
+        }
+        f.w         = out_w;
+        f.h         = out_h;
+        f.rgba      = true;
+        f.fx_stamp  = stamp_at_decode;
+        f.frame_idx = frame_idx;
+        return;
+    }
     bool want_rgba = false;
     // Native path doesn't currently wire bg_remove masks (those are keyed by
     // proxy frame index). FX without bg_remove still works fine.
@@ -1382,6 +1466,8 @@ static uintptr_t decode_native_frame(PreviewState& pv, int frame_idx) {
 static void close_slot(PreviewState& pv) {
     if (pv.bg_mjpeg_file) { fclose(pv.bg_mjpeg_file); pv.bg_mjpeg_file = nullptr; }
     if (pv.sws)           { sws_freeContext(pv.sws);  pv.sws           = nullptr; }
+    pv.sws_src_fmt = AV_PIX_FMT_NONE;
+    pv.sws_is_rgba = false;
     if (pv.dec_ctx)       { avcodec_free_context(&pv.dec_ctx); }
     if (pv.hw_dev_ctx)    { av_buffer_unref(&pv.hw_dev_ctx); }
     if (pv.fmt_ctx)       { avformat_close_input(&pv.fmt_ctx); }
@@ -1963,10 +2049,18 @@ std::string video_extract_segment(const std::string& src,
             snprintf(tt, sizeof(tt), "%.3f", dur);
             args.push_back("-t"); args.push_back(tt);
         }
-        args.push_back("-c:v");     args.push_back("libx264");
-        args.push_back("-crf");     args.push_back("18");
-        args.push_back("-preset");  args.push_back("veryfast");
-        args.push_back("-pix_fmt"); args.push_back("yuv420p");
+        if (file_has_alpha_video(src)) {
+            args.push_back("-c:v");     args.push_back("prores_ks");
+            args.push_back("-profile:v"); args.push_back("4444");
+            args.push_back("-pix_fmt"); args.push_back("yuva444p10le");
+            args.push_back("-vendor");  args.push_back("ap10");
+            args.push_back("-alpha_bits"); args.push_back("16");
+        } else {
+            args.push_back("-c:v");     args.push_back("libx264");
+            args.push_back("-crf");     args.push_back("18");
+            args.push_back("-preset");  args.push_back("veryfast");
+            args.push_back("-pix_fmt"); args.push_back("yuv420p");
+        }
         // Re-encode (not copy) the audio: with a fast input -ss seek, copying audio
         // keeps the source timestamps and anchors the muxer so the video starts at
         // pts=start_sec instead of 0. Re-encoding resets both streams to zero, so
