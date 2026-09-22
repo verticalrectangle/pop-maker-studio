@@ -35,6 +35,7 @@ jobs:
             libfftw3-dev \
             libvterm-dev \
             libturbojpeg0-dev \
+            libwayland-dev libxkbcommon-dev wayland-protocols \
             pkg-config \
             curl
 
