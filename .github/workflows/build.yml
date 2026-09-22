@@ -27,9 +27,9 @@ jobs:
             libfreetype6-dev \
             libaubio-dev \
             libfftw3-dev \
-            libvterm-dev \
             libturbojpeg0-dev \
             libwayland-dev libxkbcommon-dev wayland-protocols \
+            xorg-dev \
             xxd
 
       - name: Install whisper.cpp
