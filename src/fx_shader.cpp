@@ -4,6 +4,7 @@
 
 #if PMS_HAS_GL
 #include "gl_compat.h"
+#include "gl_uniform_cache.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -538,6 +539,7 @@ static GLuint link_prog(const char* frag_src) {
         fprintf(stderr, "[fx_shader] link error: %s\n", buf);
         glDeleteProgram(prog); return 0;
     }
+    uni_cache_clear();  // driver may recycle ids — drop stale locations
     return prog;
 }
 
@@ -555,6 +557,7 @@ static GLuint link_prog2(const char* vert_src, const char* frag_src) {
         fprintf(stderr, "[fx_shader] link error: %s\n", buf);
         glDeleteProgram(prog); return 0;
     }
+    uni_cache_clear();  // driver may recycle ids — drop stale locations
     return prog;
 }
 
@@ -712,13 +715,13 @@ static void draw_blend_pass(GLuint original_tex, GLuint effect_tex, float amount
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, original_tex);
-    glUniform1i(glGetUniformLocation(g_prog.blend, "u_tex"), 0);
+    glUniform1i(uni_loc(g_prog.blend, "u_tex"), 0);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, effect_tex);
-    glUniform1i(glGetUniformLocation(g_prog.blend, "u_effect"), 1);
+    glUniform1i(uni_loc(g_prog.blend, "u_effect"), 1);
 
-    glUniform1f(glGetUniformLocation(g_prog.blend, "u_amount"), amount);
+    glUniform1f(uni_loc(g_prog.blend, "u_amount"), amount);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE0);
 }
@@ -732,7 +735,7 @@ static void draw_pass(GLuint fbo, GLuint src_tex, int w, int h, GLuint prog,
     glUseProgram(prog);
     glActiveTexture(GL_TEXTURE0 + tex_unit);
     glBindTexture(GL_TEXTURE_2D, src_tex);
-    glUniform1i(glGetUniformLocation(prog, tex_uniform), tex_unit);
+    glUniform1i(uni_loc(prog, tex_uniform), tex_unit);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
@@ -872,8 +875,8 @@ uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
     glUseProgram(g_face_warp_prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
-    glUniform1i(glGetUniformLocation(g_face_warp_prog, "u_tex"), 0);
-    glUniform1i(glGetUniformLocation(g_face_warp_prog, "u_n"), n_bumps);
+    glUniform1i(uni_loc(g_face_warp_prog, "u_tex"), 0);
+    glUniform1i(uni_loc(g_face_warp_prog, "u_n"), n_bumps);
     float ba[48] = {}, bb[48] = {};
     float aspect = (float)w / (float)h;
     for (int i = 0; i < n_bumps; ++i) {
@@ -885,8 +888,8 @@ uintptr_t face_warp_apply(uintptr_t src_tex, int slot, int w, int h,
         bb[i*4+1] = bumps[i*6+5];           // dy
         bb[i*4+2] = aspect;
     }
-    glUniform4fv(glGetUniformLocation(g_face_warp_prog, "u_ba"), 12, ba);
-    glUniform4fv(glGetUniformLocation(g_face_warp_prog, "u_bb"), 12, bb);
+    glUniform4fv(uni_loc(g_face_warp_prog, "u_ba"), 12, ba);
+    glUniform4fv(uni_loc(g_face_warp_prog, "u_bb"), 12, bb);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
@@ -1477,14 +1480,14 @@ uintptr_t face_makeup_apply(uintptr_t src_tex, int slot, int w, int h,
     glBindTexture(GL_TEXTURE_2D, (GLuint)makeup_tex);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
-    glUniform1i(glGetUniformLocation(g_face_mk_prog, "u_mk"), 0);
-    glUniform1i(glGetUniformLocation(g_face_mk_prog, "u_src"), 1);
-    glUniform2f(glGetUniformLocation(g_face_mk_prog, "u_dim"), (float)w, (float)h);
-    glUniform1f(glGetUniformLocation(g_face_mk_prog, "u_opacity"), opacity);
-    glUniform1f(glGetUniformLocation(g_face_mk_prog, "u_adapt"), adapt);
-    glUniform4f(glGetUniformLocation(g_face_mk_prog, "u_mk_eyes"),
+    glUniform1i(uni_loc(g_face_mk_prog, "u_mk"), 0);
+    glUniform1i(uni_loc(g_face_mk_prog, "u_src"), 1);
+    glUniform2f(uni_loc(g_face_mk_prog, "u_dim"), (float)w, (float)h);
+    glUniform1f(uni_loc(g_face_mk_prog, "u_opacity"), opacity);
+    glUniform1f(uni_loc(g_face_mk_prog, "u_adapt"), adapt);
+    glUniform4f(uni_loc(g_face_mk_prog, "u_mk_eyes"),
                 eyeL_x, eyeL_y, eyeR_x, eyeR_y);
-    glUniform4f(glGetUniformLocation(g_face_mk_prog, "u_mk_blink"),
+    glUniform4f(uni_loc(g_face_mk_prog, "u_mk_blink"),
                 blink_l, blink_r, eye_r, 0.f);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_face_mk_ibo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, n_live * 3 * sizeof(unsigned short),
@@ -1531,7 +1534,7 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUseProgram(g_face_beauty_prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
-    auto u = [&](const char* nm) { return glGetUniformLocation(g_face_beauty_prog, nm); };
+    auto u = [&](const char* nm) { return uni_loc(g_face_beauty_prog, nm); };
     glUniform1i(u("u_tex"), 0);
     glUniform2f(u("u_dim"), (float)w, (float)h);
     glUniform4f(u("u_face"), p.face_cx, p.face_cy, p.face_rx, p.face_ry);
@@ -1544,7 +1547,7 @@ uintptr_t face_beauty_apply(uintptr_t src_tex, int slot, int w, int h,
     glUniform4f(u("u_blushc"), p.blush_col[0], p.blush_col[1], p.blush_col[2], 0.f);
     glUniform4f(u("u_lipc"), p.lip_col[0], p.lip_col[1], p.lip_col[2], 0.f);
     glUniform4f(u("u_eyeglow"), p.eye_glow_col[0], p.eye_glow_col[1], p.eye_glow_col[2], p.eye_glow);
-    glUniform4f(glGetUniformLocation(g_face_beauty_prog, "u_iris"),
+    glUniform4f(uni_loc(g_face_beauty_prog, "u_iris"),
                 p.iris_col[0], p.iris_col[1], p.iris_col[2], p.iris_tint);
     glUniform4f(u("u_cyber"), p.skin_tint, p.desat, p.chrome, p.scanlines);
     glUniform4f(u("u_tintc"), p.tint_col[0], p.tint_col[1], p.tint_col[2], 0.f);
@@ -1615,13 +1618,13 @@ uintptr_t face_sprites_apply(uintptr_t src_tex, int slot, int w, int h,
     glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                         GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glActiveTexture(GL_TEXTURE0);
-    glUniform1i(glGetUniformLocation(g_sprite_prog, "u_tex"), 0);
+    glUniform1i(uni_loc(g_sprite_prog, "u_tex"), 0);
     for (int i = 0; i < n; ++i) {
         const FaceSpriteQuad& q = quads[i];
         if (!q.tex) continue;
         float uv[8] = {q.u0, 0.f, q.u1, 0.f, q.u1, 1.f, q.u0, 1.f};
-        glUniform2fv(glGetUniformLocation(g_sprite_prog, "u_p"),  4, &q.p[0][0]);
-        glUniform2fv(glGetUniformLocation(g_sprite_prog, "u_uv"), 4, uv);
+        glUniform2fv(uni_loc(g_sprite_prog, "u_p"),  4, &q.p[0][0]);
+        glUniform2fv(uni_loc(g_sprite_prog, "u_uv"), 4, uv);
         glBindTexture(GL_TEXTURE_2D, (GLuint)q.tex);
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
@@ -1727,11 +1730,11 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     if (need_grade || need_vig) {
         GLuint p = g_prog.grade;
         glUseProgram(p);
-        glUniform1f(glGetUniformLocation(p, "u_brightness"), need_grade ? ea.brightness : 0.f);
-        glUniform1f(glGetUniformLocation(p, "u_contrast"),   need_grade ? ea.contrast   : 1.f);
-        glUniform1f(glGetUniformLocation(p, "u_saturation"), need_grade ? ea.saturation : 1.f);
-        glUniform1f(glGetUniformLocation(p, "u_hue"),        need_grade ? ea.hue        : 0.f);
-        glUniform1f(glGetUniformLocation(p, "u_vignette"),   need_vig   ? ea.vignette   : 0.f);
+        glUniform1f(uni_loc(p, "u_brightness"), need_grade ? ea.brightness : 0.f);
+        glUniform1f(uni_loc(p, "u_contrast"),   need_grade ? ea.contrast   : 1.f);
+        glUniform1f(uni_loc(p, "u_saturation"), need_grade ? ea.saturation : 1.f);
+        glUniform1f(uni_loc(p, "u_hue"),        need_grade ? ea.hue        : 0.f);
+        glUniform1f(uni_loc(p, "u_vignette"),   need_vig   ? ea.vignette   : 0.f);
         run1(p);
     }
 
@@ -1740,12 +1743,12 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         GLuint p = g_prog.blur;
         // Horizontal
         glUseProgram(p);
-        glUniform2f(glGetUniformLocation(p, "u_dir"), 1.f / (float)w, 0.f);
-        glUniform1f(glGetUniformLocation(p, "u_sigma"), ea.blur);
+        glUniform2f(uni_loc(p, "u_dir"), 1.f / (float)w, 0.f);
+        glUniform1f(uni_loc(p, "u_sigma"), ea.blur);
         run1(p);
         // Vertical
-        glUniform2f(glGetUniformLocation(p, "u_dir"), 0.f, 1.f / (float)h);
-        glUniform1f(glGetUniformLocation(p, "u_sigma"), ea.blur);
+        glUniform2f(uni_loc(p, "u_dir"), 0.f, 1.f / (float)h);
+        glUniform1f(uni_loc(p, "u_sigma"), ea.blur);
         run1(p);
     }
 
@@ -1753,10 +1756,10 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     if (need_chroma) {
         GLuint p = g_prog.chroma_key;
         glUseProgram(p);
-        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+        glUniform3f(uni_loc(p, "u_key_color"),
                     cfx.chroma_key_r, cfx.chroma_key_g, cfx.chroma_key_b);
-        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_key_threshold);
-        glUniform1f(glGetUniformLocation(p, "u_softness"),  cfx.chroma_key_softness);
+        glUniform1f(uni_loc(p, "u_threshold"), cfx.chroma_key_threshold);
+        glUniform1f(uni_loc(p, "u_softness"),  cfx.chroma_key_softness);
         run1(p);
     }
 
@@ -1764,13 +1767,13 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     if (need_glitch) {
         GLuint p = g_prog.glitch;
         glUseProgram(p);
-        glUniform1f(glGetUniformLocation(p, "u_chroma"), cfx.glitch_chroma / (float)w);
-        glUniform1f(glGetUniformLocation(p, "u_jitter"), cfx.glitch_jitter);
-        glUniform1f(glGetUniformLocation(p, "u_corrupt"),       cfx.glitch_corruption);
-        glUniform1f(glGetUniformLocation(p, "u_corrupt_bleed"), cfx.glitch_corruption_bleed);
-        glUniform1f(glGetUniformLocation(p, "u_time"),   t);
-        glUniform1f(glGetUniformLocation(p, "u_tex_h"),  (float)h);
-        glUniform1f(glGetUniformLocation(p, "u_tex_w"),  (float)w);
+        glUniform1f(uni_loc(p, "u_chroma"), cfx.glitch_chroma / (float)w);
+        glUniform1f(uni_loc(p, "u_jitter"), cfx.glitch_jitter);
+        glUniform1f(uni_loc(p, "u_corrupt"),       cfx.glitch_corruption);
+        glUniform1f(uni_loc(p, "u_corrupt_bleed"), cfx.glitch_corruption_bleed);
+        glUniform1f(uni_loc(p, "u_time"),   t);
+        glUniform1f(uni_loc(p, "u_tex_h"),  (float)h);
+        glUniform1f(uni_loc(p, "u_tex_w"),  (float)w);
         run1(p);
     }
 
@@ -1778,10 +1781,10 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     if (need_vhs) {
         GLuint p = g_prog.vhs;
         glUseProgram(p);
-        glUniform1f(glGetUniformLocation(p, "u_noise"),    cfx.vhs_noise);
-        glUniform1f(glGetUniformLocation(p, "u_bleed"),    cfx.vhs_bleed / (float)w);
-        glUniform1f(glGetUniformLocation(p, "u_tracking"), cfx.vhs_tracking);
-        glUniform1f(glGetUniformLocation(p, "u_time"),     t);
+        glUniform1f(uni_loc(p, "u_noise"),    cfx.vhs_noise);
+        glUniform1f(uni_loc(p, "u_bleed"),    cfx.vhs_bleed / (float)w);
+        glUniform1f(uni_loc(p, "u_tracking"), cfx.vhs_tracking);
+        glUniform1f(uni_loc(p, "u_time"),     t);
         run1(p);
     }
 
@@ -1789,9 +1792,9 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     if (need_leak) {
         GLuint p = g_prog.leak;
         glUseProgram(p);
-        glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.leak_intensity);
-        glUniform1f(glGetUniformLocation(p, "u_speed"),     cfx.leak_speed);
-        glUniform1f(glGetUniformLocation(p, "u_time"),      t);
+        glUniform1f(uni_loc(p, "u_intensity"), cfx.leak_intensity);
+        glUniform1f(uni_loc(p, "u_speed"),     cfx.leak_speed);
+        glUniform1f(uni_loc(p, "u_time"),      t);
         run1(p);
     }
 
@@ -1799,8 +1802,8 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     if (need_datamosh) {
         GLuint p = g_prog.datamosh;
         glUseProgram(p);
-        glUniform1f(glGetUniformLocation(p, "u_spread"), cfx.datamosh_spread);
-        glUniform1f(glGetUniformLocation(p, "u_tex_w"),  (float)w);
+        glUniform1f(uni_loc(p, "u_spread"), cfx.datamosh_spread);
+        glUniform1f(uni_loc(p, "u_tex_w"),  (float)w);
         run1(p);
     }
 
@@ -1830,14 +1833,14 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         glUseProgram(p);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, cur);
-        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glUniform1i(uni_loc(p, "u_tex"), 0);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, g_out[slot].tex);   // previous frame = feedback
-        glUniform1i(glGetUniformLocation(p, "u_feedback"), 1);
-        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+        glUniform1i(uni_loc(p, "u_feedback"), 1);
+        glUniform3f(uni_loc(p, "u_key_color"),
                     cfx.chroma_melt_r, cfx.chroma_melt_g, cfx.chroma_melt_b);
-        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_melt_threshold);
-        glUniform1f(glGetUniformLocation(p, "u_persist"),   cfx.chroma_melt_persist);
+        glUniform1f(uni_loc(p, "u_threshold"), cfx.chroma_melt_threshold);
+        glUniform1f(uni_loc(p, "u_persist"),   cfx.chroma_melt_persist);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE0);
@@ -1854,14 +1857,14 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         glUseProgram(p);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, cur);
-        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glUniform1i(uni_loc(p, "u_tex"), 0);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, g_out[slot].tex);   // previous frame = feedback
-        glUniform1i(glGetUniformLocation(p, "u_feedback"), 1);
-        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+        glUniform1i(uni_loc(p, "u_feedback"), 1);
+        glUniform3f(uni_loc(p, "u_key_color"),
                     cfx.chroma_echo_r, cfx.chroma_echo_g, cfx.chroma_echo_b);
-        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_echo_threshold);
-        glUniform1f(glGetUniformLocation(p, "u_persist"),   cfx.chroma_echo_persist);
+        glUniform1f(uni_loc(p, "u_threshold"), cfx.chroma_echo_threshold);
+        glUniform1f(uni_loc(p, "u_persist"),   cfx.chroma_echo_persist);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(GL_TEXTURE0);
@@ -1889,7 +1892,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
             glUseProgram(g_prog.blit);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, cur);
-            glUniform1i(glGetUniformLocation(g_prog.blit, "u_tex"), 0);
+            glUniform1i(uni_loc(g_prog.blit, "u_tex"), 0);
             glDrawArrays(GL_TRIANGLES, 0, 3);
         }
         // Composite the live frame + the ring taps into the ping-pong.
@@ -1902,16 +1905,16 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         glUseProgram(p);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, cur);
-        glUniform1i(glGetUniformLocation(p, "u_tex"), 0);
+        glUniform1i(uni_loc(p, "u_tex"), 0);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D_ARRAY, ring.arr);
-        glUniform1i(glGetUniformLocation(p, "u_ring"), 1);
-        glUniform1i(glGetUniformLocation(p, "u_head"), ring.head);
-        glUniform1i(glGetUniformLocation(p, "u_ntaps"), ntaps);
-        glUniform3f(glGetUniformLocation(p, "u_key_color"),
+        glUniform1i(uni_loc(p, "u_ring"), 1);
+        glUniform1i(uni_loc(p, "u_head"), ring.head);
+        glUniform1i(uni_loc(p, "u_ntaps"), ntaps);
+        glUniform3f(uni_loc(p, "u_key_color"),
                     cfx.chroma_frame_r, cfx.chroma_frame_g, cfx.chroma_frame_b);
-        glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.chroma_frame_threshold);
-        glUniform1f(glGetUniformLocation(p, "u_falloff"),   cfx.chroma_frame_falloff);
+        glUniform1f(uni_loc(p, "u_threshold"), cfx.chroma_frame_threshold);
+        glUniform1f(uni_loc(p, "u_falloff"),   cfx.chroma_frame_falloff);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
         glActiveTexture(GL_TEXTURE0);
@@ -2015,20 +2018,20 @@ void scene_add_layer(uintptr_t clip_tex, float cx, float cy, float hw, float hh,
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g_scene.tex[g_scene.active]);
-    glUniform1i(glGetUniformLocation(g_prog.composite, "u_scene"), 0);
+    glUniform1i(uni_loc(g_prog.composite, "u_scene"), 0);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, (GLuint)clip_tex);
-    glUniform1i(glGetUniformLocation(g_prog.composite, "u_clip"), 1);
+    glUniform1i(uni_loc(g_prog.composite, "u_clip"), 1);
 
-    glUniform2f(glGetUniformLocation(g_prog.composite, "u_canvas"),
+    glUniform2f(uni_loc(g_prog.composite, "u_canvas"),
                 (float)g_scene.w, (float)g_scene.h);
-    glUniform2f(glGetUniformLocation(g_prog.composite, "u_center"), cx, cy);
-    glUniform2f(glGetUniformLocation(g_prog.composite, "u_half"),   hw, hh);
-    glUniform2f(glGetUniformLocation(g_prog.composite, "u_cossin"), cos_r, sin_r);
-    glUniform1f(glGetUniformLocation(g_prog.composite, "u_alpha"),  alpha);
-    glUniform2f(glGetUniformLocation(g_prog.composite, "u_uv0"),    u0, v0);
-    glUniform2f(glGetUniformLocation(g_prog.composite, "u_uv1"),    u1, v1);
+    glUniform2f(uni_loc(g_prog.composite, "u_center"), cx, cy);
+    glUniform2f(uni_loc(g_prog.composite, "u_half"),   hw, hh);
+    glUniform2f(uni_loc(g_prog.composite, "u_cossin"), cos_r, sin_r);
+    glUniform1f(uni_loc(g_prog.composite, "u_alpha"),  alpha);
+    glUniform2f(uni_loc(g_prog.composite, "u_uv0"),    u0, v0);
+    glUniform2f(uni_loc(g_prog.composite, "u_uv1"),    u1, v1);
 
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glActiveTexture(GL_TEXTURE0);
@@ -2089,19 +2092,19 @@ static void draw_shape_pass(const std::vector<ShapeVertex>& verts,
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(verts.size() * sizeof(ShapeVertex)),
                  verts.data(), GL_STREAM_DRAW);
 
-    glUniform2f(glGetUniformLocation(g_prog.shape_fill, "u_resolution"),
+    glUniform2f(uni_loc(g_prog.shape_fill, "u_resolution"),
                 (float)canvas_w, (float)canvas_h);
-    glUniform1i(glGetUniformLocation(g_prog.shape_fill, "u_mode"), mode);
-    glUniform1i(glGetUniformLocation(g_prog.shape_fill, "u_grad_mode"), style.grad_mode);
-    glUniform1f(glGetUniformLocation(g_prog.shape_fill, "u_grad_angle"), style.grad_angle);
-    glUniform1f(glGetUniformLocation(g_prog.shape_fill, "u_fill_alpha"), fill_alpha);
-    glUniform1f(glGetUniformLocation(g_prog.shape_fill, "u_alpha"), alpha);
+    glUniform1i(uni_loc(g_prog.shape_fill, "u_mode"), mode);
+    glUniform1i(uni_loc(g_prog.shape_fill, "u_grad_mode"), style.grad_mode);
+    glUniform1f(uni_loc(g_prog.shape_fill, "u_grad_angle"), style.grad_angle);
+    glUniform1f(uni_loc(g_prog.shape_fill, "u_fill_alpha"), fill_alpha);
+    glUniform1f(uni_loc(g_prog.shape_fill, "u_alpha"), alpha);
 
     const float* col = color_override ? color_override :
                        (mode == 0 ? style.fill_col : style.stroke_col);
-    glUniform4f(glGetUniformLocation(g_prog.shape_fill, "u_color"),
+    glUniform4f(uni_loc(g_prog.shape_fill, "u_color"),
                 col[0], col[1], col[2], col[3]);
-    glUniform4f(glGetUniformLocation(g_prog.shape_fill, "u_color2"),
+    glUniform4f(uni_loc(g_prog.shape_fill, "u_color2"),
                 style.grad_col2[0], style.grad_col2[1],
                 style.grad_col2[2], style.grad_col2[3]);
 
@@ -2151,10 +2154,10 @@ void shape_render_to_fbo(const ShapeGeometry& geom,
         float sigma = style.glow_radius * (float)canvas_h;
         for (int pass = 0; pass < 2; ++pass) {
             glUseProgram(g_prog.blur);
-            glUniform2f(glGetUniformLocation(g_prog.blur, "u_dir"),
+            glUniform2f(uni_loc(g_prog.blur, "u_dir"),
                         pass == 0 ? 1.f / (float)canvas_w : 0.f,
                         pass == 0 ? 0.f : 1.f / (float)canvas_h);
-            glUniform1f(glGetUniformLocation(g_prog.blur, "u_sigma"), sigma);
+            glUniform1f(uni_loc(g_prog.blur, "u_sigma"), sigma);
             draw_pass(g_pp.fbo[pslot], blurred, canvas_w, canvas_h, g_prog.blur);
             blurred = g_pp.tex[pslot];
             pslot ^= 1;
@@ -2172,11 +2175,11 @@ void shape_render_to_fbo(const ShapeGeometry& geom,
         glBindVertexArray(g_vao);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, blurred);
-        glUniform1i(glGetUniformLocation(g_prog.shape_glow, "u_tex"), 0);
-        glUniform4f(glGetUniformLocation(g_prog.shape_glow, "u_glow_col"),
+        glUniform1i(uni_loc(g_prog.shape_glow, "u_tex"), 0);
+        glUniform4f(uni_loc(g_prog.shape_glow, "u_glow_col"),
                     style.glow_col[0], style.glow_col[1],
                     style.glow_col[2], style.glow_col[3]);
-        glUniform1f(glGetUniformLocation(g_prog.shape_glow, "u_intensity"),
+        glUniform1f(uni_loc(g_prog.shape_glow, "u_intensity"),
                     style.glow_intensity * alpha);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glActiveTexture(GL_TEXTURE0);
@@ -2269,7 +2272,7 @@ uintptr_t bg_render_to_texture(const char* preset_id, int slot,
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_SCISSOR_TEST);
     glUseProgram(g_bg_prog);
-    glUniform2f(glGetUniformLocation(g_bg_prog, "u_size"), (float)canvas_w, (float)canvas_h);
+    glUniform2f(uni_loc(g_bg_prog, "u_size"), (float)canvas_w, (float)canvas_h);
     glBindVertexArray(g_bg_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_bg_vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_bg_ebo);
@@ -2311,7 +2314,7 @@ void fx_blit(uintptr_t src_tex, unsigned dst_fbo, int w, int h) {
     glUseProgram(g_prog.blit);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
-    glUniform1i(glGetUniformLocation(g_prog.blit, "u_tex"), 0);
+    glUniform1i(uni_loc(g_prog.blit, "u_tex"), 0);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);

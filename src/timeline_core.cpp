@@ -358,12 +358,15 @@ static std::vector<std::pair<int, std::string>> collect_slot_opens(AppState& sta
     for (auto& tr : state.tracks) {
         for (auto& cl : tr.clips) {
             if (!clip_is_videolike_type(cl.clip_type) || cl.text.empty()) continue;
-            // Decode the intermediate when ready, else the original. (Stills
-            // keep the .png/.gif extension and the image branch of the opener
-            // still fires for them; a clip with a ready proxy has `src` = the
-            // .interm.mp4 and falls through to the native video path.)
+            // Slot keys are ALWAYS the original source path (cl.text) — never the
+            // conformed clip_video_src(). The decode file flips from source to
+            // .interm.mp4 the moment its proxy finishes, so keying on the decode
+            // file races queue time against proxy readiness: early-queued clips
+            // keep source keys while the draw looks up interm keys, and the
+            // preview goes permanently blank. (Stills keep their extension and
+            // the image branch of the opener still fires for them.)
             std::string src = clip_video_src(state, cl);
-            std::string key = clip_slot_key(src, cl.start);
+            std::string key = clip_slot_key(cl.text, cl.start);
             int slot = slot_for_video(state, key, src);
             if (slot < 0 || seen.count(slot)) continue;
             seen.insert(slot);
@@ -480,7 +483,7 @@ void gc_video_slots(AppState& state) {
     for (auto& tr : state.tracks)
         for (auto& cl : tr.clips)
             if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
-                live.insert(clip_slot_key(clip_video_src(state, cl), cl.start));
+                live.insert(clip_slot_key(cl.text, cl.start));  // stable source key, not the decode file
     for (int i = 0; i < MAX_VIDEO_SLOTS; ++i) {
         if (!state.proxy_paths[i].empty() && !live.count(state.proxy_paths[i])) {
             video_close(i);

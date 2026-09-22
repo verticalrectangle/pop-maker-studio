@@ -524,9 +524,20 @@ static int probe_total_frames(const std::string& video_path,
                               double* out_fps = nullptr,
                               int64_t* out_fps_num = nullptr,
                               int64_t* out_fps_den = nullptr) {
+    // Robust probe — compatible with all containers (mp4, mkv, mov, webm, avi, ...).
+    // Old version only read stream=r_frame_rate + stream=duration, which is N/A for
+    // Matroska segments produced by extract_clip_segment (mkv) and for some VFR/
+    // variable-framerate sources. That made perfectly valid files look "corrupt or
+    // truncated" and the proxy never appeared. New version probes:
+    //   - stream: r_frame_rate, avg_frame_rate, duration
+    //   - format: duration  (fallback when stream duration is N/A)
+    // fps priority: r_frame_rate (if sane) -> avg_frame_rate -> 30fps fallback.
+    // duration priority: stream duration (if >0) -> format duration -> 0 (fail).
     std::string src = "file:" + video_path;
-    const char* args[] = {"ffprobe", "-v", "error", "-select_streams", "v:0",
-                          "-show_entries", "stream=r_frame_rate,duration",
+    const char* args[] = {"ffprobe", "-v", "error",
+                          "-select_streams", "v:0",
+                          "-show_entries", "stream=r_frame_rate,avg_frame_rate,duration",
+                          "-show_entries", "format=duration",
                           "-of", "default=nw=1", src.c_str(), nullptr};
     int pfd[2];
     if (pipe(pfd) != 0) return 0;
@@ -542,23 +553,40 @@ static int probe_total_frames(const std::string& video_path,
     }
     close(pfd[1]);
     FILE* f = fdopen(pfd[0], "r");
-    double dur = 0.0; long long fn = 30, fd2 = 1;
+    double stream_dur = 0.0, format_dur = 0.0;
+    long long r_fn = 0, r_fd = 0, a_fn = 0, a_fd = 0;
     if (f) {
         char line[256];
         while (fgets(line, sizeof(line), f)) {
-            sscanf(line, "duration=%lf", &dur);
-            sscanf(line, "r_frame_rate=%lld/%lld", &fn, &fd2);
+            double tmp = 0;
+            if (sscanf(line, "duration=%lf", &tmp) == 1 && tmp > 0) {
+                // ffprobe prints stream duration first (maybe N/A), then format duration.
+                // Keep the last positive value — for mkv where stream is N/A, this will be
+                // the format duration (10.077). For normal mp4 both are same.
+                format_dur = tmp;
+                if (stream_dur <= 0) stream_dur = tmp; // also remember first positive
+                else format_dur = tmp; // keep last
+            }
+            sscanf(line, "r_frame_rate=%lld/%lld", &r_fn, &r_fd);
+            sscanf(line, "avg_frame_rate=%lld/%lld", &a_fn, &a_fd);
         }
         fclose(f);
     }
     waitpid(pid, nullptr, 0);
-    if (dur <= 0.0 || fd2 <= 0) return 0;
-    double src_fps = (double)fn / (double)fd2;
-    double proxy_fps = std::min(src_fps, 30.0);  // proxy is capped at 30
+    double dur = format_dur > 0 ? format_dur : stream_dur;
+    long long fn = 0, fd = 1;
+    auto sane = [](long long n, long long d){ return d > 0 && n > 0 && n < 1000LL * d; };
+    if (sane(r_fn, r_fd)) { fn = r_fn; fd = r_fd; }
+    else if (sane(a_fn, a_fd)) { fn = a_fn; fd = a_fd; }
+    else { fn = 30; fd = 1; }
+    if (dur <= 0.0 || fd <= 0) return 0;
+    double src_fps = (double)fn / (double)fd;
+    if (!(src_fps > 0 && src_fps < 240)) src_fps = 30.0;
+    double proxy_fps = std::min(src_fps, 30.0);
     if (out_fps) *out_fps = proxy_fps;
     if (out_fps_num && out_fps_den) {
-        if (src_fps > 30.0) { *out_fps_num = 30; *out_fps_den = 1; }   // clamped
-        else                { *out_fps_num = (int64_t)fn; *out_fps_den = (int64_t)fd2; }
+        if (src_fps > 30.0) { *out_fps_num = 30; *out_fps_den = 1; }
+        else                { *out_fps_num = (int64_t)fn; *out_fps_den = (int64_t)fd; }
     }
     return (int)(dur * proxy_fps + 0.5);
 }

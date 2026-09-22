@@ -39,14 +39,14 @@ def uniform_set_lines(p, eid, indent="            "):
     rng   = pmax - pmin
 
     if curve == 1.0 or rng <= 0.0:
-        return [f'{indent}glUniform1f(glGetUniformLocation(p, "{uname}"), {field});']
+        return [f'{indent}glUniform1f(uni_loc(p, "{uname}"), {field});']
 
     # Normalize stored value to [0,1], apply power curve, scale back to [min,max].
     lines = [
         f'{indent}{{',
         f'{indent}    float _n = ({field} - {pmin}f) / {rng}f;',
         f'{indent}    _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);',
-        f'{indent}    glUniform1f(glGetUniformLocation(p, "{uname}"), {pmin}f + powf(_n, {curve}f) * {rng}f);',
+        f'{indent}    glUniform1f(uni_loc(p, "{uname}"), {pmin}f + powf(_n, {curve}f) * {rng}f);',
         f'{indent}}}',
     ]
     return lines
@@ -171,10 +171,10 @@ def main():
         lines.append(f'        if (p) {{')
         lines.append(f'            GLuint pre_tex = cur;')
         lines.append(f'            glUseProgram(p);')
-        lines.append(f'            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);')
-        lines.append(f'            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);')
-        lines.append(f'            glUniform1f(glGetUniformLocation(p, "u_time"),  t);')
-        lines.append(f'            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.{eid}_amount);')
+        lines.append(f'            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);')
+        lines.append(f'            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);')
+        lines.append(f'            glUniform1f(uni_loc(p, "u_time"),  t);')
+        lines.append(f'            glUniform1f(uni_loc(p, "u_strength"), cfx.{eid}_amount);')
         for p in e["params"]:
             if p.get("hidden"): continue
             lines.extend(uniform_set_lines(p, eid))

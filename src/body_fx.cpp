@@ -6,6 +6,7 @@
 // list_body_fx / clip projection even though the GL runtime below is stubbed.
 #if PMS_HAS_GL
 #include "gl_compat.h"
+#include "gl_uniform_cache.h"
 
 // stb_image implementation is already compiled in video.cpp
 // Just include the header without the implementation define
@@ -1232,6 +1233,7 @@ static GLuint link_body_prog(const char* frag_body) {
         glDeleteProgram(prog);
         return 0;
     }
+    uni_cache_clear();  // driver may recycle ids — drop stale locations
     return prog;
 }
 
@@ -1427,24 +1429,24 @@ uintptr_t body_fx_apply(BodyFXType type,
     // Bind source texture
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
-    glUniform1i(glGetUniformLocation(prog, "u_src"), 0);
+    glUniform1i(uni_loc(prog, "u_src"), 0);
 
     // Bind mask texture
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, mask_tex);
-    glUniform1i(glGetUniformLocation(prog, "u_mask"), 1);
+    glUniform1i(uni_loc(prog, "u_mask"), 1);
 
     // Set uniforms
-    glUniform1f(glGetUniformLocation(prog, "t"), t_sec);
-    glUniform1f(glGetUniformLocation(prog, "u_amount"), amount);
-    glUniform1f(glGetUniformLocation(prog, "p0"), params ? params[0] : 0.f);
-    glUniform1f(glGetUniformLocation(prog, "p1"), params ? params[1] : 0.f);
-    glUniform1f(glGetUniformLocation(prog, "p2"), params ? params[2] : 0.f);
-    glUniform1f(glGetUniformLocation(prog, "p3"), params ? params[3] : 0.f);
+    glUniform1f(uni_loc(prog, "t"), t_sec);
+    glUniform1f(uni_loc(prog, "u_amount"), amount);
+    glUniform1f(uni_loc(prog, "p0"), params ? params[0] : 0.f);
+    glUniform1f(uni_loc(prog, "p1"), params ? params[1] : 0.f);
+    glUniform1f(uni_loc(prog, "p2"), params ? params[2] : 0.f);
+    glUniform1f(uni_loc(prog, "p3"), params ? params[3] : 0.f);
     static const float full_box[4] = {0.f, 1.f, 0.f, 1.f};
     const float* bx = bg_box ? bg_box : full_box;
-    glUniform4f(glGetUniformLocation(prog, "u_bg_box"), bx[0], bx[1], bx[2], bx[3]);
-    glUniform1f(glGetUniformLocation(prog, "u_bg_softness"), bg_softness);
+    glUniform4f(uni_loc(prog, "u_bg_box"), bx[0], bx[1], bx[2], bx[3]);
+    glUniform1f(uni_loc(prog, "u_bg_softness"), bg_softness);
 
     glDrawArrays(GL_TRIANGLES, 0, 3);
 

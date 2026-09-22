@@ -1658,6 +1658,14 @@ void extract_audio_start(AppState& state, const std::string& video_path) {
     }).detach();
 }
 
+// Last-uploaded dimensions per (tex slot). Lets gl_render_vid_clip use
+// glTexSubImage2D (no driver-side realloc) when the size is unchanged, which
+// is every frame except clip-change frames. Reset wherever a fresh texture
+// set is created (snapshot + export start); upload sizes depend only on the
+// active source, so the check stays correct across interleaved renders.
+static int g_up_w[MAX_VIDEO_TRACKS * 2] = {};
+static int g_up_h[MAX_VIDEO_TRACKS * 2] = {};
+
 // ── GL shared state — forward declarations used by snapshot + export ─────────
 
 static struct GlExport {
@@ -1803,6 +1811,7 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
         return;
     }
 
+
     // Per-track video textures for this snapshot (freed at end)
     GLuint vid_texs[MAX_VIDEO_TRACKS * 2] = {};
     clear_ex_still_tex();   // free the previous render's per-path still textures
@@ -1814,6 +1823,8 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
+    memset(g_up_w, 0, sizeof(g_up_w));
+    memset(g_up_h, 0, sizeof(g_up_h));
     glBindTexture(GL_TEXTURE_2D, 0);
 
     // ── Render into FBO ───────────────────────────────────────────────────────
@@ -2323,8 +2334,22 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
     // once (α = orig.a · mask); baking here too would square the mask.
 
     glBindTexture(GL_TEXTURE_2D, tex_id);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, vf->data);
+    // Same-size re-upload: TexSubImage skips the driver-side realloc that
+    // TexImage2D performs on every call (13 layers × 750 frames here). Sizes
+    // match on every frame except clip-change frames. Byte-identical result.
+    const bool up_same = fx_slot >= 0 && fx_slot < MAX_VIDEO_TRACKS * 2 &&
+        g_up_w[fx_slot] == vf->width && g_up_h[fx_slot] == vf->height;
+    if (up_same) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, vf->width, vf->height,
+                        GL_RGBA, GL_UNSIGNED_BYTE, vf->data);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, vf->width, vf->height, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, vf->data);
+        if (fx_slot >= 0 && fx_slot < MAX_VIDEO_TRACKS * 2) {
+            g_up_w[fx_slot] = vf->width;
+            g_up_h[fx_slot] = vf->height;
+        }
+    }
     int vid_w = vf->width, vid_h = vf->height;
     video_free_frame(vf);
 
@@ -3010,6 +3035,9 @@ void render_start_gl(AppState& state) {
             char tbuf[64]; snprintf(tbuf, sizeof(tbuf), "%.6f", (double)state.duration);
             args.push_back("-t"); args.push_back(tbuf);
         }
+        // iOS/Files/AirDrop refuse moov-at-end MP4s — relocate moov to the
+        // front (matches the filtergraph path). Must precede the output path.
+        args.push_back("-movflags"); args.push_back("+faststart");
         args.push_back(state.out_mp4);
     }
 
@@ -3069,6 +3097,8 @@ void render_start_gl(AppState& state) {
     g_gl_ex.fbo           = fbo;
     g_gl_ex.color_tex     = col_tex;
     memcpy(g_gl_ex.vid_tex, vid_texs, sizeof(vid_texs));
+    memset(g_up_w, 0, sizeof(g_up_w));  // fresh textures — force TexImage first
+    memset(g_up_h, 0, sizeof(g_up_h));
     g_gl_ex.out_w         = out_w;
     g_gl_ex.out_h         = out_h;
     g_gl_ex.current_frame = 0;

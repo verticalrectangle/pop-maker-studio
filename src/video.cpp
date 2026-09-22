@@ -36,6 +36,7 @@ extern "C" {
 #include <cmath>
 #include <array>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <filesystem>
 
@@ -307,72 +308,12 @@ static void cpu_apply_corruption(uint8_t* px, int w, int h, float intensity, flo
 // markers heal mild corruption, and aggressive corruption just makes the
 // decoder return null (silent no-op). This is deterministic per frame (seed
 // from time → it animates), always visible, and shared by preview + export.
+// (datamosh_rgb lives beside pool() below so it can fan work out to the
+// leaf pixel pool; dm_hash stays here next to its only other neighbours.)
 static inline uint32_t dm_hash(uint32_t a, uint32_t b) {
     uint32_t h = a * 0x9E3779B1u ^ b * 0x85EBCA77u;
     h ^= h >> 15; h *= 0xC2B2AE3Du; h ^= h >> 13;
     return h;
-}
-static void datamosh_rgb(uint8_t* rgb, int w, int h, float intensity, float time_sec) {
-    if (!rgb || intensity <= 0.f || w <= 0 || h <= 0) return;
-    if (intensity > 1.f) intensity = 1.f;
-    static thread_local std::vector<uint8_t> src;
-    src.assign(rgb, rgb + (size_t)w * h * 3);
-
-    const int   B     = 16;                          // macroblock size (px)
-    const float reach = 6.f + intensity * 70.f;      // max smear length
-    const int   TAPS  = 5;                            // samples along each trail
-    const uint32_t frame = (uint32_t)(time_sec * 24.f);
-    auto at = [&](int x, int y, int c) -> uint8_t {
-        if (x < 0) x = 0; else if (x >= w) x = w - 1;
-        if (y < 0) y = 0; else if (y >= h) y = h - 1;
-        return src[((size_t)y * w + x) * 3 + c];
-    };
-    for (int by = 0; by < h; by += B) {
-        for (int bx = 0; bx < w; bx += B) {
-            int bxi = bx / B, byi = by / B;
-            uint32_t hb = dm_hash((uint32_t)bxi | ((uint32_t)byi << 16), frame);
-
-            // Coherent pseudo-motion flow: a low-frequency field (neighbouring
-            // blocks share a direction, so it reads as a moving region rather than
-            // noise) plus a per-block jitter. This is what fakes the "P-frame
-            // motion applied to the wrong content" smear without a real codec.
-            float fa = sinf(bxi * 0.20f + time_sec * 1.3f) + cosf(byi * 0.17f - time_sec * 0.9f);
-            float fb = cosf(bxi * 0.15f - time_sec * 1.1f) + sinf(byi * 0.23f + time_sec * 0.7f);
-            float vx = fa * 0.6f + (((int)((hb >> 8)  & 0xFF) - 128) / 128.f) * 0.8f;
-            float vy = fb * 0.6f + (((int)((hb >> 16) & 0xFF) - 128) / 128.f) * 0.8f;
-            float vl = sqrtf(vx*vx + vy*vy) + 1e-4f; vx /= vl; vy /= vl;
-            float mag = reach * (0.4f + 0.6f * ((hb & 0xFF) / 255.f));
-
-            // Patchy block selection (scaled by intensity); a rare few "lose" the
-            // macroblock entirely → frozen, channel-swapped flat region.
-            float pick = (float)((hb >> 24) & 0xFF) / 255.f;
-            bool smear = pick < intensity * 0.9f + 0.05f;
-            bool lost  = pick > 0.97f - intensity * 0.10f;
-            if (!smear && !lost) continue;            // clean blocks pass through
-
-            for (int y = by; y < by + B && y < h; ++y)
-                for (int x = bx; x < bx + B && x < w; ++x) {
-                    uint8_t* d = rgb + ((size_t)y * w + x) * 3;
-                    if (lost) {                        // decoder gave up here
-                        int sx = x - (int)(vx * mag), sy = y - (int)(vy * mag);
-                        d[0] = at(sx, sy, 1); d[1] = at(sx, sy, 2); d[2] = at(sx, sy, 0);
-                        continue;
-                    }
-                    // Directional smear: average taps back along the flow → a
-                    // trail. Chroma lags luma (G half-shift, B static) → the
-                    // signature cyan/magenta datamosh bleed along the streak.
-                    int rs = 0, gs = 0;
-                    for (int k = 0; k < TAPS; ++k) {
-                        float f = (float)k / (TAPS - 1);
-                        rs += at(x - (int)(vx * mag * f),        y - (int)(vy * mag * f),        0);
-                        gs += at(x - (int)(vx * mag * f * 0.5f), y - (int)(vy * mag * f * 0.5f), 1);
-                    }
-                    d[0] = (uint8_t)(rs / TAPS);
-                    d[1] = (uint8_t)(gs / TAPS);
-                    d[2] = at(x, y, 2);
-                }
-        }
-    }
 }
 
 static void cpu_apply_vhs(uint8_t* px, int w, int h,
@@ -730,6 +671,104 @@ static ThreadPool& pool() {
     }
     return p;
 }
+static ThreadPool& pixel_pool() {
+    static ThreadPool p;
+    if (p.workers.empty()) {
+        int n = (int)std::thread::hardware_concurrency();
+        if (n < 2) n = 2;
+        if (n > 8) n = 8;
+        p.start(n);
+    }
+    return p;
+}
+static void datamosh_rgb(uint8_t* rgb, int w, int h, float intensity, float time_sec) {
+    if (!rgb || intensity <= 0.f || w <= 0 || h <= 0) return;
+    if (intensity > 1.f) intensity = 1.f;
+    // Read-only snapshot for the smear taps, owned by the calling thread.
+    // Bands below only read it (the submit fence carries visibility), so any
+    // partitioning of the block rows yields byte-identical output.
+    static thread_local std::vector<uint8_t> src;
+    src.assign(rgb, rgb + (size_t)w * h * 3);
+    const uint8_t* const snap = src.data();
+
+    static constexpr int B     = 16;                          // macroblock size (px)
+    const float          reach = 6.f + intensity * 70.f;      // max smear length
+    static constexpr int TAPS  = 5;                           // samples along each trail
+    const uint32_t       frame = (uint32_t)(time_sec * 24.f);
+
+    // One horizontal band of block rows [by0, by1). Both bounds stay on the
+    // 16 px block grid so block indices (and hence hashes) match serial.
+    auto band = [&](int by0, int by1) {
+        auto at = [&](int x, int y, int c) -> uint8_t {
+            if (x < 0) x = 0; else if (x >= w) x = w - 1;
+            if (y < 0) y = 0; else if (y >= h) y = h - 1;
+            return snap[((size_t)y * w + x) * 3 + c];
+        };
+        for (int by = by0; by < by1; by += B) {
+            for (int bx = 0; bx < w; bx += B) {
+                int bxi = bx / B, byi = by / B;
+                uint32_t hb = dm_hash((uint32_t)bxi | ((uint32_t)byi << 16), frame);
+
+                // Coherent pseudo-motion flow: a low-frequency field (neighbouring
+                // blocks share a direction, so it reads as a moving region rather than
+                // noise) plus a per-block jitter. This is what fakes the "P-frame
+                // motion applied to the wrong content" smear without a real codec.
+                float fa = sinf(bxi * 0.20f + time_sec * 1.3f) + cosf(byi * 0.17f - time_sec * 0.9f);
+                float fb = cosf(bxi * 0.15f - time_sec * 1.1f) + sinf(byi * 0.23f + time_sec * 0.7f);
+                float vx = fa * 0.6f + (((int)((hb >> 8)  & 0xFF) - 128) / 128.f) * 0.8f;
+                float vy = fb * 0.6f + (((int)((hb >> 16) & 0xFF) - 128) / 128.f) * 0.8f;
+                float vl = sqrtf(vx*vx + vy*vy) + 1e-4f; vx /= vl; vy /= vl;
+                float mag = reach * (0.4f + 0.6f * ((hb & 0xFF) / 255.f));
+
+                // Patchy block selection (scaled by intensity); a rare few "lose" the
+                // macroblock entirely → frozen, channel-swapped flat region.
+                float pick = (float)((hb >> 24) & 0xFF) / 255.f;
+                bool smear = pick < intensity * 0.9f + 0.05f;
+                bool lost  = pick > 0.97f - intensity * 0.10f;
+                if (!smear && !lost) continue;            // clean blocks pass through
+
+                for (int y = by; y < by + B && y < h; ++y)
+                    for (int x = bx; x < bx + B && x < w; ++x) {
+                        uint8_t* d = rgb + ((size_t)y * w + x) * 3;
+                        if (lost) {                        // decoder gave up here
+                            int sx = x - (int)(vx * mag), sy = y - (int)(vy * mag);
+                            d[0] = at(sx, sy, 1); d[1] = at(sx, sy, 2); d[2] = at(sx, sy, 0);
+                            continue;
+                        }
+                        // Directional smear: average taps back along the flow → a
+                        // trail. Chroma lags luma (G half-shift, B static) → the
+                        // signature cyan/magenta datamosh bleed along the streak.
+                        int rs = 0, gs = 0;
+                        for (int k = 0; k < TAPS; ++k) {
+                            float f = (float)k / (TAPS - 1);
+                            rs += at(x - (int)(vx * mag * f),        y - (int)(vy * mag * f),        0);
+                            gs += at(x - (int)(vx * mag * f * 0.5f), y - (int)(vy * mag * f * 0.5f), 1);
+                        }
+                        d[0] = (uint8_t)(rs / TAPS);
+                        d[1] = (uint8_t)(gs / TAPS);
+                        d[2] = at(x, y, 2);
+                    }
+            }
+        }
+    };
+
+    const int nby = (h + B - 1) / B;
+    const int bands = nby < 8 ? 1 : 8;
+    if (bands < 2) { band(0, h); return; }
+    ThreadPool& tp = pixel_pool();
+    const int rows_per = (nby + bands - 1) / bands;
+    for (int b = 0; b < bands; ++b) {
+        const int r0 = b * rows_per;
+        if (r0 >= nby) break;
+        int r1 = r0 + rows_per;
+        if (r1 > nby) r1 = nby;
+        const int y0 = r0 * B;
+        int y1 = r1 * B;
+        if (y1 > h) y1 = h;
+        tp.submit([&, y0, y1]{ band(y0, y1); });
+    }
+    tp.wait_idle();
+}
 
 // CPU-only: apply pixel FX to an existing RGB buffer (in-place) and
 // (optionally) composite to RGBA in `rgba_out`. No GL. Safe to call on any
@@ -1004,8 +1043,21 @@ static bool intermediate_decode_locked(PreviewState& pv, int frame_idx,
         return false;
 
     uint64_t offset = pv.proxy.offsets[(size_t)frame_idx];
-    if (av_seek_frame(pv.fmt_ctx, -1, (int64_t)offset, AVSEEK_FLAG_BYTE) < 0)
-        return false;
+    // Stream-tb timestamp of the wanted frame; only used when the byte seek
+    // below is refused (AV_NOPTS_VALUE = byte seek worked, take first frame).
+    int64_t want_ts = AV_NOPTS_VALUE;
+    if (av_seek_frame(pv.fmt_ctx, -1, (int64_t)offset, AVSEEK_FLAG_BYTE) < 0) {
+        // The mov/mp4 demuxer rejects byte seeks — fall back to a time seek.
+        // The intermediate is CFR all-intra, so frame times are exact; the
+        // truncation below can only land at or before the packet, never past
+        // it, so the pts guard in the receive loop can't skip the target.
+        double fps = (pv.proxy.fps_num > 0 && pv.proxy.fps_den > 0)
+            ? (double)pv.proxy.fps_num / (double)pv.proxy.fps_den : 0.0;
+        if (fps <= 0.0 || pv.stream_tb.num <= 0 || pv.stream_tb.den <= 0) return false;
+        want_ts = (int64_t)((double)frame_idx / fps / av_q2d(pv.stream_tb));
+        if (av_seek_frame(pv.fmt_ctx, pv.stream_idx, want_ts, AVSEEK_FLAG_BACKWARD) < 0)
+            return false;
+    }
     avcodec_flush_buffers(pv.dec_ctx);
 
     AVPacket* pkt    = av_packet_alloc();
@@ -1017,6 +1069,14 @@ static bool intermediate_decode_locked(PreviewState& pv, int frame_idx,
         avcodec_send_packet(pv.dec_ctx, pkt);
         av_packet_unref(pkt);
         while (!got && avcodec_receive_frame(pv.dec_ctx, frm) == 0) {
+            // Time-seek fallback: the backward seek may have landed on an
+            // earlier keyframe (every frame is one) — skip anything before
+            // the wanted timestamp.
+            if (want_ts != AV_NOPTS_VALUE) {
+                int64_t fpts = frm->best_effort_timestamp;
+                if (fpts == AV_NOPTS_VALUE) fpts = frm->pts;
+                if (fpts != AV_NOPTS_VALUE && fpts < want_ts) { av_frame_unref(frm); continue; }
+            }
             // Transfer HW frames to CPU memory; if that fails (broken HW
             // context), fall through and sws_scale on the HW format will
             // fail cleanly below.
@@ -1267,6 +1327,51 @@ static int max_frame_idx_for(const PreviewState& pv) {
     if (pv.source == PreviewSource::Native && pv.info.fps > 0.0)
         return (int)(pv.info.duration * pv.info.fps + 0.5);
     return 0;
+}
+
+// Broken-HW fallback: try_attach_hw only verifies device creation, never an
+// actual decode+transfer — creation can succeed while every frame fails
+// (missing firmware, headless session, quirky driver). Only a real decode
+// proves the path works. If the frame-0 probe fails with HW attached, rebuild
+// the decoder in pure software and retry once — software decode is always
+// available, so a clip can't be left permanently preview-less. Mirrors the
+// proxy worker's hw→software retry.
+static bool reopen_decoder_software(PreviewState& pv) {
+    if (!pv.dec_ctx) return false;
+    const AVCodec* codec = avcodec_find_decoder(pv.dec_ctx->codec_id);
+    if (!codec) return false;
+    AVCodecParameters* par = avcodec_parameters_alloc();
+    if (!par) return false;
+    bool ok = false;
+    if (avcodec_parameters_from_context(par, pv.dec_ctx) >= 0) {
+        avcodec_free_context(&pv.dec_ctx);
+        if (pv.hw_dev_ctx) { av_buffer_unref(&pv.hw_dev_ctx); pv.hw_dev_ctx = nullptr; }
+        pv.hw_pix_fmt = AV_PIX_FMT_NONE;
+        pv.dec_ctx = avcodec_alloc_context3(codec);
+        if (pv.dec_ctx && avcodec_parameters_to_context(pv.dec_ctx, par) >= 0) {
+            pv.dec_ctx->thread_count = 2;
+            ok = avcodec_open2(pv.dec_ctx, codec, nullptr) >= 0;
+        }
+    }
+    avcodec_parameters_free(&par);
+    if (!ok) return false;
+    if (pv.sws) { sws_freeContext(pv.sws); pv.sws = nullptr; }
+    pv.sws_src_fmt = AV_PIX_FMT_NONE;
+    pv.sws_is_rgba = false;
+    pv.preview_w = pv.preview_h = 0;
+    pv.last_frame_idx = -1;
+    pv.last_decoded_pts = -1.0;
+    ring_invalidate(pv);
+    return true;
+}
+
+static void probe_frame0_or_fallback_sw(int track_id) {
+    PreviewState& pv = g_pv[track_id];
+    if (video_get_texture(track_id, 0.0)) return;
+    if (!pv.hw_dev_ctx) return;
+    fprintf(stderr, "[video] HW decode produced no frames, retrying in software\n");
+    if (!reopen_decoder_software(pv)) return;
+    (void)video_get_texture(track_id, 0.0);
 }
 
 // Decode (or sequentially advance) to the given frame index, transfer to CPU
@@ -1598,8 +1703,9 @@ bool video_open_native(int track_id, const std::string& path) {
     pv.last_frame_idx = -1;
     pv.last_decoded_pts = -1.0;
 
-    // Decode frame 0 so the canvas has something to show immediately.
-    (void)video_get_texture(track_id, 0.0);
+    // Decode frame 0 so the canvas has something to show immediately (with
+    // software fallback when HW decode yields nothing).
+    probe_frame0_or_fallback_sw(track_id);
     return true;
 }
 
@@ -1669,8 +1775,8 @@ bool video_open_intermediate(int track_id, const ProxyInfo& proxy) {
     pv.info.duration = proxy.fps > 0.0
                        ? (double)proxy.frame_count / proxy.fps : 0.0;
 
-    // Show frame 0 immediately.
-    (void)video_get_texture(track_id, 0.0);
+    // Show frame 0 immediately (with software fallback when HW decode yields nothing).
+    probe_frame0_or_fallback_sw(track_id);
     return true;
 }
 
@@ -2267,6 +2373,11 @@ static struct ExportState {
     int              cache_w          = 0;
     int              cache_h          = 0;
     double           cache_pts        = -1.0;
+    // Reusable decode scratch — allocated on first use, freed in
+    // video_close_export. Avoids an av_packet_alloc + av_frame_alloc per
+    // output frame per layer (15000+ allocations over a 25 s 13-layer export).
+    AVPacket*        pkt              = nullptr;
+    AVFrame*         frm              = nullptr;
 } g_ex[MAX_VIDEO_TRACKS * 2];
 
 bool video_open_export(int slot, const std::string& path) {
@@ -2349,13 +2460,62 @@ bool video_open_export(int slot, const std::string& path) {
     return true;
 }
 
+// ── Export frame-data buffer pool ────────────────────────────────────────────
+// video_decode_frame_at produces one 2–8 MB RGBA buffer per layer per output
+// frame and the caller frees it right after GL upload; the steady malloc/free
+// churn is pure overhead (tens of GB over a long multi-layer export). Pool
+// exact-size buffers instead: frame_data_alloc reuses a stashed buffer of the
+// same pixel size, frame_data_free stashes instead of freeing. Bounded (32
+// per size) so idle memory stays small. Buffers carry 64 bytes of slack past
+// the pixels for row-overread safety, matching the old av_malloc(+64) calls.
+// Export decoding runs on one thread (like the datamosh scratch below), so
+// the pool is thread_local and needs no locking.
+namespace {
+constexpr size_t kFramePoolSlack = 64;
+constexpr size_t kFramePoolMaxPerSize = 32;
+struct FramePool {
+    std::unordered_map<size_t, std::vector<uint8_t*>> free_list;
+    std::unordered_set<uint8_t*> live;  // every buffer the pool handed out
+};
+FramePool& frame_pool() {
+    static thread_local FramePool pool;
+    return pool;
+}
+}  // namespace
+static uint8_t* frame_data_alloc(int w, int h) {
+    if (w <= 0 || h <= 0) return nullptr;
+    const size_t px = (size_t)w * h * 4;
+    auto& pool = frame_pool();
+    auto it = pool.free_list.find(px);
+    if (it != pool.free_list.end() && !it->second.empty()) {
+        uint8_t* b = it->second.back();
+        it->second.pop_back();
+        return b;
+    }
+    uint8_t* b = (uint8_t*)av_malloc(px + kFramePoolSlack);
+    if (b) pool.live.insert(b);
+    return b;
+}
+static void frame_data_free(uint8_t* b, int w, int h) {
+    if (!b || w <= 0 || h <= 0) { av_free(b); return; }
+    auto& pool = frame_pool();
+    if (pool.live.find(b) == pool.live.end()) { av_free(b); return; }  // foreign
+    const size_t px = (size_t)w * h * 4;
+    auto& v = pool.free_list[px];
+    if (v.size() < kFramePoolMaxPerSize) { v.push_back(b); return; }
+    pool.live.erase(b);
+    av_free(b);
+}
+
 void video_close_export(int slot) {
     if (slot < 0 || slot >= MAX_VIDEO_TRACKS * 2) return;
     ExportState& ex = g_ex[slot];
     if (ex.sws)       { sws_freeContext(ex.sws);       ex.sws       = nullptr; }
     if (ex.codec_ctx) { avcodec_free_context(&ex.codec_ctx); }
     if (ex.fmt_ctx)   { avformat_close_input(&ex.fmt_ctx); }
-    if (ex.cache_data){ av_free(ex.cache_data); ex.cache_data = nullptr; }
+    if (ex.pkt)       { av_packet_free(&ex.pkt); }
+    if (ex.frm)       { av_frame_free(&ex.frm); }
+    if (ex.cache_data){ frame_data_free(ex.cache_data, ex.cache_w, ex.cache_h); ex.cache_data = nullptr; }
     ex.cache_w = ex.cache_h = 0;
     ex.cache_pts        = -1.0;
     ex.stream_idx       = -1;
@@ -2373,7 +2533,7 @@ static VideoFrame* decode_and_rotate(ExportState& ex, AVFrame* frm) {
     VideoFrame* vf = new VideoFrame();
     vf->width  = ex.info.width;
     vf->height = ex.info.height;
-    vf->data   = (uint8_t*)av_malloc((size_t)vf->width * vf->height * 4 + 64);
+    vf->data   = frame_data_alloc(vf->width, vf->height);
     AVStream* st = ex.fmt_ctx->streams[ex.stream_idx];
     vf->pts = frm->pts * av_q2d(st->time_base);
     uint8_t* dst[1] = { vf->data };
@@ -2385,7 +2545,7 @@ static VideoFrame* decode_and_rotate(ExportState& ex, AVFrame* frm) {
         int ow = vf->width, oh = vf->height;
         int nw = (ex.rotation == 90 || ex.rotation == 270) ? oh : ow;
         int nh = (ex.rotation == 90 || ex.rotation == 270) ? ow : oh;
-        uint8_t* rot = (uint8_t*)av_malloc((size_t)nw * nh * 4 + 64);
+        uint8_t* rot = frame_data_alloc(nw, nh);
         if (rot) {
             for (int y = 0; y < oh; ++y) {
                 for (int x = 0; x < ow; ++x) {
@@ -2398,7 +2558,7 @@ static VideoFrame* decode_and_rotate(ExportState& ex, AVFrame* frm) {
                     d[0]=s[0]; d[1]=s[1]; d[2]=s[2]; d[3]=s[3];
                 }
             }
-            av_free(vf->data);
+            frame_data_free(vf->data, ow, oh);
             vf->data   = rot;
             vf->width  = nw;
             vf->height = nh;
@@ -2431,7 +2591,7 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
         hit->width  = ex.cache_w;
         hit->height = ex.cache_h;
         hit->pts    = ex.cache_pts;
-        hit->data   = (uint8_t*)av_malloc(bytes);
+        hit->data   = frame_data_alloc(hit->width, hit->height);
         if (!hit->data) { delete hit; return nullptr; }
         memcpy(hit->data, ex.cache_data, bytes);
         return hit;
@@ -2461,8 +2621,13 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
         avcodec_flush_buffers(ex.codec_ctx);
     }
 
-    AVPacket*   pkt    = av_packet_alloc();
-    AVFrame*    frm    = av_frame_alloc();
+    // Reusable per-slot packet/frame (allocated once, freed in
+    // video_close_export) instead of two allocations per call.
+    if (!ex.pkt) ex.pkt = av_packet_alloc();
+    if (!ex.frm) ex.frm = av_frame_alloc();
+    AVPacket*   pkt    = ex.pkt;
+    AVFrame*    frm    = ex.frm;
+    if (!pkt || !frm) return nullptr;
     VideoFrame* result = nullptr;
 
     // AVSEEK_FLAG_BACKWARD lands on the keyframe before the target.
@@ -2502,7 +2667,7 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
                 done = true;
             } else {
                 // This frame is at or before the target — keep it as best candidate.
-                if (result) { av_free(result->data); delete result; }
+                if (result) { frame_data_free(result->data, result->width, result->height); delete result; }
                 result = decode_and_rotate(ex, frm);
                 av_frame_unref(frm);
                 // If pts is within half a frame of target, we're accurate enough.
@@ -2521,8 +2686,8 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
         // Refresh cache with this decoded frame so subsequent same-frame requests hit.
         size_t bytes = (size_t)result->width * result->height * 4;
         if (ex.cache_w != result->width || ex.cache_h != result->height) {
-            if (ex.cache_data) { av_free(ex.cache_data); ex.cache_data = nullptr; }
-            ex.cache_data = (uint8_t*)av_malloc(bytes);
+            if (ex.cache_data) { frame_data_free(ex.cache_data, ex.cache_w, ex.cache_h); ex.cache_data = nullptr; }
+            ex.cache_data = frame_data_alloc(result->width, result->height);
             ex.cache_w = result->width;
             ex.cache_h = result->height;
         }
@@ -2533,21 +2698,20 @@ VideoFrame* video_decode_frame_at(int slot, double seconds) {
         // than returning null (which would produce a blank/black flash).
         // Re-decode at last_decoded_pts; this will seek and return the same frame.
         // Only do this once (don't recurse if the re-decode also fails).
-        av_packet_free(&pkt);
-        av_frame_free(&frm);
+        av_packet_unref(pkt);  // scratch stays in the slot; recursion reuses it
+        av_frame_unref(frm);
         double hold_pts = ex.last_decoded_pts;
         ex.last_decoded_pts = -1.0;  // force re-seek
         return video_decode_frame_at(slot, hold_pts);
     }
 
-    av_packet_free(&pkt);
-    av_frame_free(&frm);
+    // pkt/frm stay allocated in the slot for the next call (freed on close).
     return result;
 }
 
 void video_free_frame(VideoFrame* f) {
     if (!f) return;
-    av_free(f->data);
+    frame_data_free(f->data, f->width, f->height);
     delete f;
 }
 

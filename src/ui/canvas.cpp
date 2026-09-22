@@ -169,7 +169,7 @@ void compute_video_bbox(AppState& state, Clip& cl, ImVec2 p, float w, float h,
     float sy = cl.eval_prop("scale_y", state.playhead);
     float fit_w = w, fit_h = h;
     bool got_aspect = false;
-    std::string vkey = clip_slot_key(clip_video_src(state, cl), cl.start);
+    std::string vkey = clip_slot_key(cl.text, cl.start);  // stable source key, not the decode file
     for (int s = 0; s < MAX_VIDEO_SLOTS; ++s) {
         if (state.proxy_paths[s] == vkey && video_info(s).width > 0) {
             // Crop changes the displayed aspect — bbox must match the render.
@@ -258,7 +258,7 @@ static void draw_crop_mode(AppState& state, ImDrawList* dl, ImVec2 p, float w, f
     // Source dims (for the px readout and aspect-lock math).
     int src_w = 0, src_h = 0;
     {
-        std::string vkey = clip_slot_key(clip_video_src(state, cl), cl.start);
+        std::string vkey = clip_slot_key(cl.text, cl.start);  // stable source key, not the decode file
         for (int s = 0; s < MAX_VIDEO_SLOTS; ++s)
             if (state.proxy_paths[s] == vkey && video_info(s).width > 0)
                 { src_w = video_info(s).width; src_h = video_info(s).height; break; }
@@ -1758,13 +1758,23 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     // Mirrors the active-clip selection logic farther down — keep in sync.
     {
         auto make_pfx = [&](const Clip* cl_ptr, int ti) {
+            (void)cl_ptr;
             PixelFX pfx;
             CreativeFXAccum cfx2 = collect_glass_fx(state, state.playhead, ti);
-            // bg-removal no longer rides PixelFX — the RemoveBackground brick shader
-            // does the cutout (single path; no CPU alpha-bake).
-            pfx.datamosh_on        = cfx2.datamosh_on;
-            pfx.datamosh_intensity = cfx2.datamosh_intensity;
-            pfx.datamosh_spread    = cfx2.datamosh_spread;
+            // Must match the draw path's glass-else-global datamosh exactly:
+            // any difference bumps fx_stamp between prefetch and display, so
+            // the pool decodes one variant and the display pass synchronously
+            // re-decodes another — every layer decoded twice per frame.
+            if (!cfx2.datamosh_on) {
+                CreativeFXAccum gcfx = collect_creative_fx(state, state.playhead, ti);
+                pfx.datamosh_on        = gcfx.datamosh_on;
+                pfx.datamosh_intensity = gcfx.datamosh_intensity;
+                pfx.datamosh_spread    = gcfx.datamosh_spread;
+            } else {
+                pfx.datamosh_on        = cfx2.datamosh_on;
+                pfx.datamosh_intensity = cfx2.datamosh_intensity;
+                pfx.datamosh_spread    = cfx2.datamosh_spread;
+            }
             pfx.time               = t_anim;
             return pfx;
         };
@@ -1781,7 +1791,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             if (!cl || !clip_is_videolike_type(cl->clip_type)) return;
             std::string vsrc = clip_video_src(state, *cl);   // conformed copy if ready
             int slot = slot_for_video(const_cast<AppState&>(state),
-                                      clip_slot_key(vsrc, cl->start), vsrc);
+                                      clip_slot_key(cl->text, cl->start), vsrc);  // stable source key
             if (slot < 0 || !video_is_open(slot)) return;
             if (already_queued(slot)) return;
             video_set_pixel_fx(slot, make_pfx(cl, ti));
@@ -1973,19 +1983,31 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 if (!cl_ptr) return;
                 std::string vsrc = clip_video_src(state, *cl_ptr);  // conformed copy if ready
                 int slot = slot_for_video(const_cast<AppState&>(state),
-                               clip_slot_key(vsrc, cl_ptr->start), vsrc);
+                               clip_slot_key(cl_ptr->text, cl_ptr->start), vsrc);  // stable source key
                 float src_t = clip_src_time(*cl_ptr, at_time);
 
                 // Glass-only cfx for CPU-side datamosh and ZoomPunch — global FX
                 // are applied once to the full composite via scene_apply_fx, not per-clip.
+                // ...except global DATAMOSH, which export bakes into every layer
+                // pre-upload (render.cpp gl_render_vid_clip collects global
+                // creative FX per layer). Without this the preview misses the
+                // block-confetti entirely while export is full of it. Mirror
+                // export: glass datamosh wins when present (export applies
+                // global-then-glass; the single pfx slot can't express the
+                // double-apply edge, so glass-only timelines match exactly and
+                // both-on timelines preview one pass instead of two).
                 CreativeFXAccum cfx = collect_glass_fx(state, at_time, ti);
+                CreativeFXAccum gcfx;
+                if (!cfx.datamosh_on)
+                    gcfx = collect_creative_fx(state, at_time, ti);
+                const CreativeFXAccum& mcfx = cfx.datamosh_on ? cfx : gcfx;
                 if (slot >= 0) {
                     PixelFX pfx;
                     // bg-removal no longer rides PixelFX — the RemoveBackground brick
                     // shader does the cutout (single path; no CPU alpha-bake).
-                    pfx.datamosh_on        = cfx.datamosh_on;
-                    pfx.datamosh_intensity = cfx.datamosh_intensity;
-                    pfx.datamosh_spread    = cfx.datamosh_spread;
+                    pfx.datamosh_on        = mcfx.datamosh_on;
+                    pfx.datamosh_intensity = mcfx.datamosh_intensity;
+                    pfx.datamosh_spread    = mcfx.datamosh_spread;
                     pfx.time               = t_anim;
                     video_set_pixel_fx(slot, pfx);
                 }
@@ -2326,8 +2348,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             EffectAccum     ea  = collect_effects_for_track(state, state.playhead, ti);
             CreativeFXAccum cfx = collect_creative_fx_for_track(state, state.playhead, ti);
             if (ea.any_color || ea.any_blur || ea.any_vignette || ea.any_text ||
-                cfx.any_cfx || cfx.any_gen_fx)
+                cfx.any_cfx || cfx.any_gen_fx) {
                 scene_apply_fx((int)w, (int)h, ea, cfx, t_anim);
+            }
         }
     }  // end Pass 1 track loop
 

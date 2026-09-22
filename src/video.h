@@ -235,7 +235,7 @@ void  video_close_export_all();  // close every slot (call at end of render)
 
 // Frame-accurate single-frame decode.  Caller must call video_free_frame().
 VideoFrame* video_decode_frame_at(int slot, double seconds);
-void        video_free_frame(VideoFrame* f);  // av_free(data) + delete
+void        video_free_frame(VideoFrame* f);  // returns data to pool + delete
 
 // Returns dimensions of the currently open export file (0,0 if none open).
 int video_export_width (int slot = 0);

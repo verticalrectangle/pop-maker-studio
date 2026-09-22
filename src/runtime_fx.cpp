@@ -4,6 +4,7 @@
 
 #if PMS_HAS_GL
 #include "gl_compat.h"
+#include "gl_uniform_cache.h"
 
 #include <filesystem>
 #include <fstream>
@@ -130,6 +131,7 @@ static void compile_def(RuntimeFXDef& def) {
     if (def.program) { glDeleteProgram(def.program); def.program = 0; }
     std::string frag = build_frag_src(def);
     def.program = make_program(k_vert_src, frag, def.compile_error);
+    uni_cache_clear();  // driver may recycle ids — drop stale locations
 }
 
 // ── Ensure vert shader and blend program exist ────────────────────────────────
@@ -267,6 +269,7 @@ void runtime_fx_shutdown() {
     if (g_out_tex) { glDeleteTextures(1, &g_out_tex);     g_out_tex = 0; }
     if (g_blend_prog) { glDeleteProgram(g_blend_prog); g_blend_prog = 0; }
     if (g_vert) { glDeleteShader(g_vert); g_vert = 0; }
+    uni_cache_clear();
     g_out_w = g_out_h = 0;
 }
 
@@ -306,13 +309,13 @@ uintptr_t runtime_fx_apply(const std::string& id,
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
-    glUniform1i(glGetUniformLocation(def->program, "tex"), 0);
-    glUniform2f(glGetUniformLocation(def->program, "res"), (float)w, (float)h);
-    glUniform1f(glGetUniformLocation(def->program, "t"), t);
+    glUniform1i(uni_loc(def->program, "tex"), 0);
+    glUniform2f(uni_loc(def->program, "res"), (float)w, (float)h);
+    glUniform1f(uni_loc(def->program, "t"), t);
 
     for (int i = 0; i < (int)def->params.size(); ++i) {
         float v = (i < (int)param_values.size()) ? param_values[i] : def->params[i].default_val;
-        GLint loc = glGetUniformLocation(def->program, def->params[i].name.c_str());
+        GLint loc = uni_loc(def->program, def->params[i].name.c_str());
         if (loc >= 0) glUniform1f(loc, v);
     }
 
@@ -349,13 +352,13 @@ uintptr_t runtime_fx_apply(const std::string& id,
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, (GLuint)src_tex);
-        glUniform1i(glGetUniformLocation(g_blend_prog, "u_orig"), 0);
+        glUniform1i(uni_loc(g_blend_prog, "u_orig"), 0);
 
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, g_out_tex);
-        glUniform1i(glGetUniformLocation(g_blend_prog, "u_fx"), 1);
+        glUniform1i(uni_loc(g_blend_prog, "u_fx"), 1);
 
-        glUniform1f(glGetUniformLocation(g_blend_prog, "u_amount"), amount);
+        glUniform1f(uni_loc(g_blend_prog, "u_amount"), amount);
 
         if (!g_vao) glGenVertexArrays(1, &g_vao);
         glBindVertexArray(g_vao);

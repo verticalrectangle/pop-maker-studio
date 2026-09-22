@@ -4,11 +4,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.pixelate_amount);
-            glUniform1f(glGetUniformLocation(p, "u_size"), cfx.pixelate_size);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.pixelate_amount);
+            glUniform1f(uni_loc(p, "u_size"), cfx.pixelate_size);
             run1(p);
             if (cfx.pixelate_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.pixelate_amount, g_pp.fbo[pslot], w, h);
@@ -23,12 +23,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.film_grain_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.film_grain_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_size"), cfx.film_grain_size);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.film_grain_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.film_grain_intensity);
+            glUniform1f(uni_loc(p, "u_size"), cfx.film_grain_size);
             run1(p);
             if (cfx.film_grain_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.film_grain_amount, g_pp.fbo[pslot], w, h);
@@ -43,11 +43,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.scanlines_amount);
-            glUniform1f(glGetUniformLocation(p, "u_density"), cfx.scanlines_density);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.scanlines_amount);
+            glUniform1f(uni_loc(p, "u_density"), cfx.scanlines_density);
             run1(p);
             if (cfx.scanlines_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.scanlines_amount, g_pp.fbo[pslot], w, h);
@@ -62,10 +62,10 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.chromatic_aberration_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.chromatic_aberration_amount);
             run1(p);
             if (cfx.chromatic_aberration_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.chromatic_aberration_amount, g_pp.fbo[pslot], w, h);
@@ -80,16 +80,16 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.duotone_amount);
-            glUniform1f(glGetUniformLocation(p, "u_shadow_r"), cfx.duotone_shadow_r);
-            glUniform1f(glGetUniformLocation(p, "u_shadow_g"), cfx.duotone_shadow_g);
-            glUniform1f(glGetUniformLocation(p, "u_shadow_b"), cfx.duotone_shadow_b);
-            glUniform1f(glGetUniformLocation(p, "u_highlight_r"), cfx.duotone_highlight_r);
-            glUniform1f(glGetUniformLocation(p, "u_highlight_g"), cfx.duotone_highlight_g);
-            glUniform1f(glGetUniformLocation(p, "u_highlight_b"), cfx.duotone_highlight_b);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.duotone_amount);
+            glUniform1f(uni_loc(p, "u_shadow_r"), cfx.duotone_shadow_r);
+            glUniform1f(uni_loc(p, "u_shadow_g"), cfx.duotone_shadow_g);
+            glUniform1f(uni_loc(p, "u_shadow_b"), cfx.duotone_shadow_b);
+            glUniform1f(uni_loc(p, "u_highlight_r"), cfx.duotone_highlight_r);
+            glUniform1f(uni_loc(p, "u_highlight_g"), cfx.duotone_highlight_g);
+            glUniform1f(uni_loc(p, "u_highlight_b"), cfx.duotone_highlight_b);
             run1(p);
             if (cfx.duotone_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.duotone_amount, g_pp.fbo[pslot], w, h);
@@ -104,11 +104,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.neon_glow_amount);
-            glUniform1f(glGetUniformLocation(p, "u_width"), cfx.neon_glow_width);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.neon_glow_amount);
+            glUniform1f(uni_loc(p, "u_width"), cfx.neon_glow_width);
             run1(p);
             if (cfx.neon_glow_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.neon_glow_amount, g_pp.fbo[pslot], w, h);
@@ -123,10 +123,10 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.thermal_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.thermal_amount);
             run1(p);
             if (cfx.thermal_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.thermal_amount, g_pp.fbo[pslot], w, h);
@@ -141,12 +141,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.night_vision_amount);
-            glUniform1f(glGetUniformLocation(p, "u_noise"), cfx.night_vision_noise);
-            glUniform1f(glGetUniformLocation(p, "u_gain"), cfx.night_vision_gain);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.night_vision_amount);
+            glUniform1f(uni_loc(p, "u_noise"), cfx.night_vision_noise);
+            glUniform1f(uni_loc(p, "u_gain"), cfx.night_vision_gain);
             run1(p);
             if (cfx.night_vision_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.night_vision_amount, g_pp.fbo[pslot], w, h);
@@ -161,13 +161,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.old_film_amount);
-            glUniform1f(glGetUniformLocation(p, "u_sepia"), cfx.old_film_sepia);
-            glUniform1f(glGetUniformLocation(p, "u_scratch"), cfx.old_film_scratch);
-            glUniform1f(glGetUniformLocation(p, "u_flicker"), cfx.old_film_flicker);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.old_film_amount);
+            glUniform1f(uni_loc(p, "u_sepia"), cfx.old_film_sepia);
+            glUniform1f(uni_loc(p, "u_scratch"), cfx.old_film_scratch);
+            glUniform1f(uni_loc(p, "u_flicker"), cfx.old_film_flicker);
             run1(p);
             if (cfx.old_film_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.old_film_amount, g_pp.fbo[pslot], w, h);
@@ -182,11 +182,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.holographic_amount);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.holographic_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.holographic_amount);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.holographic_speed);
             run1(p);
             if (cfx.holographic_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.holographic_amount, g_pp.fbo[pslot], w, h);
@@ -201,12 +201,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.rgb_split_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.rgb_split_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.rgb_split_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.rgb_split_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.rgb_split_intensity);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.rgb_split_speed);
             run1(p);
             if (cfx.rgb_split_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.rgb_split_amount, g_pp.fbo[pslot], w, h);
@@ -221,11 +221,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.posterize_amount);
-            glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.posterize_levels);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.posterize_amount);
+            glUniform1f(uni_loc(p, "u_levels"), cfx.posterize_levels);
             run1(p);
             if (cfx.posterize_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.posterize_amount, g_pp.fbo[pslot], w, h);
@@ -240,11 +240,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.halftone_amount);
-            glUniform1f(glGetUniformLocation(p, "u_size"), cfx.halftone_size);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.halftone_amount);
+            glUniform1f(uni_loc(p, "u_size"), cfx.halftone_size);
             run1(p);
             if (cfx.halftone_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.halftone_amount, g_pp.fbo[pslot], w, h);
@@ -259,10 +259,10 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.fisheye_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.fisheye_amount);
             run1(p);
             if (cfx.fisheye_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.fisheye_amount, g_pp.fbo[pslot], w, h);
@@ -277,10 +277,10 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.bleach_bypass_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.bleach_bypass_amount);
             run1(p);
             if (cfx.bleach_bypass_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.bleach_bypass_amount, g_pp.fbo[pslot], w, h);
@@ -295,11 +295,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.color_burn_amount);
-            glUniform1f(glGetUniformLocation(p, "u_hue"), cfx.color_burn_hue);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.color_burn_amount);
+            glUniform1f(uni_loc(p, "u_hue"), cfx.color_burn_hue);
             run1(p);
             if (cfx.color_burn_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.color_burn_amount, g_pp.fbo[pslot], w, h);
@@ -314,16 +314,16 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.crt_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.crt_amount);
             {
                 float _n = (cfx.crt_curvature - 0.05f) / 0.95f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_curvature"), 0.05f + powf(_n, 0.5f) * 0.95f);
+                glUniform1f(uni_loc(p, "u_curvature"), 0.05f + powf(_n, 0.5f) * 0.95f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.crt_glow);
+            glUniform1f(uni_loc(p, "u_glow"), cfx.crt_glow);
             run1(p);
             if (cfx.crt_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.crt_amount, g_pp.fbo[pslot], w, h);
@@ -338,11 +338,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.sketch_amount);
-            glUniform1f(glGetUniformLocation(p, "u_invert"), cfx.sketch_invert);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.sketch_amount);
+            glUniform1f(uni_loc(p, "u_invert"), cfx.sketch_invert);
             run1(p);
             if (cfx.sketch_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.sketch_amount, g_pp.fbo[pslot], w, h);
@@ -357,12 +357,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.glitch_block_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.glitch_block_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.glitch_block_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.glitch_block_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.glitch_block_intensity);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.glitch_block_speed);
             run1(p);
             if (cfx.glitch_block_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.glitch_block_amount, g_pp.fbo[pslot], w, h);
@@ -377,21 +377,21 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.lomo_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.lomo_amount);
             {
                 float _n = (cfx.lomo_vignette - 0.1f) / 0.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_vignette"), 0.1f + powf(_n, 0.5f) * 0.9f);
+                glUniform1f(uni_loc(p, "u_vignette"), 0.1f + powf(_n, 0.5f) * 0.9f);
             }
             {
                 float _n = (cfx.lomo_saturation - 0.8f) / 1.2f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_saturation"), 0.8f + powf(_n, 0.5f) * 1.2f);
+                glUniform1f(uni_loc(p, "u_saturation"), 0.8f + powf(_n, 0.5f) * 1.2f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.lomo_fade);
+            glUniform1f(uni_loc(p, "u_fade"), cfx.lomo_fade);
             run1(p);
             if (cfx.lomo_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.lomo_amount, g_pp.fbo[pslot], w, h);
@@ -406,11 +406,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.twirl_amount);
-            glUniform1f(glGetUniformLocation(p, "u_radius"), cfx.twirl_radius);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.twirl_amount);
+            glUniform1f(uni_loc(p, "u_radius"), cfx.twirl_radius);
             run1(p);
             if (cfx.twirl_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.twirl_amount, g_pp.fbo[pslot], w, h);
@@ -425,17 +425,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.ripple_amount);
-            glUniform1f(glGetUniformLocation(p, "u_frequency"), cfx.ripple_frequency);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.ripple_amount);
+            glUniform1f(uni_loc(p, "u_frequency"), cfx.ripple_frequency);
             {
                 float _n = (cfx.ripple_amplitude - 0.005f) / 0.095f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_amplitude"), 0.005f + powf(_n, 0.5f) * 0.095f);
+                glUniform1f(uni_loc(p, "u_amplitude"), 0.005f + powf(_n, 0.5f) * 0.095f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.ripple_speed);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.ripple_speed);
             run1(p);
             if (cfx.ripple_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.ripple_amount, g_pp.fbo[pslot], w, h);
@@ -450,18 +450,18 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.wave_warp_amount);
-            glUniform1f(glGetUniformLocation(p, "u_freq_x"), cfx.wave_warp_freq_x);
-            glUniform1f(glGetUniformLocation(p, "u_freq_y"), cfx.wave_warp_freq_y);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.wave_warp_amount);
+            glUniform1f(uni_loc(p, "u_freq_x"), cfx.wave_warp_freq_x);
+            glUniform1f(uni_loc(p, "u_freq_y"), cfx.wave_warp_freq_y);
             {
                 float _n = (cfx.wave_warp_amplitude - 0.008f) / 0.11199999999999999f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_amplitude"), 0.008f + powf(_n, 0.5f) * 0.11199999999999999f);
+                glUniform1f(uni_loc(p, "u_amplitude"), 0.008f + powf(_n, 0.5f) * 0.11199999999999999f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.wave_warp_speed);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.wave_warp_speed);
             run1(p);
             if (cfx.wave_warp_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.wave_warp_amount, g_pp.fbo[pslot], w, h);
@@ -476,19 +476,19 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.breathe_amount);
-            glUniform1f(glGetUniformLocation(p, "u_breathe_rate"), cfx.breathe_breathe_rate);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.breathe_amount);
+            glUniform1f(uni_loc(p, "u_breathe_rate"), cfx.breathe_breathe_rate);
             {
                 float _n = (cfx.breathe_warp_strength - 0.0f) / 0.15f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_warp_strength"), 0.0f + powf(_n, 0.5f) * 0.15f);
+                glUniform1f(uni_loc(p, "u_warp_strength"), 0.0f + powf(_n, 0.5f) * 0.15f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_color_speed"), cfx.breathe_color_speed);
-            glUniform1f(glGetUniformLocation(p, "u_chroma_split"), cfx.breathe_chroma_split);
-            glUniform1f(glGetUniformLocation(p, "u_complexity"), cfx.breathe_complexity);
+            glUniform1f(uni_loc(p, "u_color_speed"), cfx.breathe_color_speed);
+            glUniform1f(uni_loc(p, "u_chroma_split"), cfx.breathe_chroma_split);
+            glUniform1f(uni_loc(p, "u_complexity"), cfx.breathe_complexity);
             run1(p);
             if (cfx.breathe_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.breathe_amount, g_pp.fbo[pslot], w, h);
@@ -503,13 +503,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.kaleidoscope_amount);
-            glUniform1f(glGetUniformLocation(p, "u_segments"), cfx.kaleidoscope_segments);
-            glUniform1f(glGetUniformLocation(p, "u_rotation"), cfx.kaleidoscope_rotation);
-            glUniform1f(glGetUniformLocation(p, "u_zoom"), cfx.kaleidoscope_zoom);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.kaleidoscope_amount);
+            glUniform1f(uni_loc(p, "u_segments"), cfx.kaleidoscope_segments);
+            glUniform1f(uni_loc(p, "u_rotation"), cfx.kaleidoscope_rotation);
+            glUniform1f(uni_loc(p, "u_zoom"), cfx.kaleidoscope_zoom);
             run1(p);
             if (cfx.kaleidoscope_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.kaleidoscope_amount, g_pp.fbo[pslot], w, h);
@@ -524,13 +524,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.zoom_blur_rad_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.zoom_blur_rad_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_cx"), cfx.zoom_blur_rad_cx);
-            glUniform1f(glGetUniformLocation(p, "u_cy"), cfx.zoom_blur_rad_cy);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.zoom_blur_rad_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.zoom_blur_rad_intensity);
+            glUniform1f(uni_loc(p, "u_cx"), cfx.zoom_blur_rad_cx);
+            glUniform1f(uni_loc(p, "u_cy"), cfx.zoom_blur_rad_cy);
             run1(p);
             if (cfx.zoom_blur_rad_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.zoom_blur_rad_amount, g_pp.fbo[pslot], w, h);
@@ -545,14 +545,14 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.spin_blur_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.spin_blur_amount);
             {
                 float _n = (cfx.spin_blur_angle - 0.01f) / 0.29f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_angle"), 0.01f + powf(_n, 0.5f) * 0.29f);
+                glUniform1f(uni_loc(p, "u_angle"), 0.01f + powf(_n, 0.5f) * 0.29f);
             }
             run1(p);
             if (cfx.spin_blur_amount < 0.999f) {
@@ -568,12 +568,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.heat_haze_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.heat_haze_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.heat_haze_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.heat_haze_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.heat_haze_intensity);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.heat_haze_speed);
             run1(p);
             if (cfx.heat_haze_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.heat_haze_amount, g_pp.fbo[pslot], w, h);
@@ -588,21 +588,21 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.barrel_warp_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.barrel_warp_amount);
             {
                 float _n = (cfx.barrel_warp_k1 - 0.05f) / 0.95f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_k1"), 0.05f + powf(_n, 0.5f) * 0.95f);
+                glUniform1f(uni_loc(p, "u_k1"), 0.05f + powf(_n, 0.5f) * 0.95f);
             }
             {
                 float _n = (cfx.barrel_warp_k2 - 0.0f) / 0.5f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_k2"), 0.0f + powf(_n, 0.5f) * 0.5f);
+                glUniform1f(uni_loc(p, "u_k2"), 0.0f + powf(_n, 0.5f) * 0.5f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.barrel_warp_scale);
+            glUniform1f(uni_loc(p, "u_scale"), cfx.barrel_warp_scale);
             run1(p);
             if (cfx.barrel_warp_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.barrel_warp_amount, g_pp.fbo[pslot], w, h);
@@ -617,13 +617,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.anamorphic_streak_amount);
-            glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.anamorphic_streak_threshold);
-            glUniform1f(glGetUniformLocation(p, "u_length"), cfx.anamorphic_streak_length);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.anamorphic_streak_intensity);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.anamorphic_streak_amount);
+            glUniform1f(uni_loc(p, "u_threshold"), cfx.anamorphic_streak_threshold);
+            glUniform1f(uni_loc(p, "u_length"), cfx.anamorphic_streak_length);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.anamorphic_streak_intensity);
             run1(p);
             if (cfx.anamorphic_streak_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.anamorphic_streak_amount, g_pp.fbo[pslot], w, h);
@@ -638,17 +638,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.starburst_spike_amount);
-            glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.starburst_spike_threshold);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.starburst_spike_amount);
+            glUniform1f(uni_loc(p, "u_threshold"), cfx.starburst_spike_threshold);
             {
                 float _n = (cfx.starburst_spike_length - 0.05f) / 0.5499999999999999f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_length"), 0.05f + powf(_n, 0.5f) * 0.5499999999999999f);
+                glUniform1f(uni_loc(p, "u_length"), 0.05f + powf(_n, 0.5f) * 0.5499999999999999f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_rays"), cfx.starburst_spike_rays);
+            glUniform1f(uni_loc(p, "u_rays"), cfx.starburst_spike_rays);
             run1(p);
             if (cfx.starburst_spike_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.starburst_spike_amount, g_pp.fbo[pslot], w, h);
@@ -663,14 +663,14 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.god_rays_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.god_rays_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_decay"), cfx.god_rays_decay);
-            glUniform1f(glGetUniformLocation(p, "u_cx"), cfx.god_rays_cx);
-            glUniform1f(glGetUniformLocation(p, "u_cy"), cfx.god_rays_cy);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.god_rays_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.god_rays_intensity);
+            glUniform1f(uni_loc(p, "u_decay"), cfx.god_rays_decay);
+            glUniform1f(uni_loc(p, "u_cx"), cfx.god_rays_cx);
+            glUniform1f(uni_loc(p, "u_cy"), cfx.god_rays_cy);
             run1(p);
             if (cfx.god_rays_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.god_rays_amount, g_pp.fbo[pslot], w, h);
@@ -685,13 +685,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.aurora_borealis_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.aurora_borealis_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.aurora_borealis_speed);
-            glUniform1f(glGetUniformLocation(p, "u_color_shift"), cfx.aurora_borealis_color_shift);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.aurora_borealis_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.aurora_borealis_intensity);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.aurora_borealis_speed);
+            glUniform1f(uni_loc(p, "u_color_shift"), cfx.aurora_borealis_color_shift);
             run1(p);
             if (cfx.aurora_borealis_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.aurora_borealis_amount, g_pp.fbo[pslot], w, h);
@@ -706,13 +706,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.bokeh_dream_amount);
-            glUniform1f(glGetUniformLocation(p, "u_radius"), cfx.bokeh_dream_radius);
-            glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.bokeh_dream_threshold);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.bokeh_dream_intensity);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.bokeh_dream_amount);
+            glUniform1f(uni_loc(p, "u_radius"), cfx.bokeh_dream_radius);
+            glUniform1f(uni_loc(p, "u_threshold"), cfx.bokeh_dream_threshold);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.bokeh_dream_intensity);
             run1(p);
             if (cfx.bokeh_dream_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.bokeh_dream_amount, g_pp.fbo[pslot], w, h);
@@ -727,12 +727,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.prism_disperse_amount);
-            glUniform1f(glGetUniformLocation(p, "u_spread"), cfx.prism_disperse_spread);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.prism_disperse_intensity);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.prism_disperse_amount);
+            glUniform1f(uni_loc(p, "u_spread"), cfx.prism_disperse_spread);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.prism_disperse_intensity);
             run1(p);
             if (cfx.prism_disperse_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.prism_disperse_amount, g_pp.fbo[pslot], w, h);
@@ -747,13 +747,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.film_burn_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.film_burn_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.film_burn_speed);
-            glUniform1f(glGetUniformLocation(p, "u_edge"), cfx.film_burn_edge);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.film_burn_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.film_burn_intensity);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.film_burn_speed);
+            glUniform1f(uni_loc(p, "u_edge"), cfx.film_burn_edge);
             run1(p);
             if (cfx.film_burn_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.film_burn_amount, g_pp.fbo[pslot], w, h);
@@ -768,19 +768,19 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.oil_paint_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.oil_paint_amount);
             {
                 float _n = (cfx.oil_paint_radius - 2.0f) / 6.0f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_radius"), 2.0f + powf(_n, 0.5f) * 6.0f);
+                glUniform1f(uni_loc(p, "u_radius"), 2.0f + powf(_n, 0.5f) * 6.0f);
             }
             {
                 float _n = (cfx.oil_paint_sharpness - 0.0f) / 15.0f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_sharpness"), 0.0f + powf(_n, 0.5f) * 15.0f);
+                glUniform1f(uni_loc(p, "u_sharpness"), 0.0f + powf(_n, 0.5f) * 15.0f);
             }
             run1(p);
             if (cfx.oil_paint_amount < 0.999f) {
@@ -796,13 +796,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.stained_glass_amount);
-            glUniform1f(glGetUniformLocation(p, "u_cell_size"), cfx.stained_glass_cell_size);
-            glUniform1f(glGetUniformLocation(p, "u_border"), cfx.stained_glass_border);
-            glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.stained_glass_saturation);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.stained_glass_amount);
+            glUniform1f(uni_loc(p, "u_cell_size"), cfx.stained_glass_cell_size);
+            glUniform1f(uni_loc(p, "u_border"), cfx.stained_glass_border);
+            glUniform1f(uni_loc(p, "u_saturation"), cfx.stained_glass_saturation);
             run1(p);
             if (cfx.stained_glass_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.stained_glass_amount, g_pp.fbo[pslot], w, h);
@@ -817,17 +817,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.neon_edge_glow_amount);
-            glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.neon_edge_glow_threshold);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.neon_edge_glow_amount);
+            glUniform1f(uni_loc(p, "u_threshold"), cfx.neon_edge_glow_threshold);
             {
                 float _n = (cfx.neon_edge_glow_glow - 0.2f) / 1.8f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_glow"), 0.2f + powf(_n, 0.5f) * 1.8f);
+                glUniform1f(uni_loc(p, "u_glow"), 0.2f + powf(_n, 0.5f) * 1.8f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_hue"), cfx.neon_edge_glow_hue);
+            glUniform1f(uni_loc(p, "u_hue"), cfx.neon_edge_glow_hue);
             run1(p);
             if (cfx.neon_edge_glow_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.neon_edge_glow_amount, g_pp.fbo[pslot], w, h);
@@ -842,13 +842,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.cyberpunk_grade_amount);
-            glUniform1f(glGetUniformLocation(p, "u_shadow_teal"), cfx.cyberpunk_grade_shadow_teal);
-            glUniform1f(glGetUniformLocation(p, "u_hi_orange"), cfx.cyberpunk_grade_hi_orange);
-            glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.cyberpunk_grade_contrast);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.cyberpunk_grade_amount);
+            glUniform1f(uni_loc(p, "u_shadow_teal"), cfx.cyberpunk_grade_shadow_teal);
+            glUniform1f(uni_loc(p, "u_hi_orange"), cfx.cyberpunk_grade_hi_orange);
+            glUniform1f(uni_loc(p, "u_contrast"), cfx.cyberpunk_grade_contrast);
             run1(p);
             if (cfx.cyberpunk_grade_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.cyberpunk_grade_amount, g_pp.fbo[pslot], w, h);
@@ -863,13 +863,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.matrix_rain_amount);
-            glUniform1f(glGetUniformLocation(p, "u_density"), cfx.matrix_rain_density);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.matrix_rain_speed);
-            glUniform1f(glGetUniformLocation(p, "u_green_mix"), cfx.matrix_rain_green_mix);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.matrix_rain_amount);
+            glUniform1f(uni_loc(p, "u_density"), cfx.matrix_rain_density);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.matrix_rain_speed);
+            glUniform1f(uni_loc(p, "u_green_mix"), cfx.matrix_rain_green_mix);
             run1(p);
             if (cfx.matrix_rain_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.matrix_rain_amount, g_pp.fbo[pslot], w, h);
@@ -884,13 +884,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.pixel_sort_amount);
-            glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.pixel_sort_threshold);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.pixel_sort_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_direction"), cfx.pixel_sort_direction);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.pixel_sort_amount);
+            glUniform1f(uni_loc(p, "u_threshold"), cfx.pixel_sort_threshold);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.pixel_sort_intensity);
+            glUniform1f(uni_loc(p, "u_direction"), cfx.pixel_sort_direction);
             run1(p);
             if (cfx.pixel_sort_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.pixel_sort_amount, g_pp.fbo[pslot], w, h);
@@ -905,11 +905,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.solarize_amount);
-            glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.solarize_threshold);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.solarize_amount);
+            glUniform1f(uni_loc(p, "u_threshold"), cfx.solarize_threshold);
             run1(p);
             if (cfx.solarize_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.solarize_amount, g_pp.fbo[pslot], w, h);
@@ -924,13 +924,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.double_ghost_amount);
-            glUniform1f(glGetUniformLocation(p, "u_offset"), cfx.double_ghost_offset);
-            glUniform1f(glGetUniformLocation(p, "u_opacity"), cfx.double_ghost_opacity);
-            glUniform1f(glGetUniformLocation(p, "u_angle"), cfx.double_ghost_angle);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.double_ghost_amount);
+            glUniform1f(uni_loc(p, "u_offset"), cfx.double_ghost_offset);
+            glUniform1f(uni_loc(p, "u_opacity"), cfx.double_ghost_opacity);
+            glUniform1f(uni_loc(p, "u_angle"), cfx.double_ghost_angle);
             run1(p);
             if (cfx.double_ghost_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.double_ghost_amount, g_pp.fbo[pslot], w, h);
@@ -945,20 +945,20 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.watercolor_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.watercolor_amount);
             {
                 float _n = (cfx.watercolor_bleeding - 0.003f) / 0.047f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_bleeding"), 0.003f + powf(_n, 0.5f) * 0.047f);
+                glUniform1f(uni_loc(p, "u_bleeding"), 0.003f + powf(_n, 0.5f) * 0.047f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_paper"), cfx.watercolor_paper);
+            glUniform1f(uni_loc(p, "u_paper"), cfx.watercolor_paper);
             {
                 float _n = (cfx.watercolor_saturation - 0.8f) / 1.7f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_saturation"), 0.8f + powf(_n, 0.5f) * 1.7f);
+                glUniform1f(uni_loc(p, "u_saturation"), 0.8f + powf(_n, 0.5f) * 1.7f);
             }
             run1(p);
             if (cfx.watercolor_amount < 0.999f) {
@@ -974,13 +974,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.comic_dots_amount);
-            glUniform1f(glGetUniformLocation(p, "u_dot_size"), cfx.comic_dots_dot_size);
-            glUniform1f(glGetUniformLocation(p, "u_ink_threshold"), cfx.comic_dots_ink_threshold);
-            glUniform1f(glGetUniformLocation(p, "u_color_levels"), cfx.comic_dots_color_levels);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.comic_dots_amount);
+            glUniform1f(uni_loc(p, "u_dot_size"), cfx.comic_dots_dot_size);
+            glUniform1f(uni_loc(p, "u_ink_threshold"), cfx.comic_dots_ink_threshold);
+            glUniform1f(uni_loc(p, "u_color_levels"), cfx.comic_dots_color_levels);
             run1(p);
             if (cfx.comic_dots_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.comic_dots_amount, g_pp.fbo[pslot], w, h);
@@ -995,17 +995,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.crosshatch_amount);
-            glUniform1f(glGetUniformLocation(p, "u_density"), cfx.crosshatch_density);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.crosshatch_amount);
+            glUniform1f(uni_loc(p, "u_density"), cfx.crosshatch_density);
             {
                 float _n = (cfx.crosshatch_thickness - 0.15f) / 0.65f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_thickness"), 0.15f + powf(_n, 0.5f) * 0.65f);
+                glUniform1f(uni_loc(p, "u_thickness"), 0.15f + powf(_n, 0.5f) * 0.65f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_angle"), cfx.crosshatch_angle);
+            glUniform1f(uni_loc(p, "u_angle"), cfx.crosshatch_angle);
             run1(p);
             if (cfx.crosshatch_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.crosshatch_amount, g_pp.fbo[pslot], w, h);
@@ -1020,20 +1020,20 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.daguerreotype_amount);
-            glUniform1f(glGetUniformLocation(p, "u_tone"), cfx.daguerreotype_tone);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.daguerreotype_amount);
+            glUniform1f(uni_loc(p, "u_tone"), cfx.daguerreotype_tone);
             {
                 float _n = (cfx.daguerreotype_vignette - 0.1f) / 1.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_vignette"), 0.1f + powf(_n, 0.5f) * 1.9f);
+                glUniform1f(uni_loc(p, "u_vignette"), 0.1f + powf(_n, 0.5f) * 1.9f);
             }
             {
                 float _n = (cfx.daguerreotype_scratch - 0.02f) / 0.98f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_scratch"), 0.02f + powf(_n, 0.5f) * 0.98f);
+                glUniform1f(uni_loc(p, "u_scratch"), 0.02f + powf(_n, 0.5f) * 0.98f);
             }
             run1(p);
             if (cfx.daguerreotype_amount < 0.999f) {
@@ -1049,17 +1049,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.super8_film_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.super8_film_amount);
             {
                 float _n = (cfx.super8_film_grain - 0.05f) / 1.45f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_grain"), 0.05f + powf(_n, 0.5f) * 1.45f);
+                glUniform1f(uni_loc(p, "u_grain"), 0.05f + powf(_n, 0.5f) * 1.45f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_gate"), cfx.super8_film_gate);
-            glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.super8_film_fade);
+            glUniform1f(uni_loc(p, "u_gate"), cfx.super8_film_gate);
+            glUniform1f(uni_loc(p, "u_fade"), cfx.super8_film_fade);
             run1(p);
             if (cfx.super8_film_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.super8_film_amount, g_pp.fbo[pslot], w, h);
@@ -1074,12 +1074,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.vhs_dropout_amount);
-            glUniform1f(glGetUniformLocation(p, "u_density"), cfx.vhs_dropout_density);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.vhs_dropout_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.vhs_dropout_amount);
+            glUniform1f(uni_loc(p, "u_density"), cfx.vhs_dropout_density);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.vhs_dropout_speed);
             run1(p);
             if (cfx.vhs_dropout_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.vhs_dropout_amount, g_pp.fbo[pslot], w, h);
@@ -1094,12 +1094,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.x_ray_amount);
-            glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.x_ray_contrast);
-            glUniform1f(glGetUniformLocation(p, "u_blue_tint"), cfx.x_ray_blue_tint);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.x_ray_amount);
+            glUniform1f(uni_loc(p, "u_contrast"), cfx.x_ray_contrast);
+            glUniform1f(uni_loc(p, "u_blue_tint"), cfx.x_ray_blue_tint);
             run1(p);
             if (cfx.x_ray_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.x_ray_amount, g_pp.fbo[pslot], w, h);
@@ -1114,16 +1114,16 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.bit_crush_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.bit_crush_amount);
             {
                 float _n = (cfx.bit_crush_levels - 2.0f) / 14.0f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_levels"), 2.0f + powf(_n, 0.5f) * 14.0f);
+                glUniform1f(uni_loc(p, "u_levels"), 2.0f + powf(_n, 0.5f) * 14.0f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_dither"), cfx.bit_crush_dither);
+            glUniform1f(uni_loc(p, "u_dither"), cfx.bit_crush_dither);
             run1(p);
             if (cfx.bit_crush_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.bit_crush_amount, g_pp.fbo[pslot], w, h);
@@ -1138,12 +1138,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.tv_static_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.tv_static_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_color_mix"), cfx.tv_static_color_mix);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.tv_static_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.tv_static_intensity);
+            glUniform1f(uni_loc(p, "u_color_mix"), cfx.tv_static_color_mix);
             run1(p);
             if (cfx.tv_static_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.tv_static_amount, g_pp.fbo[pslot], w, h);
@@ -1158,13 +1158,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.dither_bayer_amount);
-            glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.dither_bayer_levels);
-            glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.dither_bayer_scale);
-            glUniform1f(glGetUniformLocation(p, "u_color"), cfx.dither_bayer_color);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.dither_bayer_amount);
+            glUniform1f(uni_loc(p, "u_levels"), cfx.dither_bayer_levels);
+            glUniform1f(uni_loc(p, "u_scale"), cfx.dither_bayer_scale);
+            glUniform1f(uni_loc(p, "u_color"), cfx.dither_bayer_color);
             run1(p);
             if (cfx.dither_bayer_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.dither_bayer_amount, g_pp.fbo[pslot], w, h);
@@ -1179,11 +1179,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.miami_vice_amount);
-            glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.miami_vice_saturation);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.miami_vice_amount);
+            glUniform1f(uni_loc(p, "u_saturation"), cfx.miami_vice_saturation);
             run1(p);
             if (cfx.miami_vice_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.miami_vice_amount, g_pp.fbo[pslot], w, h);
@@ -1198,13 +1198,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.horror_grade_amount);
-            glUniform1f(glGetUniformLocation(p, "u_desat"), cfx.horror_grade_desat);
-            glUniform1f(glGetUniformLocation(p, "u_red"), cfx.horror_grade_red);
-            glUniform1f(glGetUniformLocation(p, "u_crush"), cfx.horror_grade_crush);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.horror_grade_amount);
+            glUniform1f(uni_loc(p, "u_desat"), cfx.horror_grade_desat);
+            glUniform1f(uni_loc(p, "u_red"), cfx.horror_grade_red);
+            glUniform1f(uni_loc(p, "u_crush"), cfx.horror_grade_crush);
             run1(p);
             if (cfx.horror_grade_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.horror_grade_amount, g_pp.fbo[pslot], w, h);
@@ -1219,12 +1219,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.split_toning_amount);
-            glUniform1f(glGetUniformLocation(p, "u_shadow_hue"), cfx.split_toning_shadow_hue);
-            glUniform1f(glGetUniformLocation(p, "u_hi_hue"), cfx.split_toning_hi_hue);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.split_toning_amount);
+            glUniform1f(uni_loc(p, "u_shadow_hue"), cfx.split_toning_shadow_hue);
+            glUniform1f(uni_loc(p, "u_hi_hue"), cfx.split_toning_hi_hue);
             run1(p);
             if (cfx.split_toning_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.split_toning_amount, g_pp.fbo[pslot], w, h);
@@ -1239,17 +1239,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.desert_gold_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.desert_gold_amount);
             {
                 float _n = (cfx.desert_gold_warmth - 0.1f) / 0.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_warmth"), 0.1f + powf(_n, 0.5f) * 0.9f);
+                glUniform1f(uni_loc(p, "u_warmth"), 0.1f + powf(_n, 0.5f) * 0.9f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.desert_gold_fade);
-            glUniform1f(glGetUniformLocation(p, "u_haze"), cfx.desert_gold_haze);
+            glUniform1f(uni_loc(p, "u_fade"), cfx.desert_gold_fade);
+            glUniform1f(uni_loc(p, "u_haze"), cfx.desert_gold_haze);
             run1(p);
             if (cfx.desert_gold_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.desert_gold_amount, g_pp.fbo[pslot], w, h);
@@ -1264,12 +1264,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.emboss_relief_amount);
-            glUniform1f(glGetUniformLocation(p, "u_angle"), cfx.emboss_relief_angle);
-            glUniform1f(glGetUniformLocation(p, "u_colorize"), cfx.emboss_relief_colorize);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.emboss_relief_amount);
+            glUniform1f(uni_loc(p, "u_angle"), cfx.emboss_relief_angle);
+            glUniform1f(uni_loc(p, "u_colorize"), cfx.emboss_relief_colorize);
             run1(p);
             if (cfx.emboss_relief_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.emboss_relief_amount, g_pp.fbo[pslot], w, h);
@@ -1284,12 +1284,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.pointillist_amount);
-            glUniform1f(glGetUniformLocation(p, "u_dot_size"), cfx.pointillist_dot_size);
-            glUniform1f(glGetUniformLocation(p, "u_scatter"), cfx.pointillist_scatter);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.pointillist_amount);
+            glUniform1f(uni_loc(p, "u_dot_size"), cfx.pointillist_dot_size);
+            glUniform1f(uni_loc(p, "u_scatter"), cfx.pointillist_scatter);
             run1(p);
             if (cfx.pointillist_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.pointillist_amount, g_pp.fbo[pslot], w, h);
@@ -1304,12 +1304,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.interlace_glitch_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.interlace_glitch_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.interlace_glitch_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.interlace_glitch_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.interlace_glitch_intensity);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.interlace_glitch_speed);
             run1(p);
             if (cfx.interlace_glitch_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.interlace_glitch_amount, g_pp.fbo[pslot], w, h);
@@ -1324,21 +1324,21 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.frosted_glass_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.frosted_glass_amount);
             {
                 float _n = (cfx.frosted_glass_blur - 0.003f) / 0.047f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_blur"), 0.003f + powf(_n, 0.5f) * 0.047f);
+                glUniform1f(uni_loc(p, "u_blur"), 0.003f + powf(_n, 0.5f) * 0.047f);
             }
             {
                 float _n = (cfx.frosted_glass_noise - 0.0f) / 1.0f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_noise"), 0.0f + powf(_n, 0.5f) * 1.0f);
+                glUniform1f(uni_loc(p, "u_noise"), 0.0f + powf(_n, 0.5f) * 1.0f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_tint"), cfx.frosted_glass_tint);
+            glUniform1f(uni_loc(p, "u_tint"), cfx.frosted_glass_tint);
             run1(p);
             if (cfx.frosted_glass_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.frosted_glass_amount, g_pp.fbo[pslot], w, h);
@@ -1353,12 +1353,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.mirror_fold_amount);
-            glUniform1f(glGetUniformLocation(p, "u_axis"), cfx.mirror_fold_axis);
-            glUniform1f(glGetUniformLocation(p, "u_vertical"), cfx.mirror_fold_vertical);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.mirror_fold_amount);
+            glUniform1f(uni_loc(p, "u_axis"), cfx.mirror_fold_axis);
+            glUniform1f(uni_loc(p, "u_vertical"), cfx.mirror_fold_vertical);
             run1(p);
             if (cfx.mirror_fold_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.mirror_fold_amount, g_pp.fbo[pslot], w, h);
@@ -1373,17 +1373,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.echo_trails_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.echo_trails_amount);
             {
                 float _n = (cfx.echo_trails_offset - 0.005f) / 0.095f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_offset"), 0.005f + powf(_n, 0.5f) * 0.095f);
+                glUniform1f(uni_loc(p, "u_offset"), 0.005f + powf(_n, 0.5f) * 0.095f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.echo_trails_fade);
-            glUniform1f(glGetUniformLocation(p, "u_angle"), cfx.echo_trails_angle);
+            glUniform1f(uni_loc(p, "u_fade"), cfx.echo_trails_fade);
+            glUniform1f(uni_loc(p, "u_angle"), cfx.echo_trails_angle);
             run1(p);
             if (cfx.echo_trails_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.echo_trails_amount, g_pp.fbo[pslot], w, h);
@@ -1398,12 +1398,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.gradient_map_amount);
-            glUniform1f(glGetUniformLocation(p, "u_hue1"), cfx.gradient_map_hue1);
-            glUniform1f(glGetUniformLocation(p, "u_hue2"), cfx.gradient_map_hue2);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.gradient_map_amount);
+            glUniform1f(uni_loc(p, "u_hue1"), cfx.gradient_map_hue1);
+            glUniform1f(uni_loc(p, "u_hue2"), cfx.gradient_map_hue2);
             run1(p);
             if (cfx.gradient_map_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.gradient_map_amount, g_pp.fbo[pslot], w, h);
@@ -1418,11 +1418,11 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.cross_process_amount);
-            glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.cross_process_contrast);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.cross_process_amount);
+            glUniform1f(uni_loc(p, "u_contrast"), cfx.cross_process_contrast);
             run1(p);
             if (cfx.cross_process_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.cross_process_amount, g_pp.fbo[pslot], w, h);
@@ -1437,13 +1437,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.plasma_field_amount);
-            glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.plasma_field_scale);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.plasma_field_speed);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.plasma_field_intensity);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.plasma_field_amount);
+            glUniform1f(uni_loc(p, "u_scale"), cfx.plasma_field_scale);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.plasma_field_speed);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.plasma_field_intensity);
             run1(p);
             if (cfx.plasma_field_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.plasma_field_amount, g_pp.fbo[pslot], w, h);
@@ -1458,13 +1458,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.fire_edge_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.fire_edge_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.fire_edge_speed);
-            glUniform1f(glGetUniformLocation(p, "u_height"), cfx.fire_edge_height);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.fire_edge_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.fire_edge_intensity);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.fire_edge_speed);
+            glUniform1f(uni_loc(p, "u_height"), cfx.fire_edge_height);
             run1(p);
             if (cfx.fire_edge_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.fire_edge_amount, g_pp.fbo[pslot], w, h);
@@ -1479,13 +1479,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.laser_grid_amount);
-            glUniform1f(glGetUniformLocation(p, "u_grid_size"), cfx.laser_grid_grid_size);
-            glUniform1f(glGetUniformLocation(p, "u_hue"), cfx.laser_grid_hue);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.laser_grid_intensity);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.laser_grid_amount);
+            glUniform1f(uni_loc(p, "u_grid_size"), cfx.laser_grid_grid_size);
+            glUniform1f(uni_loc(p, "u_hue"), cfx.laser_grid_hue);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.laser_grid_intensity);
             run1(p);
             if (cfx.laser_grid_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.laser_grid_amount, g_pp.fbo[pslot], w, h);
@@ -1500,13 +1500,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.technicolor_amount);
-            glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.technicolor_saturation);
-            glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.technicolor_contrast);
-            glUniform1f(glGetUniformLocation(p, "u_warmth"), cfx.technicolor_warmth);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.technicolor_amount);
+            glUniform1f(uni_loc(p, "u_saturation"), cfx.technicolor_saturation);
+            glUniform1f(uni_loc(p, "u_contrast"), cfx.technicolor_contrast);
+            glUniform1f(uni_loc(p, "u_warmth"), cfx.technicolor_warmth);
             run1(p);
             if (cfx.technicolor_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.technicolor_amount, g_pp.fbo[pslot], w, h);
@@ -1521,17 +1521,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.ice_crystal_amount);
-            glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.ice_crystal_scale);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.ice_crystal_amount);
+            glUniform1f(uni_loc(p, "u_scale"), cfx.ice_crystal_scale);
             {
                 float _n = (cfx.ice_crystal_refract - 0.01f) / 0.13999999999999999f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_refract"), 0.01f + powf(_n, 0.5f) * 0.13999999999999999f);
+                glUniform1f(uni_loc(p, "u_refract"), 0.01f + powf(_n, 0.5f) * 0.13999999999999999f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_tint"), cfx.ice_crystal_tint);
+            glUniform1f(uni_loc(p, "u_tint"), cfx.ice_crystal_tint);
             run1(p);
             if (cfx.ice_crystal_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.ice_crystal_amount, g_pp.fbo[pslot], w, h);
@@ -1546,17 +1546,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.kodachrome_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.kodachrome_amount);
             {
                 float _n = (cfx.kodachrome_saturation - 0.8f) / 2.2f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_saturation"), 0.8f + powf(_n, 0.5f) * 2.2f);
+                glUniform1f(uni_loc(p, "u_saturation"), 0.8f + powf(_n, 0.5f) * 2.2f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_reds"), cfx.kodachrome_reds);
-            glUniform1f(glGetUniformLocation(p, "u_shadows"), cfx.kodachrome_shadows);
+            glUniform1f(uni_loc(p, "u_reds"), cfx.kodachrome_reds);
+            glUniform1f(uni_loc(p, "u_shadows"), cfx.kodachrome_shadows);
             run1(p);
             if (cfx.kodachrome_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.kodachrome_amount, g_pp.fbo[pslot], w, h);
@@ -1571,12 +1571,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.vortex_distort_amount);
-            glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.vortex_distort_scale);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.vortex_distort_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.vortex_distort_amount);
+            glUniform1f(uni_loc(p, "u_scale"), cfx.vortex_distort_scale);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.vortex_distort_speed);
             run1(p);
             if (cfx.vortex_distort_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.vortex_distort_amount, g_pp.fbo[pslot], w, h);
@@ -1591,12 +1591,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.sepia_rich_amount);
-            glUniform1f(glGetUniformLocation(p, "u_vignette"), cfx.sepia_rich_vignette);
-            glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.sepia_rich_contrast);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.sepia_rich_amount);
+            glUniform1f(uni_loc(p, "u_vignette"), cfx.sepia_rich_vignette);
+            glUniform1f(uni_loc(p, "u_contrast"), cfx.sepia_rich_contrast);
             run1(p);
             if (cfx.sepia_rich_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.sepia_rich_amount, g_pp.fbo[pslot], w, h);
@@ -1611,13 +1611,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.digital_noise_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.digital_noise_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_color_sep"), cfx.digital_noise_color_sep);
-            glUniform1f(glGetUniformLocation(p, "u_luma_bias"), cfx.digital_noise_luma_bias);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.digital_noise_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.digital_noise_intensity);
+            glUniform1f(uni_loc(p, "u_color_sep"), cfx.digital_noise_color_sep);
+            glUniform1f(uni_loc(p, "u_luma_bias"), cfx.digital_noise_luma_bias);
             run1(p);
             if (cfx.digital_noise_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.digital_noise_amount, g_pp.fbo[pslot], w, h);
@@ -1632,13 +1632,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.color_dodge_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.color_dodge_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_hue"), cfx.color_dodge_hue);
-            glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.color_dodge_glow);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.color_dodge_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.color_dodge_intensity);
+            glUniform1f(uni_loc(p, "u_hue"), cfx.color_dodge_hue);
+            glUniform1f(uni_loc(p, "u_glow"), cfx.color_dodge_glow);
             run1(p);
             if (cfx.color_dodge_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.color_dodge_amount, g_pp.fbo[pslot], w, h);
@@ -1653,13 +1653,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.warhol_pop_amount);
-            glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.warhol_pop_levels);
-            glUniform1f(glGetUniformLocation(p, "u_hue_shift"), cfx.warhol_pop_hue_shift);
-            glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.warhol_pop_saturation);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.warhol_pop_amount);
+            glUniform1f(uni_loc(p, "u_levels"), cfx.warhol_pop_levels);
+            glUniform1f(uni_loc(p, "u_hue_shift"), cfx.warhol_pop_hue_shift);
+            glUniform1f(uni_loc(p, "u_saturation"), cfx.warhol_pop_saturation);
             run1(p);
             if (cfx.warhol_pop_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.warhol_pop_amount, g_pp.fbo[pslot], w, h);
@@ -1674,17 +1674,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.infrared_film_amount);
-            glUniform1f(glGetUniformLocation(p, "u_channel_mix"), cfx.infrared_film_channel_mix);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.infrared_film_amount);
+            glUniform1f(uni_loc(p, "u_channel_mix"), cfx.infrared_film_channel_mix);
             {
                 float _n = (cfx.infrared_film_glow - 0.05f) / 0.95f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_glow"), 0.05f + powf(_n, 0.5f) * 0.95f);
+                glUniform1f(uni_loc(p, "u_glow"), 0.05f + powf(_n, 0.5f) * 0.95f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.infrared_film_contrast);
+            glUniform1f(uni_loc(p, "u_contrast"), cfx.infrared_film_contrast);
             run1(p);
             if (cfx.infrared_film_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.infrared_film_amount, g_pp.fbo[pslot], w, h);
@@ -1699,13 +1699,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.scanline_color_amount);
-            glUniform1f(glGetUniformLocation(p, "u_line_width"), cfx.scanline_color_line_width);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.scanline_color_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_rgb_sep"), cfx.scanline_color_rgb_sep);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.scanline_color_amount);
+            glUniform1f(uni_loc(p, "u_line_width"), cfx.scanline_color_line_width);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.scanline_color_intensity);
+            glUniform1f(uni_loc(p, "u_rgb_sep"), cfx.scanline_color_rgb_sep);
             run1(p);
             if (cfx.scanline_color_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.scanline_color_amount, g_pp.fbo[pslot], w, h);
@@ -1720,13 +1720,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.data_corrupt_amount);
-            glUniform1f(glGetUniformLocation(p, "u_density"), cfx.data_corrupt_density);
-            glUniform1f(glGetUniformLocation(p, "u_block_size"), cfx.data_corrupt_block_size);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.data_corrupt_intensity);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.data_corrupt_amount);
+            glUniform1f(uni_loc(p, "u_density"), cfx.data_corrupt_density);
+            glUniform1f(uni_loc(p, "u_block_size"), cfx.data_corrupt_block_size);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.data_corrupt_intensity);
             run1(p);
             if (cfx.data_corrupt_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.data_corrupt_amount, g_pp.fbo[pslot], w, h);
@@ -1741,20 +1741,20 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.long_exposure_amount);
-            glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.long_exposure_threshold);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.long_exposure_amount);
+            glUniform1f(uni_loc(p, "u_threshold"), cfx.long_exposure_threshold);
             {
                 float _n = (cfx.long_exposure_trail - 0.01f) / 0.19f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_trail"), 0.01f + powf(_n, 0.5f) * 0.19f);
+                glUniform1f(uni_loc(p, "u_trail"), 0.01f + powf(_n, 0.5f) * 0.19f);
             }
             {
                 float _n = (cfx.long_exposure_glow - 0.1f) / 1.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_glow"), 0.1f + powf(_n, 0.5f) * 1.9f);
+                glUniform1f(uni_loc(p, "u_glow"), 0.1f + powf(_n, 0.5f) * 1.9f);
             }
             run1(p);
             if (cfx.long_exposure_amount < 0.999f) {
@@ -1770,12 +1770,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.pixel_mosaic_amount);
-            glUniform1f(glGetUniformLocation(p, "u_block_size"), cfx.pixel_mosaic_block_size);
-            glUniform1f(glGetUniformLocation(p, "u_color_steps"), cfx.pixel_mosaic_color_steps);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.pixel_mosaic_amount);
+            glUniform1f(uni_loc(p, "u_block_size"), cfx.pixel_mosaic_block_size);
+            glUniform1f(uni_loc(p, "u_color_steps"), cfx.pixel_mosaic_color_steps);
             run1(p);
             if (cfx.pixel_mosaic_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.pixel_mosaic_amount, g_pp.fbo[pslot], w, h);
@@ -1790,18 +1790,18 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.thermal_map_amount);
-            glUniform1f(glGetUniformLocation(p, "u_cold_hue"), cfx.thermal_map_cold_hue);
-            glUniform1f(glGetUniformLocation(p, "u_hot_hue"), cfx.thermal_map_hot_hue);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.thermal_map_amount);
+            glUniform1f(uni_loc(p, "u_cold_hue"), cfx.thermal_map_cold_hue);
+            glUniform1f(uni_loc(p, "u_hot_hue"), cfx.thermal_map_hot_hue);
             {
                 float _n = (cfx.thermal_map_contrast - 0.8f) / 2.2f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_contrast"), 0.8f + powf(_n, 0.5f) * 2.2f);
+                glUniform1f(uni_loc(p, "u_contrast"), 0.8f + powf(_n, 0.5f) * 2.2f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_scanlines"), cfx.thermal_map_scanlines);
+            glUniform1f(uni_loc(p, "u_scanlines"), cfx.thermal_map_scanlines);
             run1(p);
             if (cfx.thermal_map_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.thermal_map_amount, g_pp.fbo[pslot], w, h);
@@ -1816,18 +1816,18 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.tilt_shift_amount);
-            glUniform1f(glGetUniformLocation(p, "u_focus_y"), cfx.tilt_shift_focus_y);
-            glUniform1f(glGetUniformLocation(p, "u_focus_band"), cfx.tilt_shift_focus_band);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.tilt_shift_amount);
+            glUniform1f(uni_loc(p, "u_focus_y"), cfx.tilt_shift_focus_y);
+            glUniform1f(uni_loc(p, "u_focus_band"), cfx.tilt_shift_focus_band);
             {
                 float _n = (cfx.tilt_shift_blur_radius - 2.0f) / 28.0f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_blur_radius"), 2.0f + powf(_n, 0.5f) * 28.0f);
+                glUniform1f(uni_loc(p, "u_blur_radius"), 2.0f + powf(_n, 0.5f) * 28.0f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_saturation"), cfx.tilt_shift_saturation);
+            glUniform1f(uni_loc(p, "u_saturation"), cfx.tilt_shift_saturation);
             run1(p);
             if (cfx.tilt_shift_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.tilt_shift_amount, g_pp.fbo[pslot], w, h);
@@ -1842,16 +1842,16 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.raindrop_refract_amount);
-            glUniform1f(glGetUniformLocation(p, "u_density"), cfx.raindrop_refract_density);
-            glUniform1f(glGetUniformLocation(p, "u_size"), cfx.raindrop_refract_size);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.raindrop_refract_amount);
+            glUniform1f(uni_loc(p, "u_density"), cfx.raindrop_refract_density);
+            glUniform1f(uni_loc(p, "u_size"), cfx.raindrop_refract_size);
             {
                 float _n = (cfx.raindrop_refract_refract_str - 0.1f) / 1.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_refract_str"), 0.1f + powf(_n, 0.5f) * 1.9f);
+                glUniform1f(uni_loc(p, "u_refract_str"), 0.1f + powf(_n, 0.5f) * 1.9f);
             }
             run1(p);
             if (cfx.raindrop_refract_amount < 0.999f) {
@@ -1867,15 +1867,15 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.risograph_amount);
-            glUniform1f(glGetUniformLocation(p, "u_hue1"), cfx.risograph_hue1);
-            glUniform1f(glGetUniformLocation(p, "u_hue2"), cfx.risograph_hue2);
-            glUniform1f(glGetUniformLocation(p, "u_dot_size"), cfx.risograph_dot_size);
-            glUniform1f(glGetUniformLocation(p, "u_misreg"), cfx.risograph_misreg);
-            glUniform1f(glGetUniformLocation(p, "u_paper"), cfx.risograph_paper);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.risograph_amount);
+            glUniform1f(uni_loc(p, "u_hue1"), cfx.risograph_hue1);
+            glUniform1f(uni_loc(p, "u_hue2"), cfx.risograph_hue2);
+            glUniform1f(uni_loc(p, "u_dot_size"), cfx.risograph_dot_size);
+            glUniform1f(uni_loc(p, "u_misreg"), cfx.risograph_misreg);
+            glUniform1f(uni_loc(p, "u_paper"), cfx.risograph_paper);
             run1(p);
             if (cfx.risograph_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.risograph_amount, g_pp.fbo[pslot], w, h);
@@ -1890,13 +1890,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.vintage_negative_amount);
-            glUniform1f(glGetUniformLocation(p, "u_orange_mask"), cfx.vintage_negative_orange_mask);
-            glUniform1f(glGetUniformLocation(p, "u_contrast"), cfx.vintage_negative_contrast);
-            glUniform1f(glGetUniformLocation(p, "u_grain"), cfx.vintage_negative_grain);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.vintage_negative_amount);
+            glUniform1f(uni_loc(p, "u_orange_mask"), cfx.vintage_negative_orange_mask);
+            glUniform1f(uni_loc(p, "u_contrast"), cfx.vintage_negative_contrast);
+            glUniform1f(uni_loc(p, "u_grain"), cfx.vintage_negative_grain);
             run1(p);
             if (cfx.vintage_negative_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.vintage_negative_amount, g_pp.fbo[pslot], w, h);
@@ -1911,13 +1911,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.pencil_sketch_amount);
-            glUniform1f(glGetUniformLocation(p, "u_line_str"), cfx.pencil_sketch_line_str);
-            glUniform1f(glGetUniformLocation(p, "u_paper_tone"), cfx.pencil_sketch_paper_tone);
-            glUniform1f(glGetUniformLocation(p, "u_hatching"), cfx.pencil_sketch_hatching);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.pencil_sketch_amount);
+            glUniform1f(uni_loc(p, "u_line_str"), cfx.pencil_sketch_line_str);
+            glUniform1f(uni_loc(p, "u_paper_tone"), cfx.pencil_sketch_paper_tone);
+            glUniform1f(uni_loc(p, "u_hatching"), cfx.pencil_sketch_hatching);
             run1(p);
             if (cfx.pencil_sketch_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.pencil_sketch_amount, g_pp.fbo[pslot], w, h);
@@ -1932,14 +1932,14 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.crt_barrel_amount);
-            glUniform1f(glGetUniformLocation(p, "u_distort"), cfx.crt_barrel_distort);
-            glUniform1f(glGetUniformLocation(p, "u_corner_dark"), cfx.crt_barrel_corner_dark);
-            glUniform1f(glGetUniformLocation(p, "u_rgb_shift"), cfx.crt_barrel_rgb_shift);
-            glUniform1f(glGetUniformLocation(p, "u_scanline"), cfx.crt_barrel_scanline);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.crt_barrel_amount);
+            glUniform1f(uni_loc(p, "u_distort"), cfx.crt_barrel_distort);
+            glUniform1f(uni_loc(p, "u_corner_dark"), cfx.crt_barrel_corner_dark);
+            glUniform1f(uni_loc(p, "u_rgb_shift"), cfx.crt_barrel_rgb_shift);
+            glUniform1f(uni_loc(p, "u_scanline"), cfx.crt_barrel_scanline);
             run1(p);
             if (cfx.crt_barrel_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.crt_barrel_amount, g_pp.fbo[pslot], w, h);
@@ -1954,17 +1954,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.rgb_split_wave_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.rgb_split_wave_amount);
             {
                 float _n = (cfx.rgb_split_wave_amplitude - 0.003f) / 0.047f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_amplitude"), 0.003f + powf(_n, 0.5f) * 0.047f);
+                glUniform1f(uni_loc(p, "u_amplitude"), 0.003f + powf(_n, 0.5f) * 0.047f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_frequency"), cfx.rgb_split_wave_frequency);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.rgb_split_wave_speed);
+            glUniform1f(uni_loc(p, "u_frequency"), cfx.rgb_split_wave_frequency);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.rgb_split_wave_speed);
             run1(p);
             if (cfx.rgb_split_wave_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.rgb_split_wave_amount, g_pp.fbo[pslot], w, h);
@@ -1979,25 +1979,25 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.golden_hour_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.golden_hour_amount);
             {
                 float _n = (cfx.golden_hour_warmth - 0.1f) / 0.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_warmth"), 0.1f + powf(_n, 0.5f) * 0.9f);
+                glUniform1f(uni_loc(p, "u_warmth"), 0.1f + powf(_n, 0.5f) * 0.9f);
             }
             {
                 float _n = (cfx.golden_hour_glow_str - 0.1f) / 0.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_glow_str"), 0.1f + powf(_n, 0.5f) * 0.9f);
+                glUniform1f(uni_loc(p, "u_glow_str"), 0.1f + powf(_n, 0.5f) * 0.9f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_shadow_lift"), cfx.golden_hour_shadow_lift);
+            glUniform1f(uni_loc(p, "u_shadow_lift"), cfx.golden_hour_shadow_lift);
             {
                 float _n = (cfx.golden_hour_vignette - 0.1f) / 1.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_vignette"), 0.1f + powf(_n, 0.5f) * 1.9f);
+                glUniform1f(uni_loc(p, "u_vignette"), 0.1f + powf(_n, 0.5f) * 1.9f);
             }
             run1(p);
             if (cfx.golden_hour_amount < 0.999f) {
@@ -2013,22 +2013,22 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.neon_sign_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.neon_sign_amount);
             {
                 float _n = (cfx.neon_sign_edge_str - 1.0f) / 9.0f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_edge_str"), 1.0f + powf(_n, 0.5f) * 9.0f);
+                glUniform1f(uni_loc(p, "u_edge_str"), 1.0f + powf(_n, 0.5f) * 9.0f);
             }
             {
                 float _n = (cfx.neon_sign_glow_radius - 2.0f) / 18.0f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_glow_radius"), 2.0f + powf(_n, 0.5f) * 18.0f);
+                glUniform1f(uni_loc(p, "u_glow_radius"), 2.0f + powf(_n, 0.5f) * 18.0f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_hue_shift"), cfx.neon_sign_hue_shift);
-            glUniform1f(glGetUniformLocation(p, "u_bg_darken"), cfx.neon_sign_bg_darken);
+            glUniform1f(uni_loc(p, "u_hue_shift"), cfx.neon_sign_hue_shift);
+            glUniform1f(uni_loc(p, "u_bg_darken"), cfx.neon_sign_bg_darken);
             run1(p);
             if (cfx.neon_sign_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.neon_sign_amount, g_pp.fbo[pslot], w, h);
@@ -2043,17 +2043,17 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.mirror_tunnel_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.mirror_tunnel_amount);
             {
                 float _n = (cfx.mirror_tunnel_depth - 2.0f) / 10.0f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_depth"), 2.0f + powf(_n, 0.5f) * 10.0f);
+                glUniform1f(uni_loc(p, "u_depth"), 2.0f + powf(_n, 0.5f) * 10.0f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_rotation"), cfx.mirror_tunnel_rotation);
-            glUniform1f(glGetUniformLocation(p, "u_zoom"), cfx.mirror_tunnel_zoom);
+            glUniform1f(uni_loc(p, "u_rotation"), cfx.mirror_tunnel_rotation);
+            glUniform1f(uni_loc(p, "u_zoom"), cfx.mirror_tunnel_zoom);
             run1(p);
             if (cfx.mirror_tunnel_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.mirror_tunnel_amount, g_pp.fbo[pslot], w, h);
@@ -2068,23 +2068,23 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.liquid_chrome_amount);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.liquid_chrome_amount);
             {
                 float _n = (cfx.liquid_chrome_flow - 0.1f) / 0.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_flow"), 0.1f + powf(_n, 0.5f) * 0.9f);
+                glUniform1f(uni_loc(p, "u_flow"), 0.1f + powf(_n, 0.5f) * 0.9f);
             }
             {
                 float _n = (cfx.liquid_chrome_metallic - 0.1f) / 0.9f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_metallic"), 0.1f + powf(_n, 0.5f) * 0.9f);
+                glUniform1f(uni_loc(p, "u_metallic"), 0.1f + powf(_n, 0.5f) * 0.9f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_tint_r"), cfx.liquid_chrome_tint_r);
-            glUniform1f(glGetUniformLocation(p, "u_tint_g"), cfx.liquid_chrome_tint_g);
-            glUniform1f(glGetUniformLocation(p, "u_tint_b"), cfx.liquid_chrome_tint_b);
+            glUniform1f(uni_loc(p, "u_tint_r"), cfx.liquid_chrome_tint_r);
+            glUniform1f(uni_loc(p, "u_tint_g"), cfx.liquid_chrome_tint_g);
+            glUniform1f(uni_loc(p, "u_tint_b"), cfx.liquid_chrome_tint_b);
             run1(p);
             if (cfx.liquid_chrome_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.liquid_chrome_amount, g_pp.fbo[pslot], w, h);
@@ -2099,18 +2099,18 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.zone_system_bw_amount);
-            glUniform1f(glGetUniformLocation(p, "u_zones"), cfx.zone_system_bw_zones);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.zone_system_bw_amount);
+            glUniform1f(uni_loc(p, "u_zones"), cfx.zone_system_bw_zones);
             {
                 float _n = (cfx.zone_system_bw_contrast - 0.8f) / 2.2f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_contrast"), 0.8f + powf(_n, 0.5f) * 2.2f);
+                glUniform1f(uni_loc(p, "u_contrast"), 0.8f + powf(_n, 0.5f) * 2.2f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_grain"), cfx.zone_system_bw_grain);
-            glUniform1f(glGetUniformLocation(p, "u_paper_white"), cfx.zone_system_bw_paper_white);
+            glUniform1f(uni_loc(p, "u_grain"), cfx.zone_system_bw_grain);
+            glUniform1f(uni_loc(p, "u_paper_white"), cfx.zone_system_bw_paper_white);
             run1(p);
             if (cfx.zone_system_bw_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.zone_system_bw_amount, g_pp.fbo[pslot], w, h);
@@ -2125,22 +2125,22 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.glitter_dust_amount);
-            glUniform1f(glGetUniformLocation(p, "u_density"), cfx.glitter_dust_density);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.glitter_dust_amount);
+            glUniform1f(uni_loc(p, "u_density"), cfx.glitter_dust_density);
             {
                 float _n = (cfx.glitter_dust_size - 0.2f) / 1.8f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_size"), 0.2f + powf(_n, 0.5f) * 1.8f);
+                glUniform1f(uni_loc(p, "u_size"), 0.2f + powf(_n, 0.5f) * 1.8f);
             }
             {
                 float _n = (cfx.glitter_dust_sparkle - 0.2f) / 1.8f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_sparkle"), 0.2f + powf(_n, 0.5f) * 1.8f);
+                glUniform1f(uni_loc(p, "u_sparkle"), 0.2f + powf(_n, 0.5f) * 1.8f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_color_var"), cfx.glitter_dust_color_var);
+            glUniform1f(uni_loc(p, "u_color_var"), cfx.glitter_dust_color_var);
             run1(p);
             if (cfx.glitter_dust_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.glitter_dust_amount, g_pp.fbo[pslot], w, h);
@@ -2155,14 +2155,14 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.contour_map_amount);
-            glUniform1f(glGetUniformLocation(p, "u_levels"), cfx.contour_map_levels);
-            glUniform1f(glGetUniformLocation(p, "u_line_width"), cfx.contour_map_line_width);
-            glUniform1f(glGetUniformLocation(p, "u_line_hue"), cfx.contour_map_line_hue);
-            glUniform1f(glGetUniformLocation(p, "u_fill_sat"), cfx.contour_map_fill_sat);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.contour_map_amount);
+            glUniform1f(uni_loc(p, "u_levels"), cfx.contour_map_levels);
+            glUniform1f(uni_loc(p, "u_line_width"), cfx.contour_map_line_width);
+            glUniform1f(uni_loc(p, "u_line_hue"), cfx.contour_map_line_hue);
+            glUniform1f(uni_loc(p, "u_fill_sat"), cfx.contour_map_fill_sat);
             run1(p);
             if (cfx.contour_map_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.contour_map_amount, g_pp.fbo[pslot], w, h);
@@ -2177,13 +2177,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.film_halation_amount);
-            glUniform1f(glGetUniformLocation(p, "u_threshold"), cfx.film_halation_threshold);
-            glUniform1f(glGetUniformLocation(p, "u_radius"), cfx.film_halation_radius);
-            glUniform1f(glGetUniformLocation(p, "u_red_shift"), cfx.film_halation_red_shift);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.film_halation_amount);
+            glUniform1f(uni_loc(p, "u_threshold"), cfx.film_halation_threshold);
+            glUniform1f(uni_loc(p, "u_radius"), cfx.film_halation_radius);
+            glUniform1f(uni_loc(p, "u_red_shift"), cfx.film_halation_red_shift);
             run1(p);
             if (cfx.film_halation_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.film_halation_amount, g_pp.fbo[pslot], w, h);
@@ -2198,15 +2198,15 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.ascii_art_amount);
-            glUniform1f(glGetUniformLocation(p, "u_char_size"), cfx.ascii_art_char_size);
-            glUniform1f(glGetUniformLocation(p, "u_fg_r"), cfx.ascii_art_fg_r);
-            glUniform1f(glGetUniformLocation(p, "u_fg_g"), cfx.ascii_art_fg_g);
-            glUniform1f(glGetUniformLocation(p, "u_fg_b"), cfx.ascii_art_fg_b);
-            glUniform1f(glGetUniformLocation(p, "u_bg_dark"), cfx.ascii_art_bg_dark);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.ascii_art_amount);
+            glUniform1f(uni_loc(p, "u_char_size"), cfx.ascii_art_char_size);
+            glUniform1f(uni_loc(p, "u_fg_r"), cfx.ascii_art_fg_r);
+            glUniform1f(uni_loc(p, "u_fg_g"), cfx.ascii_art_fg_g);
+            glUniform1f(uni_loc(p, "u_fg_b"), cfx.ascii_art_fg_b);
+            glUniform1f(uni_loc(p, "u_bg_dark"), cfx.ascii_art_bg_dark);
             run1(p);
             if (cfx.ascii_art_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.ascii_art_amount, g_pp.fbo[pslot], w, h);
@@ -2221,23 +2221,23 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.dna_helix_amount);
-            glUniform1f(glGetUniformLocation(p, "u_grid_scale"), cfx.dna_helix_grid_scale);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.dna_helix_amount);
+            glUniform1f(uni_loc(p, "u_grid_scale"), cfx.dna_helix_grid_scale);
             {
                 float _n = (cfx.dna_helix_wave_amp - 0.15f) / 0.85f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_wave_amp"), 0.15f + powf(_n, 0.5f) * 0.85f);
+                glUniform1f(uni_loc(p, "u_wave_amp"), 0.15f + powf(_n, 0.5f) * 0.85f);
             }
             {
                 float _n = (cfx.dna_helix_line_width - 0.02f) / 0.13f;
                 _n = _n < 0.0f ? 0.0f : (_n > 1.0f ? 1.0f : _n);
-                glUniform1f(glGetUniformLocation(p, "u_line_width"), 0.02f + powf(_n, 0.5f) * 0.13f);
+                glUniform1f(uni_loc(p, "u_line_width"), 0.02f + powf(_n, 0.5f) * 0.13f);
             }
-            glUniform1f(glGetUniformLocation(p, "u_hue"), cfx.dna_helix_hue);
-            glUniform1f(glGetUniformLocation(p, "u_bg_darken"), cfx.dna_helix_bg_darken);
+            glUniform1f(uni_loc(p, "u_hue"), cfx.dna_helix_hue);
+            glUniform1f(uni_loc(p, "u_bg_darken"), cfx.dna_helix_bg_darken);
             run1(p);
             if (cfx.dna_helix_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.dna_helix_amount, g_pp.fbo[pslot], w, h);
@@ -2252,15 +2252,15 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.double_exposure_amount);
-            glUniform1f(glGetUniformLocation(p, "u_offset_x"), cfx.double_exposure_offset_x);
-            glUniform1f(glGetUniformLocation(p, "u_offset_y"), cfx.double_exposure_offset_y);
-            glUniform1f(glGetUniformLocation(p, "u_scale2"), cfx.double_exposure_scale2);
-            glUniform1f(glGetUniformLocation(p, "u_desaturate2"), cfx.double_exposure_desaturate2);
-            glUniform1f(glGetUniformLocation(p, "u_opacity"), cfx.double_exposure_opacity);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.double_exposure_amount);
+            glUniform1f(uni_loc(p, "u_offset_x"), cfx.double_exposure_offset_x);
+            glUniform1f(uni_loc(p, "u_offset_y"), cfx.double_exposure_offset_y);
+            glUniform1f(uni_loc(p, "u_scale2"), cfx.double_exposure_scale2);
+            glUniform1f(uni_loc(p, "u_desaturate2"), cfx.double_exposure_desaturate2);
+            glUniform1f(uni_loc(p, "u_opacity"), cfx.double_exposure_opacity);
             run1(p);
             if (cfx.double_exposure_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.double_exposure_amount, g_pp.fbo[pslot], w, h);
@@ -2275,12 +2275,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.skin_smooth_amount);
-            glUniform1f(glGetUniformLocation(p, "u_radius"), cfx.skin_smooth_radius);
-            glUniform1f(glGetUniformLocation(p, "u_tone"), cfx.skin_smooth_tone);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.skin_smooth_amount);
+            glUniform1f(uni_loc(p, "u_radius"), cfx.skin_smooth_radius);
+            glUniform1f(uni_loc(p, "u_tone"), cfx.skin_smooth_tone);
             run1(p);
             if (cfx.skin_smooth_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.skin_smooth_amount, g_pp.fbo[pslot], w, h);
@@ -2295,13 +2295,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.glow_up_amount);
-            glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.glow_up_glow);
-            glUniform1f(glGetUniformLocation(p, "u_warmth"), cfx.glow_up_warmth);
-            glUniform1f(glGetUniformLocation(p, "u_brighten"), cfx.glow_up_brighten);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.glow_up_amount);
+            glUniform1f(uni_loc(p, "u_glow"), cfx.glow_up_glow);
+            glUniform1f(uni_loc(p, "u_warmth"), cfx.glow_up_warmth);
+            glUniform1f(uni_loc(p, "u_brighten"), cfx.glow_up_brighten);
             run1(p);
             if (cfx.glow_up_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.glow_up_amount, g_pp.fbo[pslot], w, h);
@@ -2316,12 +2316,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.cam_shake_amount);
-            glUniform1f(glGetUniformLocation(p, "u_intensity"), cfx.cam_shake_intensity);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.cam_shake_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.cam_shake_amount);
+            glUniform1f(uni_loc(p, "u_intensity"), cfx.cam_shake_intensity);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.cam_shake_speed);
             run1(p);
             if (cfx.cam_shake_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.cam_shake_amount, g_pp.fbo[pslot], w, h);
@@ -2336,16 +2336,16 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.greenscreen_amount);
-            glUniform1f(glGetUniformLocation(p, "u_key_r"), cfx.greenscreen_key_r);
-            glUniform1f(glGetUniformLocation(p, "u_key_g"), cfx.greenscreen_key_g);
-            glUniform1f(glGetUniformLocation(p, "u_key_b"), cfx.greenscreen_key_b);
-            glUniform1f(glGetUniformLocation(p, "u_similarity"), cfx.greenscreen_similarity);
-            glUniform1f(glGetUniformLocation(p, "u_smoothness"), cfx.greenscreen_smoothness);
-            glUniform1f(glGetUniformLocation(p, "u_spill"), cfx.greenscreen_spill);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.greenscreen_amount);
+            glUniform1f(uni_loc(p, "u_key_r"), cfx.greenscreen_key_r);
+            glUniform1f(uni_loc(p, "u_key_g"), cfx.greenscreen_key_g);
+            glUniform1f(uni_loc(p, "u_key_b"), cfx.greenscreen_key_b);
+            glUniform1f(uni_loc(p, "u_similarity"), cfx.greenscreen_similarity);
+            glUniform1f(uni_loc(p, "u_smoothness"), cfx.greenscreen_smoothness);
+            glUniform1f(uni_loc(p, "u_spill"), cfx.greenscreen_spill);
             run1(p);
             if (cfx.greenscreen_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.greenscreen_amount, g_pp.fbo[pslot], w, h);
@@ -2360,13 +2360,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.retro_beauty_amount);
-            glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.retro_beauty_glow);
-            glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.retro_beauty_fade);
-            glUniform1f(glGetUniformLocation(p, "u_blush"), cfx.retro_beauty_blush);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.retro_beauty_amount);
+            glUniform1f(uni_loc(p, "u_glow"), cfx.retro_beauty_glow);
+            glUniform1f(uni_loc(p, "u_fade"), cfx.retro_beauty_fade);
+            glUniform1f(uni_loc(p, "u_blush"), cfx.retro_beauty_blush);
             run1(p);
             if (cfx.retro_beauty_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.retro_beauty_amount, g_pp.fbo[pslot], w, h);
@@ -2381,13 +2381,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.insta_2016_amount);
-            glUniform1f(glGetUniformLocation(p, "u_fade"), cfx.insta_2016_fade);
-            glUniform1f(glGetUniformLocation(p, "u_pop"), cfx.insta_2016_pop);
-            glUniform1f(glGetUniformLocation(p, "u_warmth"), cfx.insta_2016_warmth);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.insta_2016_amount);
+            glUniform1f(uni_loc(p, "u_fade"), cfx.insta_2016_fade);
+            glUniform1f(uni_loc(p, "u_pop"), cfx.insta_2016_pop);
+            glUniform1f(uni_loc(p, "u_warmth"), cfx.insta_2016_warmth);
             run1(p);
             if (cfx.insta_2016_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.insta_2016_amount, g_pp.fbo[pslot], w, h);
@@ -2402,12 +2402,12 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.glass_skin_amount);
-            glUniform1f(glGetUniformLocation(p, "u_radius"), cfx.glass_skin_radius);
-            glUniform1f(glGetUniformLocation(p, "u_gloss"), cfx.glass_skin_gloss);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.glass_skin_amount);
+            glUniform1f(uni_loc(p, "u_radius"), cfx.glass_skin_radius);
+            glUniform1f(uni_loc(p, "u_gloss"), cfx.glass_skin_gloss);
             run1(p);
             if (cfx.glass_skin_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.glass_skin_amount, g_pp.fbo[pslot], w, h);
@@ -2422,13 +2422,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.porcelain_skin_amount);
-            glUniform1f(glGetUniformLocation(p, "u_smooth"), cfx.porcelain_skin_smooth);
-            glUniform1f(glGetUniformLocation(p, "u_brighten"), cfx.porcelain_skin_brighten);
-            glUniform1f(glGetUniformLocation(p, "u_warmth"), cfx.porcelain_skin_warmth);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.porcelain_skin_amount);
+            glUniform1f(uni_loc(p, "u_smooth"), cfx.porcelain_skin_smooth);
+            glUniform1f(uni_loc(p, "u_brighten"), cfx.porcelain_skin_brighten);
+            glUniform1f(uni_loc(p, "u_warmth"), cfx.porcelain_skin_warmth);
             run1(p);
             if (cfx.porcelain_skin_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.porcelain_skin_amount, g_pp.fbo[pslot], w, h);
@@ -2443,13 +2443,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.blush_doll_amount);
-            glUniform1f(glGetUniformLocation(p, "u_blush"), cfx.blush_doll_blush);
-            glUniform1f(glGetUniformLocation(p, "u_smooth"), cfx.blush_doll_smooth);
-            glUniform1f(glGetUniformLocation(p, "u_tint"), cfx.blush_doll_tint);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.blush_doll_amount);
+            glUniform1f(uni_loc(p, "u_blush"), cfx.blush_doll_blush);
+            glUniform1f(uni_loc(p, "u_smooth"), cfx.blush_doll_smooth);
+            glUniform1f(uni_loc(p, "u_tint"), cfx.blush_doll_tint);
             run1(p);
             if (cfx.blush_doll_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.blush_doll_amount, g_pp.fbo[pslot], w, h);
@@ -2464,13 +2464,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.honey_glow_amount);
-            glUniform1f(glGetUniformLocation(p, "u_glow"), cfx.honey_glow_glow);
-            glUniform1f(glGetUniformLocation(p, "u_warmth"), cfx.honey_glow_warmth);
-            glUniform1f(glGetUniformLocation(p, "u_lift"), cfx.honey_glow_lift);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.honey_glow_amount);
+            glUniform1f(uni_loc(p, "u_glow"), cfx.honey_glow_glow);
+            glUniform1f(uni_loc(p, "u_warmth"), cfx.honey_glow_warmth);
+            glUniform1f(uni_loc(p, "u_lift"), cfx.honey_glow_lift);
             run1(p);
             if (cfx.honey_glow_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.honey_glow_amount, g_pp.fbo[pslot], w, h);
@@ -2485,13 +2485,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.soft_glam_amount);
-            glUniform1f(glGetUniformLocation(p, "u_glam"), cfx.soft_glam_glam);
-            glUniform1f(glGetUniformLocation(p, "u_split"), cfx.soft_glam_split);
-            glUniform1f(glGetUniformLocation(p, "u_sparkle"), cfx.soft_glam_sparkle);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.soft_glam_amount);
+            glUniform1f(uni_loc(p, "u_glam"), cfx.soft_glam_glam);
+            glUniform1f(uni_loc(p, "u_split"), cfx.soft_glam_split);
+            glUniform1f(uni_loc(p, "u_sparkle"), cfx.soft_glam_sparkle);
             run1(p);
             if (cfx.soft_glam_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.soft_glam_amount, g_pp.fbo[pslot], w, h);
@@ -2506,13 +2506,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.acid_trip_amount);
-            glUniform1f(glGetUniformLocation(p, "u_trip"), cfx.acid_trip_trip);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.acid_trip_speed);
-            glUniform1f(glGetUniformLocation(p, "u_wobble"), cfx.acid_trip_wobble);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.acid_trip_amount);
+            glUniform1f(uni_loc(p, "u_trip"), cfx.acid_trip_trip);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.acid_trip_speed);
+            glUniform1f(uni_loc(p, "u_wobble"), cfx.acid_trip_wobble);
             run1(p);
             if (cfx.acid_trip_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.acid_trip_amount, g_pp.fbo[pslot], w, h);
@@ -2527,13 +2527,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.liquid_marble_amount);
-            glUniform1f(glGetUniformLocation(p, "u_flow"), cfx.liquid_marble_flow);
-            glUniform1f(glGetUniformLocation(p, "u_scale"), cfx.liquid_marble_scale);
-            glUniform1f(glGetUniformLocation(p, "u_speed"), cfx.liquid_marble_speed);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.liquid_marble_amount);
+            glUniform1f(uni_loc(p, "u_flow"), cfx.liquid_marble_flow);
+            glUniform1f(uni_loc(p, "u_scale"), cfx.liquid_marble_scale);
+            glUniform1f(uni_loc(p, "u_speed"), cfx.liquid_marble_speed);
             run1(p);
             if (cfx.liquid_marble_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.liquid_marble_amount, g_pp.fbo[pslot], w, h);
@@ -2548,13 +2548,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.fractal_mirror_amount);
-            glUniform1f(glGetUniformLocation(p, "u_folds"), cfx.fractal_mirror_folds);
-            glUniform1f(glGetUniformLocation(p, "u_drift"), cfx.fractal_mirror_drift);
-            glUniform1f(glGetUniformLocation(p, "u_zoom"), cfx.fractal_mirror_zoom);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.fractal_mirror_amount);
+            glUniform1f(uni_loc(p, "u_folds"), cfx.fractal_mirror_folds);
+            glUniform1f(uni_loc(p, "u_drift"), cfx.fractal_mirror_drift);
+            glUniform1f(uni_loc(p, "u_zoom"), cfx.fractal_mirror_zoom);
             run1(p);
             if (cfx.fractal_mirror_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.fractal_mirror_amount, g_pp.fbo[pslot], w, h);
@@ -2569,13 +2569,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.breathe_warp_amount);
-            glUniform1f(glGetUniformLocation(p, "u_breathe"), cfx.breathe_warp_breathe);
-            glUniform1f(glGetUniformLocation(p, "u_rate"), cfx.breathe_warp_rate);
-            glUniform1f(glGetUniformLocation(p, "u_chroma"), cfx.breathe_warp_chroma);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.breathe_warp_amount);
+            glUniform1f(uni_loc(p, "u_breathe"), cfx.breathe_warp_breathe);
+            glUniform1f(uni_loc(p, "u_rate"), cfx.breathe_warp_rate);
+            glUniform1f(uni_loc(p, "u_chroma"), cfx.breathe_warp_chroma);
             run1(p);
             if (cfx.breathe_warp_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.breathe_warp_amount, g_pp.fbo[pslot], w, h);
@@ -2590,13 +2590,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.melt_drip_amount);
-            glUniform1f(glGetUniformLocation(p, "u_melt"), cfx.melt_drip_melt);
-            glUniform1f(glGetUniformLocation(p, "u_drip"), cfx.melt_drip_drip);
-            glUniform1f(glGetUniformLocation(p, "u_haze"), cfx.melt_drip_haze);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.melt_drip_amount);
+            glUniform1f(uni_loc(p, "u_melt"), cfx.melt_drip_melt);
+            glUniform1f(uni_loc(p, "u_drip"), cfx.melt_drip_drip);
+            glUniform1f(uni_loc(p, "u_haze"), cfx.melt_drip_haze);
             run1(p);
             if (cfx.melt_drip_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.melt_drip_amount, g_pp.fbo[pslot], w, h);
@@ -2611,13 +2611,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.neon_city_amount);
-            glUniform1f(glGetUniformLocation(p, "u_neon"), cfx.neon_city_neon);
-            glUniform1f(glGetUniformLocation(p, "u_scanline"), cfx.neon_city_scanline);
-            glUniform1f(glGetUniformLocation(p, "u_streak"), cfx.neon_city_streak);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.neon_city_amount);
+            glUniform1f(uni_loc(p, "u_neon"), cfx.neon_city_neon);
+            glUniform1f(uni_loc(p, "u_scanline"), cfx.neon_city_scanline);
+            glUniform1f(uni_loc(p, "u_streak"), cfx.neon_city_streak);
             run1(p);
             if (cfx.neon_city_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.neon_city_amount, g_pp.fbo[pslot], w, h);
@@ -2632,13 +2632,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.chrome_pulse_amount);
-            glUniform1f(glGetUniformLocation(p, "u_chrome"), cfx.chrome_pulse_chrome);
-            glUniform1f(glGetUniformLocation(p, "u_pulse"), cfx.chrome_pulse_pulse);
-            glUniform1f(glGetUniformLocation(p, "u_edge"), cfx.chrome_pulse_edge);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.chrome_pulse_amount);
+            glUniform1f(uni_loc(p, "u_chrome"), cfx.chrome_pulse_chrome);
+            glUniform1f(uni_loc(p, "u_pulse"), cfx.chrome_pulse_pulse);
+            glUniform1f(uni_loc(p, "u_edge"), cfx.chrome_pulse_edge);
             run1(p);
             if (cfx.chrome_pulse_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.chrome_pulse_amount, g_pp.fbo[pslot], w, h);
@@ -2653,13 +2653,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.hud_glitch_amount);
-            glUniform1f(glGetUniformLocation(p, "u_hud"), cfx.hud_glitch_hud);
-            glUniform1f(glGetUniformLocation(p, "u_dropout"), cfx.hud_glitch_dropout);
-            glUniform1f(glGetUniformLocation(p, "u_tint"), cfx.hud_glitch_tint);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.hud_glitch_amount);
+            glUniform1f(uni_loc(p, "u_hud"), cfx.hud_glitch_hud);
+            glUniform1f(uni_loc(p, "u_dropout"), cfx.hud_glitch_dropout);
+            glUniform1f(uni_loc(p, "u_tint"), cfx.hud_glitch_tint);
             run1(p);
             if (cfx.hud_glitch_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.hud_glitch_amount, g_pp.fbo[pslot], w, h);
@@ -2674,13 +2674,13 @@
         if (p) {
             GLuint pre_tex = cur;
             glUseProgram(p);
-            glUniform1f(glGetUniformLocation(p, "u_tex_w"), (float)w);
-            glUniform1f(glGetUniformLocation(p, "u_tex_h"), (float)h);
-            glUniform1f(glGetUniformLocation(p, "u_time"),  t);
-            glUniform1f(glGetUniformLocation(p, "u_strength"), cfx.night_drive_amount);
-            glUniform1f(glGetUniformLocation(p, "u_night"), cfx.night_drive_night);
-            glUniform1f(glGetUniformLocation(p, "u_sodium"), cfx.night_drive_sodium);
-            glUniform1f(glGetUniformLocation(p, "u_flare"), cfx.night_drive_flare);
+            glUniform1f(uni_loc(p, "u_tex_w"), (float)w);
+            glUniform1f(uni_loc(p, "u_tex_h"), (float)h);
+            glUniform1f(uni_loc(p, "u_time"),  t);
+            glUniform1f(uni_loc(p, "u_strength"), cfx.night_drive_amount);
+            glUniform1f(uni_loc(p, "u_night"), cfx.night_drive_night);
+            glUniform1f(uni_loc(p, "u_sodium"), cfx.night_drive_sodium);
+            glUniform1f(uni_loc(p, "u_flare"), cfx.night_drive_flare);
             run1(p);
             if (cfx.night_drive_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.night_drive_amount, g_pp.fbo[pslot], w, h);
