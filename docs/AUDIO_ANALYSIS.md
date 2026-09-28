@@ -62,7 +62,7 @@ loader accepts it.
 
 | Field | Requirement |
 |---|---|
-| stems | 4-stem separation, C++ htdemucs (`separate_stems4`, ONNX, STFT/iSTFT in C++) by default; `stems_dir` reuses precomputed `{drums,bass,other,vocals}.wav` (a reuse feature, not the acceptance path). Without stems: hits fall back to band flux / onset strength on the instrumental (`original − vocals`) or the mix; the downbeat phase uses the same fallback and matches the stems path. |
+| stems | 4-stem separation, C++ htdemucs (`separate_stems4`, ONNX, STFT/iSTFT in C++) by default; `stems_dir` reuses precomputed `{drums,bass,other,vocals}.wav` covering the whole source file (a `range` analysis slices them like the mix). Separation is deterministic (the demucs CLI default `--shifts 1` applies a random time shift per run, so its stems differ from run to run by ~15–20 dB SNR; low-confidence word alignments and weak hits inherit that noise). Without stems: hits fall back to band flux / onset strength on the instrumental (`original − vocals`) or the mix; the downbeat phase uses the same fallback and matches the stems path. |
 | beats, bpm | Beat tracking on the **mix** (never the vocal stem). |
 | downbeats | Bar phase ∈ {0..3} maximising Σ over beats of (bass-stem onset strength at the beat / max) + (1 − cosine similarity of beat-synchronous chroma of bass+other between consecutive beats). Downbeats = beats at that phase. |
 | hits.kick/snare/hat | Half-wave-rectified spectral flux (dB) of the drums stem restricted to the band; peak picking with local max ±3 frames, local mean ±12 frames, delta = 0.5 × quantile(norm, q) with q = 0.90/0.90/0.80, minimum spacing 120/120/70 ms (10 ms hop). |

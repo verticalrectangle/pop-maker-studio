@@ -399,6 +399,9 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         std::vector<float> m;
         aadsp::mel_power(mfb, mag.data(), nfr, m);
         aadsp::power_to_db_inplace(m);
+        // librosa.power_to_db(M, ref=np.max): 0 dB at the loudest bin of the span.
+        const float peak = m.empty() ? 0.f : *std::max_element(m.begin(), m.end());
+        for (float& v : m) v -= peak;
         out.spectrum.assign((size_t)n_frames * 32, 0);
         for (int t = 0; t < n_frames; t++) {
             for (int b = 0; b < 32; b++) {
@@ -752,8 +755,8 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
 }
 
 std::string audio_analysis_cache_file(const std::string& audio_path, const AudioAnalysisOptions& opt) {
-    // Bump when the analysis output changes meaning (r2: env_start for spans).
-    static const char* kSchemaRevision = "r2";
+    // Bump when the analysis output changes (r2: env_start for spans; r3: spectrum dB rel max).
+    static const char* kSchemaRevision = "r3";
     std::error_code ec;
     long long mtime = 0;
     auto wt = fs::last_write_time(audio_path, ec);
