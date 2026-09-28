@@ -4,6 +4,7 @@
 // thread); playback and export read them by frame index. Tiny data (~850
 // B/frame) — whole files load into an in-memory registry on first use.
 #include "face_track.h"
+#include <functional>
 #include <string>
 
 enum class FaceCacheStatus { None, Building, Ready, Failed };
@@ -21,6 +22,14 @@ FaceCacheStatus face_cache_status(const std::string& take_path, float* progress)
 // Coords are RAW full-res take pixels (obs.w/h = take dimensions).
 bool face_cache_obs(const std::string& take_path, int rot_q,
                     double src_t, FaceObs& out);
+
+// Frame count for a ready cache (0 when missing/building).
+int face_cache_frame_count(const std::string& take_path, int rot_q);
+// Per-frame data: score (>0 = face), geometric eyeOpen, and the frame's
+// source presentation time (seconds into the take; VFR sources report real
+// times, not frame_index/fps). Returns false when unavailable.
+bool face_cache_frame(const std::string& take_path, int rot_q, int fi,
+                      FaceObs& out, double* src_time);
 
 // Export prep: block until the cache is ready (building it if needed).
 // Returns false on failure. progress is forwarded to the builder.

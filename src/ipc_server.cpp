@@ -2225,13 +2225,19 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             r["frame"] = {obs.w, obs.h};
             r["nose"]  = {obs.pts[1][0], obs.pts[1][1]};      // mesh nose tip
             r["chin"]  = {obs.pts[152][0], obs.pts[152][1]};  // mesh chin
+            r["eye_open"] = obs.eye_open;  // geometric ratio (stable behind glasses)
+            // Unified blink: max(blendshape, geometric). eye_blink stays the
+            // raw blendshape mean for diagnostics; consumers use eye_blink_u.
+            const float bb = obs.has_blend
+                ? 0.5f * (obs.blend[FB_EYE_BLINK_L] + obs.blend[FB_EYE_BLINK_R])
+                : 0.f;
             if (obs.has_blend) {
                 r["jaw_open"]  = obs.blend[FB_JAW_OPEN];
                 r["smile"]     = (obs.blend[FB_MOUTH_SMILE_L] +
                                   obs.blend[FB_MOUTH_SMILE_R]) * 0.5f;
-                r["eye_blink"] = (obs.blend[FB_EYE_BLINK_L] +
-                                  obs.blend[FB_EYE_BLINK_R]) * 0.5f;
+                r["eye_blink"] = bb;
             }
+            r["eye_blink_u"] = face_blink_of(obs);
             r["eyeA"]  = {obs.pts[468][0], obs.pts[468][1]};   // iris centers
             r["eyeB"]  = {obs.pts[473][0], obs.pts[473][1]};
             if (params.value("full", false)) {
@@ -2471,6 +2477,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         j["valid"]          = n > 0;
         j["score"]          = n > 0 ? faces[0].score : 0.f;
         j["has_blend"]      = n > 0 && faces[0].has_blend;
+        j["eye_open"]       = n > 0 ? faces[0].eye_open : 0.f;
+        j["eye_blink_u"]    = n > 0 ? face_blink_of(faces[0]) : 0.f;
         j["frame_w"]        = n > 0 ? faces[0].w : 0;
         j["frame_h"]        = n > 0 ? faces[0].h : 0;
         // Latency budget, observable on device (µs → ms).

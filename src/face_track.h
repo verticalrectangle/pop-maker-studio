@@ -22,6 +22,7 @@
 
 static constexpr int FT_NPTS   = 478;  // mesh points (incl. 10 iris)
 static constexpr int FT_NBLEND = 52;   // ARKit-style blendshape coefficients
+#include "face_metrics.h"
 
 // Blendshape indices (kBlendshapeNames order — MediaPipe face_blendshapes):
 enum : int {
@@ -41,11 +42,38 @@ struct FaceObs {
     float  pts[FT_NPTS][2];    // pixels in the submitted frame
     float  blend[FT_NBLEND] = {};  // 0..1 coefficients (EMA-smoothed live)
     bool   has_blend = false;
+    float  eye_open = 0.f;      // face_eye_open_ratio for this frame (geometry,
+                                // stable behind glasses); 0 = not computed
     float  score = 0.f;
     int    w = 0, h = 0;       // frame size the pts live in
 };
 
 bool face_track_available();  // models found (models/face/*.onnx)
+
+// Unified blink signal for an observation: max(blendshape blink,
+// 1 − eyeOpen/openBaseline). `open_baseline` <= 0 (uncalibrated) falls back
+// to the blendshape term alone. Use wherever eyeBlinkL/R drive blink
+// fades/lash compression.
+inline float face_blink_of(const FaceObs& o, float open_baseline = 0.f) {
+    const float bb = o.has_blend
+        ? 0.5f * (o.blend[FB_EYE_BLINK_L] + o.blend[FB_EYE_BLINK_R])
+        : 0.f;
+    const float base = (open_baseline > 1e-6f) ? open_baseline
+                       : (o.eye_open > 1e-6f ? o.eye_open : 0.f);
+    return face_blink_signal(bb, o.eye_open, base);
+}
+
+// Per-eye blink pair (for the u_blink / makeup blink-fade uniforms).
+inline void face_blink_lr(const FaceObs& o, float open_baseline,
+                          float& l, float& r) {
+    const float geom = (open_baseline > 1e-6f && o.eye_open > 0.f)
+        ? (1.f - o.eye_open / open_baseline) : 0.f;
+    const float g = geom < 0.f ? 0.f : (geom > 1.f ? 1.f : geom);
+    const float bl = o.has_blend ? o.blend[FB_EYE_BLINK_L] : 0.f;
+    const float br = o.has_blend ? o.blend[FB_EYE_BLINK_R] : 0.f;
+    l = bl > g ? bl : g;
+    r = br > g ? br : g;
+}
 
 // Live path: submit copies the frame and wakes the worker (call from the UI
 // thread at mirror rate); latest returns the most recent smoothed result.
