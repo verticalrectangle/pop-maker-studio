@@ -1720,49 +1720,35 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (cl.clip_type != ClipType::Script) { err = "not a script clip"; return {}; }
         if (params.contains("path")) cl.script_path = params.value("path", cl.script_path);
         if (params.contains("params")) cl.script_params = params["params"].dump();
-        char key[64]; snprintf(key, sizeof(key), "%d:%d", ti, ci);
-        script_clip_invalidate(key);
+        script_clip_invalidate(script_clip_key(ti, ci));
         history_push(state, "Set script clip");
         return json::object();
     }
 
     if (method == "get_script_errors") {
-        json out = json::object();
+        auto report_json = [](const ScriptClipReport& rep) {
+            json e;
+            e["clip"] = rep.key;
+            json lst = json::array();
+            for (const ScriptError& er : rep.errors)
+                lst.push_back({{"message", er.message}, {"file", er.file}, {"line", er.line}});
+            e["errors"] = lst;
+            e["log"] = rep.log;
+            e["render_ms"] = rep.render_ms;
+            e["flush_ms"] = rep.flush_ms;
+            return e;
+        };
+        std::string only;
         if (params.contains("clip") || params.contains("track")) {
             int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
             if (!check_clip(state, ti, ci, err)) return {};
-            char key[64]; snprintf(key, sizeof(key), "%d:%d", ti, ci);
-            json lst = json::array();
-            for (auto& [k, errs] : script_clip_errors(state)) {
-                if (k != key) continue;
-                for (auto& er : errs) {
-                    json ee;
-                    ee["message"] = er.message;
-                    ee["file"] = er.file;
-                    ee["line"] = er.line;
-                    lst.push_back(ee);
-                }
-            }
-            out["errors"] = lst;
-            out["log"] = json::array();
-        } else {
-            json arr = json::array();
-            for (auto& [k, errs] : script_clip_errors(state)) {
-                json e;
-                e["clip"] = k;
-                json lst = json::array();
-                for (auto& er : errs) {
-                    json ee;
-                    ee["message"] = er.message;
-                    ee["file"] = er.file;
-                    ee["line"] = er.line;
-                    lst.push_back(ee);
-                }
-                e["errors"] = lst;
-                arr.push_back(e);
-            }
-            out["clips"] = arr;
+            only = script_clip_key(ti, ci);
         }
+        json arr = json::array();
+        for (const ScriptClipReport& rep : script_clip_reports(state))
+            if (only.empty() || rep.key == only) arr.push_back(report_json(rep));
+        json out;
+        out["clips"] = arr;
         return out;
     }
 
@@ -4662,6 +4648,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else { err = "unknown format: " + fmt + " (use vertical/9:16, horizontal/16:9, square/1:1)"; return {}; }
         history_push(state, "Set format: " + fmt);
         return json::object();
+    }
+
+    if (method == "set_fps") {
+        int fps = params.value("fps", 0);
+        if (fps < 1 || fps > 240) { err = "fps must be an integer 1..240"; return {}; }
+        state.fps = fps;
+        return {{"fps", fps}};
     }
 
     if (method == "trim_all_to") {

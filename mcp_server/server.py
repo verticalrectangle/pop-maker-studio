@@ -98,7 +98,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "add_clip", "add_clip_sequence", "add_track", "delete_clip", "delete_clips_after",
         "delete_track", "move_clip", "split_clip", "trim_clip", "trim_all_to", "make_section", "select_clip",
         "set_clip_prop", "set_clip_props", "set_clip_keyframes", "rename_track", "add_to_bin",
-        "remove_from_bin", "set_format", "set_loop_region", "add_callout", "add_chapter_marker",
+        "remove_from_bin", "set_format", "set_fps", "set_loop_region", "add_callout", "add_chapter_marker",
         "remove_chapter_marker", "get_chapter_markers", "generate_chapters", "crop_media",
         "find_and_add_clip", "find_video_moment", "apply_multicam_cuts", "pexels_add_clip",
         "add_script_clip", "set_script_clip",
@@ -2419,6 +2419,19 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="set_fps",
+            description=(
+                "Set the project frame rate (the timeline frame grid, export fps and the f.fps / "
+                "f.frame Script clips see). Integer 1–240; common: 24, 25, 30, 50, 60. Existing "
+                "clip boundaries are not re-snapped."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {"fps": {"type": "integer", "minimum": 1, "maximum": 240}},
+                "required": ["fps"],
+            },
+        ),
+        Tool(
             name="take_snapshot",
             description=(
                 "Renders the canvas frame to PNG and returns the image inline so you can see it. "
@@ -2940,10 +2953,11 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="get_script_errors",
             description=(
-                "Read script-clip build errors (docs/SCRIPT_API.md §8). Pass track and "
-                "clip TOGETHER for single-clip mode: {errors: [{message, file, line}], "
-                "log: []}. Omit both for project-wide mode: {clips: [{clip: 'ti:ci', "
-                "errors}]}. Read-only."
+                "Read Script clip diagnostics (docs/SCRIPT_API.md §8): {clips: [{clip: "
+                "'track:clip', errors: [{message, file, line}], log: [pms.log lines], "
+                "render_ms, flush_ms}]} for every Script clip rendered so far. Pass track "
+                "and clip together to report one clip. Errors come from the last build "
+                "or render; an empty list means the clip renders cleanly. Read-only."
             ),
             inputSchema={
                 "type": "object",

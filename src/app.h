@@ -94,6 +94,12 @@ enum class TransitionType { None, Dissolve, FadeBlack, DipWhite, Shake };
 
 enum class OutputFormat { Vertical, Horizontal, Square };
 
+// Canvas pixel size of an output format (export resolution).
+inline void output_format_px(OutputFormat f, int& w, int& h) {
+    w = f == OutputFormat::Horizontal ? 1920 : 1080;
+    h = f == OutputFormat::Vertical ? 1920 : 1080;
+}
+
 // ── Platform export preset ────────────────────────────────────────────────────
 // Selects a validated CRF / bitrate-cap / profile / audio recipe for an upload
 // target. `Custom` = the user's manual CRF/preset/audio_bitrate/high_profile.

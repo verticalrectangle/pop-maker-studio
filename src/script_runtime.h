@@ -1,25 +1,26 @@
 #pragma once
-// Script clip runtime (SCRIPT_API.md): QuickJS-ng host per Script clip.
+// Script clip runtime (docs/SCRIPT_API.md): QuickJS-ng host per Script clip.
 // One ScriptRuntime per clip: isolated JSRuntime+JSContext, ES module loader
-// with file watching, the `pms` global bindings (§3), purity guards, and the
-// per-frame render entry used by script_clip.cpp.
+// with file watching, the `pms` global (§3) with the Context2D from
+// script_context2d.h, purity guards, and the per-frame render entry used by
+// script_clip.cpp.
 //
-// Threading: all entry points run on the main/GL thread (preview, export
-// tick, snapshot). Hot-reload polling (script_runtime_poll) is cheap
-// (stat mtimes) and also runs there. No worker threads.
+// Threading: main/GL thread only (preview, export tick, snapshot).
+#include "script_gpu.h"  // ScriptUniforms
+
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 struct AppState;
 struct Clip;
+class SkCanvas;
 
 struct ScriptError {
-    std::string message;   // exception text / compile error
+    std::string message;   // exception text (+ stack) / compile error
     std::string file;      // module path ("" = runtime-level)
-    int line = 0;
+    int line = 0;          // 1-based; 0 = unknown
 };
 
 struct ScriptFrame {
@@ -32,12 +33,6 @@ struct ScriptFrame {
     bool exporting = false;
 };
 
-// Render callback: the host canvas. Set before render() via set_draw_hooks;
-// invoked by the Context2D binding (src/script_canvas.*).
-struct ScriptDrawHooks {
-    std::function<void(const std::string& file)> ensure_font_loaded;
-};
-
 class ScriptRuntime {
 public:
     ScriptRuntime();
@@ -46,47 +41,35 @@ public:
     ScriptRuntime(const ScriptRuntime&) = delete;
     ScriptRuntime& operator=(const ScriptRuntime&) = delete;
 
-    // (Re)build from the clip's entry module. Destroys any previous runtime.
-    // Returns false + errors when the entry file is missing or module
-    // evaluation fails. `clip_key` identifies the clip for the script log.
-    bool build(AppState& state, const Clip& clip, const std::string& clip_key,
+    // (Re)build from the clip's entry module and run setup({width, height,
+    // fps, params}). Destroys any previous runtime. Returns false + errors
+    // when the entry is missing, evaluation throws, or render is not
+    // exported.
+    bool build(const AppState& state, const Clip& clip, int width, int height,
                std::vector<ScriptError>& errors);
 
-    // Render one frame. Returns false + errors on exception; on success the
-    // Context2D calls issued by render(f) are in the canvas (script_canvas).
-    // `audio_epoch` = generation counter of AppState::audio_analysis; the
-    // frozen pms.audio/words/lines objects are rebuilt only when it changes.
-    bool render(AppState& state, const Clip& clip, const ScriptFrame& f,
-                uint64_t audio_epoch, bool exporting,
+    // Run render(f) against `canvas` (cleared; scaled from the logical
+    // f.width×f.height to the canvas' own size). Returns false + errors when
+    // it throws or queues promise jobs.
+    bool render(const AppState& state, const ScriptFrame& f, SkCanvas* canvas,
                 std::vector<ScriptError>& errors);
 
-    // True when any watched file (module, pms.json dep) changed on disk.
-    bool poll_dirty();
-    // Last render's log tail (pms.log lines, capped).
-    const std::vector<std::string>& log_tail() const { return log_tail_; }
-    void clear_log() { log_tail_.clear(); }
-    // Script-requested post shader for the last rendered frame.
-    bool has_post() const { return has_post_; }
-    void set_canvas(class ScriptCanvas* c);
-    const std::string& post_frag() const { return post_frag_; }
-    const std::vector<std::pair<std::string, std::vector<float>>>& post_uniforms() const {
-        return post_uniforms_;
-    }
-    // Face tracks requested via pms.face(path) during the last render.
-    const std::vector<std::string>& face_requests() const { return face_requests_; }
-    // JSON files loaded via pms.json (for file watching).
-    const std::vector<std::string>& json_deps() const { return json_deps_; }
+    // True when any watched file (modules, pms.json/image/font files) changed.
+    bool poll_dirty() const;
 
-public:
+    // Script log (pms.log / console.*), last 200 lines.
+    const std::vector<std::string>& log_tail() const;
+    // Post shader requested by the last render ("" = none) + its uniforms.
+    const std::string& post_frag() const;
+    const ScriptUniforms& post_uniforms() const;
+    // Face tracks requested via pms.face(path) during the last render.
+    const std::vector<std::string>& face_requests() const;
+
     struct Impl;
+
 private:
+    void teardown();
     std::unique_ptr<Impl> impl_;
-    std::vector<std::string> log_tail_;
-    bool has_post_ = false;
-    std::string post_frag_;
-    std::vector<std::pair<std::string, std::vector<float>>> post_uniforms_;
-    std::vector<std::string> face_requests_;
-    std::vector<std::string> json_deps_;
 };
 
 // Resolve `spec` relative to `referrer` (file path) or the entry dir.
@@ -95,7 +78,7 @@ private:
 std::string script_resolve_spec(const std::string& spec, const std::string& referrer,
                                 const std::string& entry_dir);
 
-// Current audio epoch: increments every time AppState::audio_analysis is
-// published (load_audio_analysis). The runtime memoises the frozen objects
-// against this + the mapped clip offset.
+// Identity of the published audio analysis (changes on every
+// load_audio_analysis / analyze_audio publish). The runtime memoises the
+// frozen pms.audio objects against this + the mapped clip offset.
 uint64_t script_audio_epoch(const AppState& state);

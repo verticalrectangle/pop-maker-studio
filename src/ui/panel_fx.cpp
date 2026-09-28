@@ -104,9 +104,7 @@ static uintptr_t fx_preview_source_tex(AppState& state, bool* flip, int* sw, int
             uintptr_t scn = scene_result();
             if (scn) {
                 // Composited frame fills the canvas — preview at the canvas aspect.
-                *sw = 1080; *sh = 1920;
-                if (state.format == OutputFormat::Horizontal) { *sw = 1920; *sh = 1080; }
-                else if (state.format == OutputFormat::Square) { *sw = 1080; *sh = 1080; }
+                output_format_px(state.format, *sw, *sh);
                 *flip = true;
                 return scn;
             }

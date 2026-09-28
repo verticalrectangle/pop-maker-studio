@@ -23,6 +23,8 @@
 #include "face_track.h"
 #include "face_filters.h"
 #include "face_cache.h"
+#include "../script_clip.h"
+#include "../perf.h"
 #include <turbojpeg.h>
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
@@ -31,6 +33,7 @@
 #include <imgui_internal.h>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1752,6 +1755,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
     // ── Pass 1: BG clips (ImGui draw list) + Video clips (→ scene FBO) ────────
     scene_begin((int)w, (int)h);
+    script_clip_gc(state);
 
     // Pre-walk: identify every video clip that will be decoded this frame
     // (active clip per track + any transition partner) and submit async
@@ -1978,6 +1982,33 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                              : stroke_len <= 0.6f ? 0.f
                              : (stroke_len - 0.6f) / 0.4f;
             scene_add_shape(geom, style, alpha, fill_alpha, (int)w, (int)h);
+        }
+
+        // ── Script clip ────────────────────────────────────────────────────────
+        // Scripts draw at the project canvas size; Skia rasterises at the
+        // preview size (docs/SCRIPT_API.md §1).
+        for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+            const Clip& cl = track.clips[ci];
+            if (cl.clip_type != ClipType::Script) continue;
+            if (state.playhead < cl.start || state.playhead >= cl.end) continue;
+            int cw = 0, ch = 0;
+            output_format_px(state.format, cw, ch);
+            std::vector<ScriptError> serr;
+            auto st0 = std::chrono::steady_clock::now();
+            unsigned tex = script_clip_texture(state, cl, script_clip_key(ti, ci), state.playhead,
+                                               cw, ch, (int)w, (int)h, false, serr);
+            perf::record(perf::S_SCRIPT, std::chrono::duration<double, std::milli>(
+                                             std::chrono::steady_clock::now() - st0).count());
+            if (!tex) continue;
+            float px    = cl.eval_prop("pos_x",    state.playhead);
+            float py    = cl.eval_prop("pos_y",    state.playhead);
+            float sx    = cl.eval_prop("scale_x",  state.playhead);
+            float sy    = cl.eval_prop("scale_y",  state.playhead);
+            float rot   = cl.eval_prop("rotation", state.playhead);
+            float alpha = cl.eval_prop("opacity",  state.playhead);
+            float rad = rot * 3.14159265f / 180.f;
+            scene_add_layer(tex, px * w, py * h, w * sx * 0.5f, h * sy * 0.5f,
+                            cosf(rad), sinf(rad), alpha);
         }
 
         // ── Video clip ─────────────────────────────────────────────────────────

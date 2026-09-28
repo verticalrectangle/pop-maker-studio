@@ -10,6 +10,7 @@
 #include "body_fx.h"
 #include "face_filters.h"
 #include "face_cache.h"
+#include "script_clip.h"
 
 #if PMS_HAS_FFMPEG
 #include "gl_compat.h"
@@ -50,6 +51,9 @@
 namespace fs = std::filesystem;
 
 static std::atomic<bool>  g_cancel{false};
+// Why the export stopped when it was not the user (script error): shown as
+// the render stage instead of "Cancelled". GL thread only.
+static std::string        g_fail_reason;
 static std::atomic<pid_t> g_ffmpeg_pid{0};
 static std::string        g_font_path;
 
@@ -477,6 +481,44 @@ void scene_add_text_layer(const AppState& state, float t, int ti, int w, int h) 
 
 // ── GL snapshot — identical to preview ───────────────────────────────────────
 
+// ── Script clips (docs/SCRIPT_API.md) ─────────────────────────────────────────
+// Composite track ti's active Script clips into dl at the output size (the
+// layer texture is straight alpha, row 0 = top — same UVs as decoded video).
+// exporting = true: face tracks are waited for and f.exporting is set.
+// Returns the first script error ("" = clean).
+static std::string draw_script_clips(ImDrawList& dl, const AppState& state, int ti, float t,
+                                     int out_w, int out_h) {
+    const auto& track = state.tracks[ti];
+    std::string fail;
+    for (int ci = 0; ci < (int)track.clips.size(); ++ci) {
+        const Clip& cl = track.clips[ci];
+        if (cl.clip_type != ClipType::Script || t < cl.start || t >= cl.end) continue;
+        std::string key = script_clip_key(ti, ci);
+        std::vector<ScriptError> errs;
+        unsigned tex = script_clip_texture(state, cl, key, t, out_w, out_h, out_w, out_h,
+                                           /*exporting=*/true, errs);
+        if (!errs.empty() && fail.empty()) {
+            const std::string& m = errs.front().message;
+            fail = "script clip " + key + ": " + m.substr(0, m.find('\n'));
+        }
+        if (!tex) continue;
+        float W = (float)out_w, H = (float)out_h;
+        float px = cl.eval_prop("pos_x", t), py = cl.eval_prop("pos_y", t);
+        float sx = cl.eval_prop("scale_x", t), sy = cl.eval_prop("scale_y", t);
+        float rad = cl.eval_prop("rotation", t) * 3.14159265f / 180.f;
+        float alpha = fmaxf(0.f, fminf(1.f, cl.eval_prop("opacity", t)));
+        float cx = px * W, cy = py * H, hw = W * sx * 0.5f, hh = H * sy * 0.5f;
+        float cr = cosf(rad), sr = sinf(rad);
+        auto rot = [&](float ox, float oy) -> ImVec2 {
+            return {cx + ox * cr - oy * sr, cy + ox * sr + oy * cr};
+        };
+        dl.AddImageQuad(ImTextureRef((ImTextureID)(uintptr_t)tex),
+            rot(-hw, -hh), rot(hw, -hh), rot(hw, hh), rot(-hw, hh),
+            {0, 0}, {1, 0}, {1, 1}, {0, 1}, IM_COL32(255, 255, 255, (int)(alpha * 255.f)));
+    }
+    return fail;
+}
+
 void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     if (state.snapshot_running) return;
 
@@ -510,11 +552,7 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     std::string out  = dir + "/" + stem + "_frame_" + ts + ".png";
 
     int out_w = 1080, out_h = 1920;
-    switch (state.format) {
-        case OutputFormat::Horizontal: out_w = 1920; out_h = 1080; break;
-        case OutputFormat::Square:     out_w = 1080; out_h = 1080; break;
-        default: break;
-    }
+    output_format_px(state.format, out_w, out_h);
     float W = (float)out_w, H = (float)out_h;
     float t = snap_t;
 
@@ -686,6 +724,10 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
                                     fbo, out_w, out_h);
             }
         }
+
+        // ── Script clips ──────────────────────────────────────────────────────
+        // A failing script shows its error card in the still; export aborts.
+        draw_script_clips(dl, state, ti, t, out_w, out_h);
 
         // ── Video clips ───────────────────────────────────────────────────────
         const Clip* active = nullptr; int active_ci = -1;
@@ -1387,6 +1429,7 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
 
 void render_start_gl(AppState& state) {
     g_cancel.store(false);
+    g_fail_reason.clear();
 
     // Open crash log — each line is flushed so the last line before a crash is visible.
     if (g_render_log) fclose(g_render_log);
@@ -1396,11 +1439,7 @@ void render_start_gl(AppState& state) {
          state.out_mp4.c_str(), (double)state.duration, state.fps);
 
     int out_w = 1080, out_h = 1920;
-    switch (state.format) {
-        case OutputFormat::Horizontal: out_w = 1920; out_h = 1080; break;
-        case OutputFormat::Square:     out_w = 1080; out_h = 1080; break;
-        default: break;
-    }
+    output_format_px(state.format, out_w, out_h);
     int fps          = state.fps;
     int total_frames = (int)(state.duration * fps + 0.5f);
     if (total_frames <= 0 || state.out_mp4.empty()) return;
@@ -2063,7 +2102,8 @@ void render_tick_gl(AppState& state) {
         g_ffmpeg_pid.store(0);
         gl_cleanup_export();
         state.render.running = false;
-        state.render.stage   = "Cancelled";
+        state.render.stage   = g_fail_reason.empty() ? "Cancelled" : g_fail_reason;
+        g_fail_reason.clear();
         if (g_render_log) { fclose(g_render_log); g_render_log = nullptr; }
         return;
     }
@@ -2302,6 +2342,16 @@ void render_tick_gl(AppState& state) {
                             : (slen - 0.6f) / 0.4f;
                 shape_render_to_fbo(sgeom, sstyle, salpha, sfill,
                                     g_gl_ex.fbo, g_gl_ex.out_w, g_gl_ex.out_h);
+            }
+        }
+
+        // ── Script clips ───────────────────────────────────────────────────────
+        {
+            std::string fail = draw_script_clips(dl, state, ti, t, g_gl_ex.out_w, g_gl_ex.out_h);
+            if (!fail.empty() && g_fail_reason.empty()) {
+                rlog("script failure at t=%.3f: %s\n", (double)t, fail.c_str());
+                g_fail_reason = "Error — " + fail;
+                g_cancel.store(true);
             }
         }
 

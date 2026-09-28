@@ -3229,8 +3229,7 @@ void panel_clip(AppState& state, float w) {
             s_script_params[sizeof(s_script_params)-1] = '\0';
             s_script_last_ti = sel_ti; s_script_last_ci = sel_ci;
         }
-        char script_key[64];
-        snprintf(script_key, sizeof(script_key), "%d:%d", sel_ti, sel_ci);
+        const std::string script_key = script_clip_key(sel_ti, sel_ci);
 
         // ── Script: entry module path + params JSON ─────────────────────────
         if (ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -3285,9 +3284,9 @@ void panel_clip(AppState& state, float w) {
         if (ImGui::CollapsingHeader("Errors", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Dummy({0.f, 4.f});
             bool sc_any_err = false;
-            for (auto& [k, errs] : script_clip_errors(state)) {
-                if (k != script_key) continue;
-                for (auto& er : errs) {
+            for (const ScriptClipReport& rep : script_clip_reports(state)) {
+                if (rep.key != script_key) continue;
+                for (const ScriptError& er : rep.errors) {
                     sc_any_err = true;
                     char ebuf[1024];
                     if (!er.file.empty() && er.line > 0)

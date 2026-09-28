@@ -165,27 +165,34 @@ set(PMS_ENGINE_SOURCES
     src/perf.cpp
     src/skin_segment.cpp
     src/skin_mask_cache.cpp
-    src/script_runtime.cpp
-    src/script_canvas.cpp
     src/script_clip.cpp
     src/script_face.cpp
-    vendor/quickjs-ng/cutils.c
-    vendor/quickjs-ng/libbf.c
-    vendor/quickjs-ng/libregexp.c
-    vendor/quickjs-ng/libunicode.c
-    vendor/quickjs-ng/quickjs.c
-    vendor/nanovg/src/nanovg.c
 )
 
-# Vendored C sources: keep warnings quiet (upstream code, -Wall is on).
-set_source_files_properties(src/script_runtime.cpp src/script_canvas.cpp
-    PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/vendor/quickjs-ng;${CMAKE_SOURCE_DIR}/vendor/nanovg/src")
-set_source_files_properties(
-    vendor/quickjs-ng/cutils.c vendor/quickjs-ng/libbf.c
-    vendor/quickjs-ng/libregexp.c vendor/quickjs-ng/libunicode.c
-    vendor/quickjs-ng/quickjs.c vendor/nanovg/src/nanovg.c
-    PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-unused-variable;-Wno-sign-compare;-Wno-maybe-uninitialized;-Wno-array-bounds;-Wno-stringop-overflow"
-)
+# Script clips (docs/SCRIPT_API.md): QuickJS-ng runtime + Canvas 2D on Skia
+# (Ganesh GL). Desktop GL builds only; the headless engine keeps the
+# script_clip.cpp entry points, which render nothing there.
+if(NOT PMS_HEADLESS)
+    list(APPEND PMS_ENGINE_SOURCES
+        src/script_runtime.cpp
+        src/script_context2d.cpp
+        src/script_gpu.cpp
+        vendor/quickjs-ng/cutils.c
+        vendor/quickjs-ng/libbf.c
+        vendor/quickjs-ng/libregexp.c
+        vendor/quickjs-ng/libunicode.c
+        vendor/quickjs-ng/quickjs.c
+    )
+    set_source_files_properties(src/script_runtime.cpp src/script_context2d.cpp src/script_clip.cpp
+        PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/vendor/quickjs-ng")
+    # Vendored C sources: keep warnings quiet (upstream code, -Wall is on).
+    set_source_files_properties(
+        vendor/quickjs-ng/cutils.c vendor/quickjs-ng/libbf.c
+        vendor/quickjs-ng/libregexp.c vendor/quickjs-ng/libunicode.c
+        vendor/quickjs-ng/quickjs.c
+        PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-unused-variable;-Wno-sign-compare;-Wno-maybe-uninitialized;-Wno-array-bounds;-Wno-stringop-overflow"
+    )
+endif()
 
 
 # APP sources: desktop shell — windowing, panels, pickers, terminal.
@@ -344,6 +351,10 @@ target_link_libraries(pms-engine PUBLIC
     pthread
 )
 if(NOT PMS_HEADLESS)
+    include(${CMAKE_SOURCE_DIR}/cmake/Skia.cmake)
+    target_link_libraries(pms-engine PUBLIC pms_skia)
+endif()
+if(NOT PMS_HEADLESS)
     target_link_libraries(pms-engine PUBLIC
         ${FREETYPE_LIBRARIES}
         OpenGL::GL
@@ -431,7 +442,6 @@ if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_font)
 endif()
 add_dependencies(pms-engine embed_font)
-add_dependencies(pms-engine embed_font)
 
 # Embed JetBrains Mono as a compiled byte array (used by the terminal panel)
 add_custom_command(
@@ -447,6 +457,8 @@ add_custom_target(embed_mono DEPENDS ${CMAKE_BINARY_DIR}/mono_font.h)
 if(NOT PMS_ENGINE_ONLY)
 add_dependencies(pop-maker-studio embed_mono)
 endif()
+# Script clips register it as the built-in "Mono" family (src/script_context2d.cpp).
+add_dependencies(pms-engine embed_mono)
 
 # Embed all bundled display typefaces (typography presets) as one byte-array
 # header with a master table. Add/remove a .ttf in assets/fonts/display and

@@ -18,6 +18,7 @@ enum Stage {
     S_COMPOSITE,     // scene compositor ops (layers, track FX, blit)
     S_TEXT,          // text layout + scene text layers
     S_SHAPES,        // shape tessellation + layers
+    S_SCRIPT,        // Script clips: JS render + Skia record/flush + passes (CPU)
     S_SWAP,          // glfwSwapBuffers (vsync wait included)
     S_COUNT
 };
