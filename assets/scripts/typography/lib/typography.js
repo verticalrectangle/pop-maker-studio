@@ -612,7 +612,9 @@ export function renderPreset(f, cfg) {
   const requested = fsz;
   const baked = famKey ? (famKey in BAKED_SCALE ? BAKED_SCALE[famKey] : 1.0) : 1.21;
   fsz = fsz / baked;
-  const topOff = (famKey in PEN_SHIFT_RATE ? PEN_SHIFT_RATE[famKey] : 0.15) * requested;
+  // No family = Inter Black: native +0.2273, Skia(900) +0.0723 → 0.1550.
+  const topOff = (famKey ? (famKey in PEN_SHIFT_RATE ? PEN_SHIFT_RATE[famKey] : 0.15)
+                         : 0.1550) * requested;
   const lineH0 = requested * LINE_H;
 
   ctx.textBaseline = 'top';
