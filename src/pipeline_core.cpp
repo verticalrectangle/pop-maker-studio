@@ -261,16 +261,19 @@ static std::mutex              s_beat_pending_mtx;
 static std::unordered_set<std::string> s_beat_pending;
 
 void run_beat_detect(AppState& state) {
+    // Beat tracking runs on the MIX (never the vocal stem): the stem's
+    // sparse onsets mistrack the tempo (spec: beats on the mix).
+    // Results publish via the s_beat_queue drained on the UI thread below
+    // (never write AppState from the worker).
     if (state.beats_running) return;
-    std::string src = state.vocals_path.empty() ? state.audio_path : state.vocals_path;
+    std::string src = state.audio_path;
     if (src.empty() || !fs::exists(src)) return;
     state.beats_running = true;
-    std::thread([&state, src]() {
+    std::thread([src]() {
         BeatResult r = beat_detect(src);
-        state.beats_running = false;
-        if (r.ok) {
-            state.beat_bpm = r.bpm;
-            state.beats    = std::move(r.beats);
+        {
+            std::lock_guard<std::mutex> lk(s_beat_queue_mtx);
+            s_beat_queue.push_back(std::move(r));
         }
     }).detach();
 }
@@ -305,6 +308,14 @@ void poll_clip_beat_analysis(AppState& state) {
         done.swap(s_beat_queue);
     }
     for (auto& r : done) {
+        // Master result from run_beat_detect (mix): commit to project state.
+        if (r.source_id == state.audio_path) {
+            state.beats_running = false;
+            if (r.ok) {
+                state.beat_bpm = r.bpm;
+                state.beats = r.beats;
+            }
+        }
         for (auto& track : state.tracks) {
             for (auto& cl : track.clips) {
                 if (cl.source_id != r.source_id) continue;

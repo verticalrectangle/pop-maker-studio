@@ -630,6 +630,7 @@ struct CreativeFXAccum {
     bool  leak_on        = false;
     float leak_intensity = 0.f;
     float leak_speed     = 1.f;
+    float leak_env       = 1.f;  // env.mix at the playhead (0..1); LightLeak scales by it
 
     bool  vhs_on         = false;
     float vhs_noise      = 0.f;
@@ -758,6 +759,21 @@ struct AppState {
     // audio analysis v2 of audio_path (docs/AUDIO_ANALYSIS.md). Immutable once
     // published: workers build a fresh object and swap the pointer on the UI thread.
     std::shared_ptr<const AudioAnalysis> audio_analysis;
+    // Saved analysis request (.pms v72): what analyze_audio was called with
+    // (or the JSON path given to load_audio_analysis). On project load the
+    // cached analysis republishes synchronously; a cache miss restarts the
+    // background analysis with progress like analyze_audio.
+    struct AudioRequest {
+        bool        active = false;   // a request was recorded
+        bool        from_json = false;  // from load_audio_analysis (json_path) vs analyze_audio
+        std::string audio_path;       // analyze_audio path
+        std::string json_path;        // load_audio_analysis path
+        std::vector<LyricLine> lyrics;
+        bool        has_range = false;
+        double      range_t0 = 0.0, range_t1 = 0.0;
+        bool        separate = true;
+        std::string stems_dir;
+    } audio_request;
 
     // pipeline
     PipelineStatus pipeline;

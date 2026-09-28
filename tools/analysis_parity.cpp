@@ -1,7 +1,11 @@
 // analysis-parity: offline driver for audio_analysis_run (acceptance only).
-// Usage: analysis-parity <clip.wav> <out.json> [--stems-dir DIR]
-// Lyrics come from <out>.lyrics.json (a JSON list of strings; written by
-// tools/analysis_parity.py). Prints progress + summary to stdout.
+// Usage: analysis-parity <clip.wav> <out.json> [--stems-dir DIR] [--separate]
+//        [--range t0,t1]
+// Lyrics come from <out>.lyrics.json: a JSON list whose items are either
+// plain strings or {"text": ..., "t0": ..., "t1": ...} objects with a coarse
+// window in source seconds (written by tools/analysis_parity.py). --range
+// restricts decode/separate/analyse/normalise to [t0,t1) source seconds
+// (times stay absolute). Prints progress + summary to stdout.
 #include "audio_analysis.h"
 #include "json.hpp"
 
@@ -13,25 +17,62 @@
 
 using json = nlohmann::json;
 
+static void push_lyric(AudioAnalysisOptions& opt, const json& l) {
+    LyricLine ll;
+    if (l.is_string()) {
+        ll.text = l.get<std::string>();
+    } else if (l.is_object()) {
+        ll.text = l.value("text", "");
+        if (l.contains("t0") && l.contains("t1")) {
+            double t0 = l.value("t0", 0.0), t1 = l.value("t1", 0.0);
+            if (t1 > t0) {
+                ll.has_window = true;
+                ll.w0 = t0;
+                ll.w1 = t1;
+            }
+        }
+    }
+    if (!ll.text.empty()) opt.lyrics.push_back(std::move(ll));
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <clip.wav> <out.json> [--stems-dir DIR]\n", argv[0]);
+        fprintf(stderr, "usage: %s <clip.wav> <out.json> [--stems-dir DIR] [--separate] [--range t0,t1]\n", argv[0]);
         return 2;
     }
     std::string clip = argv[1], outp = argv[2], stems;
-    for (int i = 3; i + 1 < argc; i++)
-        if (std::string(argv[i]) == "--stems-dir") stems = argv[++i];
+    bool separate = false;
+    bool has_range = false;
+    double range_t0 = 0.0, range_t1 = 0.0;
+    for (int i = 3; i < argc; i++) {
+        if (std::string(argv[i]) == "--stems-dir" && i + 1 < argc) stems = argv[++i];
+        else if (std::string(argv[i]) == "--separate") separate = true;
+        else if (std::string(argv[i]) == "--range" && i + 1 < argc) {
+            std::string r = argv[++i];
+            size_t c = r.find(',');
+            if (c != std::string::npos) {
+                range_t0 = std::stod(r.substr(0, c));
+                range_t1 = std::stod(r.substr(c + 1));
+                has_range = range_t1 > range_t0 && range_t0 >= 0.0;
+            }
+        }
+    }
 
     AudioAnalysisOptions opt;
-    opt.separate_stems = stems.empty();  // injected stems skip separation entirely
-    opt.stems_dir = stems;
+    // Injected stems skip separation entirely (a reuse feature); --separate
+    // forces the real C++ htdemucs path even when a stems dir exists.
+    opt.separate_stems = separate || stems.empty();
+    opt.stems_dir = separate ? std::string() : stems;
+    opt.has_range = has_range;
+    opt.range_t0 = range_t0;
+    opt.range_t1 = range_t1;
     std::string lpath = outp + ".lyrics.json";
     {
         std::ifstream f(lpath);
         if (f) {
             try {
                 json lj = json::parse(f);
-                for (auto& l : lj) opt.lyrics.push_back(l.get<std::string>());
+                for (auto& l : lj) push_lyric(opt, l);
             } catch (...) {}
         }
     }
@@ -43,7 +84,7 @@ int main(int argc, char** argv) {
         if (f) {
             try {
                 json lj = json::parse(f);
-                for (auto& l : lj) opt.lyrics.push_back(l.get<std::string>());
+                for (auto& l : lj) push_lyric(opt, l);
             } catch (...) {}
         }
     }

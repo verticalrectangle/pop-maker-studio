@@ -683,3 +683,80 @@ ShapeGeometry shape_tessellate(const ShapePath& path,
 
     return g;
 }
+
+// ── Cached tessellation (th/perf-finish) ─────────────────────────────────────
+// The canvas scene pass re-tessellates every shape clip every frame (ear-clip
+// is O(n^2)); static shapes re-emit identical triangles. Key on a stable
+// identity (track + clip start + content hash of evaluated inputs) so vector
+// realloc on add/remove/reorder can neither alias nor leak entries.
+static inline uint64_t fnv1a_mix(uint64_t h, uint64_t v) {
+    h ^= v;
+    h *= 1099511628211ULL;
+    return h;
+}
+static inline uint64_t hash_qfloat(uint64_t h, float v) {
+    int32_t q = (int32_t)std::lround(v * 4096.f);
+    return fnv1a_mix(h, (uint64_t)(uint32_t)q);
+}
+uint64_t shape_tess_content_hash(const ShapePath& path,
+                                 float stroke_length, float width_mul,
+                                 float base_stroke_width,
+                                 int canvas_w, int canvas_h,
+                                 float cx, float cy, float hw, float hh,
+                                 float cos_r, float sin_r,
+                                 int fold, bool reflect) {
+    uint64_t h = 1469598103934665603ULL;
+    h = hash_qfloat(h, stroke_length);
+    h = hash_qfloat(h, width_mul);
+    h = hash_qfloat(h, base_stroke_width);
+    h = fnv1a_mix(h, (uint64_t)(uint32_t)canvas_w);
+    h = fnv1a_mix(h, (uint64_t)(uint32_t)canvas_h);
+    h = hash_qfloat(h, cx); h = hash_qfloat(h, cy);
+    h = hash_qfloat(h, hw); h = hash_qfloat(h, hh);
+    h = hash_qfloat(h, cos_r); h = hash_qfloat(h, sin_r);
+    h = fnv1a_mix(h, (uint64_t)(uint32_t)fold);
+    h = fnv1a_mix(h, reflect ? 1ULL : 0ULL);
+    h = fnv1a_mix(h, path.closed ? 1ULL : 0ULL);
+    h = fnv1a_mix(h, (uint64_t)(uint32_t)path.pts.size());
+    for (auto& pt : path.pts) {
+        h = hash_qfloat(h, pt.x);
+        h = hash_qfloat(h, pt.y);
+        h = hash_qfloat(h, pt.width);
+    }
+    return h;
+}
+const ShapeGeometry* shape_tessellate_cached(
+    std::unordered_map<ShapeTessKey, ShapeTessCache, ShapeTessKeyHash>& map,
+    uint64_t frame, const ShapeTessKey& id,
+    const ShapePath& path,
+    float stroke_length, float width_mul, float base_stroke_width,
+    int canvas_w, int canvas_h, float cx, float cy, float hw, float hh,
+    float cos_r, float sin_r, int fold, bool reflect, float& fill_alpha_out) {
+    fill_alpha_out = stroke_length >= 1.f ? 1.f
+                   : stroke_length <= 0.6f ? 0.f
+                   : (stroke_length - 0.6f) / 0.4f;
+    ShapeTessCache& cache = map[id];  // default-constructs on first use
+    if (cache.valid && cache.key_id_track == id.track &&
+        cache.key_id_start == id.start && cache.key_id_content == id.content)
+        { cache.last_seen = frame; return &cache.geom; }
+    ShapeGeometry g = shape_tessellate(path, stroke_length, width_mul,
+                                       base_stroke_width,
+                                       canvas_w, canvas_h, cx, cy, hw, hh,
+                                       cos_r, sin_r);
+    if (fold > 1) g = shape_radial_replicate(g, cx, cy, fold, reflect);
+    cache.geom = std::move(g);
+    cache.valid = true;
+    cache.key_id_track = id.track;
+    cache.key_id_start = id.start;
+    cache.key_id_content = id.content;
+    cache.last_seen = frame;
+    return &cache.geom;
+}
+void shape_tess_cache_prune(
+    std::unordered_map<ShapeTessKey, ShapeTessCache, ShapeTessKeyHash>& map,
+    uint64_t frame) {
+    for (auto it = map.begin(); it != map.end();) {
+        if (it->second.last_seen != frame) it = map.erase(it);
+        else ++it;
+    }
+}

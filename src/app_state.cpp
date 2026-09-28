@@ -646,8 +646,38 @@ EffectAccum collect_glass_effects(const AppState& state, float t, int video_trac
     return acc;
 }
 
+// env.mix value at a timeline time: map through the audio clip playing the
+// analysis source (timeline = source - in_point + clip.start), then index
+// the 60 fps envelope. Returns 1 when no analysis/clip applies (no-op).
+static float leak_env_at(const AppState& state, float t) {
+    const AudioAnalysis* a = state.audio_analysis.get();
+    if (!a || a->env[(int)EnvKind::Mix].empty() || a->fps <= 0) return 1.f;
+    double off = 0.0;
+    bool found = false;
+    if (!a->source.empty()) {
+        for (auto& tr : state.tracks) {
+            for (auto& cl : tr.clips) {
+                if (cl.clip_type != ClipType::Audio && cl.clip_type != ClipType::Video)
+                    continue;
+                if (cl.text == a->source || cl.source_id == a->source) {
+                    off = (double)cl.in_point - (double)cl.start;
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
+    }
+    double src_t = (double)t + off;
+    int fi = (int)llround(src_t * a->fps);
+    const auto& e = a->env[(int)EnvKind::Mix];
+    if (fi < 0 || fi >= (int)e.size()) return 0.f;
+    return e[(size_t)fi];
+}
+
 CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_track_idx) {
     CreativeFXAccum acc;
+    acc.leak_env = leak_env_at(state, t);
     for (int ti = 0; ti < below_track_idx && ti < (int)state.tracks.size(); ++ti) {
         for (auto& cl : state.tracks[ti].clips) {
             if (cl.clip_type == ClipType::MultiFX) {
@@ -670,6 +700,7 @@ CreativeFXAccum collect_creative_fx(const AppState& state, float t, int below_tr
 // Glass creative FX: Effect/MultiFX clips on the same track as the video clip that overlap it.
 CreativeFXAccum collect_glass_fx(const AppState& state, float t, int video_track_idx) {
     CreativeFXAccum acc;
+    acc.leak_env = leak_env_at(state, t);
     if (video_track_idx < 0 || video_track_idx >= (int)state.tracks.size()) return acc;
     for (auto& cl : state.tracks[video_track_idx].clips) {
         if (cl.clip_type == ClipType::MultiFX) {
@@ -712,6 +743,7 @@ EffectAccum collect_effects_for_track(const AppState& state, float t, int track_
 
 CreativeFXAccum collect_creative_fx_for_track(const AppState& state, float t, int track_idx) {
     CreativeFXAccum acc;
+    acc.leak_env = leak_env_at(state, t);
     if (track_idx < 0 || track_idx >= (int)state.tracks.size()) return acc;
     for (auto& cl : state.tracks[track_idx].clips) {
         if (cl.clip_type == ClipType::MultiFX) {
@@ -730,20 +762,35 @@ CreativeFXAccum collect_creative_fx_for_track(const AppState& state, float t, in
     return acc;
 }
 
+// Beat pulse with a +12 ms visual lead: codegen FX beat modulation fires
+// slightly ahead of the audio beat so the visual lands on time (matches the
+// pms:rhythm LEAD = 0.012 s convention in docs/SCRIPT_API.md). Prefers the v2
+// analysis beats (AppState::audio_analysis) over per-clip beats.
 float beat_pulse_at(const AppState& state, int src_track, int src_clip, float t, float decay) {
-    if (src_track < 0 || src_clip < 0) return 0.f;
-    if (src_track >= (int)state.tracks.size()) return 0.f;
-    const auto& track = state.tracks[src_track];
-    if (src_clip >= (int)track.clips.size()) return 0.f;
-    const auto& clip = track.clips[src_clip];
-    if (clip.beats.empty()) return 0.f;
-    float last_beat = -1.f;
-    for (float b : clip.beats) {
-        if (b <= t) last_beat = b;
-        else break;
+    constexpr double kLead = 0.012;  // visual lead, seconds
+    const std::vector<double>* beats = nullptr;
+    if (state.audio_analysis && !state.audio_analysis->beats.empty())
+        beats = &state.audio_analysis->beats;
+    double last_beat = -1.0;
+    if (beats) {
+        for (double b : *beats) {
+            if (b <= (double)t + kLead) last_beat = b;
+            else break;
+        }
+    } else {
+        if (src_track < 0 || src_clip < 0) return 0.f;
+        if (src_track >= (int)state.tracks.size()) return 0.f;
+        const auto& track = state.tracks[src_track];
+        if (src_clip >= (int)track.clips.size()) return 0.f;
+        const auto& clip = track.clips[src_clip];
+        if (clip.beats.empty()) return 0.f;
+        for (float b : clip.beats) {
+            if ((double)b <= (double)t + kLead) last_beat = b;
+            else break;
+        }
     }
-    if (last_beat < 0.f) return 0.f;
-    float elapsed = t - last_beat;
+    if (last_beat < 0.0) return 0.f;
+    float elapsed = (float)((double)t - last_beat);
     float d = (decay > 0.001f) ? decay : 0.001f;
     return expf(-elapsed / d);
 }

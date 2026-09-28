@@ -11,7 +11,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 71u;  // v71: typography is Script clips (preset/tweak store removed); v70: script clip path + params; v69: pixelate sampling + palette_levels; v67: render platform preset
+static const uint32_t VERSION = 72u;  // v72: saved audio-analysis request; v71: typography is Script clips (preset/tweak store removed); v70: script clip path + params
 extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
@@ -792,6 +792,31 @@ bool project_save(const AppState& state, const std::string& path) {
     // a Script clip now; per-layer Tune lives in its script_params). Nothing
     // written; the loader still skips the old bytes for version < 71u.
 
+    // v72: saved audio-analysis request (analyze_audio params or the
+    // load_audio_analysis JSON path). On load the cached analysis
+    // republishes synchronously; a cache miss restarts the background run.
+    {
+        const auto& rq = state.audio_request;
+        w.pod((uint8_t)(rq.active ? 1 : 0));
+        if (rq.active) {
+            w.pod((uint8_t)(rq.from_json ? 1 : 0));
+            w.str(rq.audio_path);
+            w.str(rq.json_path);
+            w.pod((uint32_t)rq.lyrics.size());
+            for (auto& l : rq.lyrics) {
+                w.str(l.text);
+                w.pod((uint8_t)(l.has_window ? 1 : 0));
+                w.pod(l.w0);
+                w.pod(l.w1);
+            }
+            w.pod((uint8_t)(rq.has_range ? 1 : 0));
+            w.pod(rq.range_t0);
+            w.pod(rq.range_t1);
+            w.pod((uint8_t)(rq.separate ? 1 : 0));
+            w.str(rq.stems_dir);
+        }
+    }
+
     return w.ok;
 }
 
@@ -987,6 +1012,35 @@ static bool project_load_pass(AppState& state, const std::string& path, int fx_o
     // v56 (removed v71): karaoke highlight-colour tweak — skip the bytes.
     if (version >= 56u && version < 71u) {
         for (int i = 0; i < 4; ++i) (void)r.pod<float>();
+    }
+
+    // v72: saved audio-analysis request (appended last; older files skip it).
+    if (version >= 72u && r.ok) {
+        auto& rq = state.audio_request;
+        rq.active = (bool)r.pod<uint8_t>();
+        if (rq.active && r.ok) {
+            rq.from_json = (bool)r.pod<uint8_t>();
+            rq.audio_path = r.str();
+            rq.json_path = r.str();
+            uint32_t nl = r.pod<uint32_t>();
+            rq.lyrics.clear();
+            for (uint32_t i = 0; i < nl && r.ok; ++i) {
+                LyricLine l;
+                l.text = r.str();
+                l.has_window = (bool)r.pod<uint8_t>();
+                l.w0 = r.pod<double>();
+                l.w1 = r.pod<double>();
+                if (!l.text.empty() || l.has_window) rq.lyrics.push_back(std::move(l));
+            }
+            rq.has_range = (bool)r.pod<uint8_t>();
+            rq.range_t0 = r.pod<double>();
+            rq.range_t1 = r.pod<double>();
+            rq.separate = (bool)r.pod<uint8_t>();
+            rq.stems_dir = r.str();
+            if (!rq.has_range || !(rq.range_t1 > rq.range_t0) || rq.range_t0 < 0.0)
+                rq.has_range = false;
+        }
+        if (!r.ok) rq.active = false;
     }
 
     return r.ok;

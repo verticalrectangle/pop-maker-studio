@@ -17,6 +17,7 @@
 #include "runtime_fx.h"
 #include "engine_seams.h"
 #include "project.h"
+#include "audio_analysis.h"
 #include "beat_detect.h"
 #include "scene_detect.h"
 #include "paths.h"
@@ -67,8 +68,18 @@ using json = nlohmann::json;
 static struct {
     std::atomic<bool> running{false};
     std::atomic<bool> done{false};
-    BeatResult        result;
+    std::atomic<float> progress{0.f};
+    std::string stage;
+    std::mutex mu;  // guards result/error/cache_path/source below
+    AudioAnalysis result;
+    bool ok = false;
+    std::string error;
+    std::string cache_path;
+    std::string source;
 } s_audio_analysis;
+// Completed v2 analysis awaiting UI-thread publish into AppState.
+static std::mutex s_aa_pub_mu;
+static std::shared_ptr<const AudioAnalysis> s_aa_pub;
 
 static struct {
     std::atomic<bool> running{false};
@@ -105,6 +116,8 @@ static int s_bench_fd = -1;
 static std::string s_bench_id;
 static int s_bench_remaining = 0;  // seeks left to issue (scrub)
 static double s_bench_last_frame_t = 0.0;
+static double s_bench_last_present_t = 0.0;  // bench_now_s() of last present (guard input)
+static double s_bench_t0_wall = 0.0;         // bench start for the no-present guard
 double bench_now_s() {
     using clock = std::chrono::steady_clock;
     static const auto t0 = clock::now();
@@ -1415,6 +1428,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.bench_frames = 0;
         state.bench_t0 = now_s();
         state.pending_seek = -1.f;
+        // th/perf-finish: arm the no-present guard (bench_tick fails loudly if
+        // the canvas never presents, instead of returning zeroed stats).
+        s_bench_t0_wall = state.bench_t0;
+        s_bench_last_present_t = state.last_shown_t;
         perf::frame_reset();
         fd_mark_busy(client_fd);
         json sentinel; sentinel["__async"] = true; return sentinel;
@@ -1447,6 +1464,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             audio_seek(state.playhead);
             audio_play();
         }
+        // th/perf-finish: arm the no-present guard (see bench_scrub).
+        s_bench_t0_wall = state.bench_t0;
+        s_bench_last_present_t = state.last_shown_t;
         perf::frame_reset();
         fd_mark_busy(client_fd);
         json sentinel; sentinel["__async"] = true; return sentinel;
@@ -1701,6 +1721,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         auto a = std::make_shared<AudioAnalysis>();
         std::string lerr;
         if (!audio_analysis_load_json(path, *a, &lerr)) { err = lerr; return {}; }
+        state.audio_request.active = true;
+        state.audio_request.from_json = true;
+        state.audio_request.json_path = path;
+        state.audio_request.audio_path.clear();
+        state.audio_request.lyrics.clear();
+        state.audio_request.has_range = false;
+        state.audio_request.separate = true;
+        state.audio_request.stems_dir.clear();
         state.audio_analysis = std::move(a);
         const AudioAnalysis& la = *state.audio_analysis;
         return {{"beats", la.beats.size()}, {"downbeats", la.downbeats.size()},
@@ -1755,6 +1783,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             e["log"] = rep.log;
             e["render_ms"] = rep.render_ms;
             e["flush_ms"] = rep.flush_ms;
+            e["builds"] = rep.builds;
             return e;
         };
         std::string only;
@@ -1868,29 +1897,169 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         json r2; r2["status"] = "started"; return r2;
     }
 
+    // analyze_audio: v2 analysis (docs/AUDIO_ANALYSIS.md) in the background.
+    // Params: {path, lyrics?: string[], separate?: bool, stems_dir?}.
+    // Cached in the media cache dir (never next to the user's file), keyed
+    // so a changed file/lyrics re-analyses; published to
+    // AppState::audio_analysis on the UI thread (see ipc_server_poll).
+    // get_audio_analysis returns {status, progress?, analysis?} with the v2
+    // JSON. Legacy beat fields (beats/bpm) stay committed to project state
+    // so get_beats keeps working.
     if (method == "analyze_audio") {
         std::string apath = params.value("path", "");
         if (apath.empty()) { err = "path required"; return {}; }
         if (s_audio_analysis.running.load()) { err = "analysis already running"; return {}; }
+        AudioAnalysisOptions opt;
+        opt.separate_stems = params.value("separate", true);
+        opt.stems_dir = params.value("stems_dir", "");
+        if (params.contains("range") && params["range"].is_array() && params["range"].size() == 2) {
+            double rt0 = params["range"][0].get<double>(), rt1 = params["range"][1].get<double>();
+            if (rt1 > rt0 && rt0 >= 0.0) {
+                opt.has_range = true;
+                opt.range_t0 = rt0;
+                opt.range_t1 = rt1;
+            }
+        }
+        if (params.contains("lyrics") && params["lyrics"].is_array())
+            for (auto& l : params["lyrics"]) {
+                LyricLine ll;
+                if (l.is_string()) {
+                    ll.text = l.get<std::string>();
+                } else if (l.is_object()) {
+                    ll.text = l.value("text", "");
+                    if (l.contains("t0") && l.contains("t1")) {
+                        double t0 = l.value("t0", 0.0), t1 = l.value("t1", 0.0);
+                        if (t1 > t0) {
+                            ll.has_window = true;
+                            ll.w0 = t0;
+                            ll.w1 = t1;
+                        }
+                    }
+                }
+                if (!ll.text.empty()) opt.lyrics.push_back(std::move(ll));
+            }
+        // Record the request for .pms v72 persistence (republished on load).
+        state.audio_request.active = true;
+        state.audio_request.from_json = false;
+        state.audio_request.audio_path = apath;
+        state.audio_request.json_path.clear();
+        state.audio_request.lyrics = opt.lyrics;
+        state.audio_request.has_range = opt.has_range;
+        state.audio_request.range_t0 = opt.range_t0;
+        state.audio_request.range_t1 = opt.range_t1;
+        state.audio_request.separate = opt.separate_stems;
+        state.audio_request.stems_dir = opt.stems_dir;
+        // Cache key: file path + size + mtime + lyrics hash (text + windows)
+        // + stems flag, so a changed file or changed lyrics re-analyse. The
+        // JSON lives in the media cache dir — never next to the user's file.
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        uint64_t fsize = 0;
+        long long fmtime = 0;
+        {
+            auto st = fs::last_write_time(apath, ec);
+            if (!ec) fmtime = (long long)st.time_since_epoch().count();
+            ec.clear();
+            fsize = (uint64_t)fs::file_size(apath, ec);
+        }
+        size_t lh = 1469598103934665603ull;
+        auto hash_str = [&](const std::string& s) {
+            for (unsigned char c : s) { lh ^= c; lh *= 1099511628211ull; }
+        };
+        for (auto& l : opt.lyrics) {
+            hash_str(l.text);
+            if (l.has_window) {
+                hash_str(std::to_string(l.w0));
+                hash_str(std::to_string(l.w1));
+            }
+        }
+        if (opt.has_range) {
+            hash_str("range" + std::to_string(opt.range_t0) + "-" + std::to_string(opt.range_t1));
+        }
+        char key[128];
+        snprintf(key, sizeof(key), "%llu_%lld_%zx_%d", (unsigned long long)fsize,
+                 fmtime, lh, opt.separate_stems ? 1 : 0);
+        std::string cache = cache_path(apath + '\n' + key, "_analysis.json");
+        // Cache hit: load + publish synchronously (fast path, no thread).
+        {
+            AudioAnalysis cached;
+            std::string lerr;
+            if (audio_analysis_load_json(cache, cached, &lerr) && cached.source == fs::absolute(apath).string()) {
+                auto a = std::make_shared<AudioAnalysis>(std::move(cached));
+                state.audio_analysis = a;
+                state.beats.assign(a->beats.begin(), a->beats.end());
+                state.beat_bpm = a->bpm;
+                json r;
+                r["status"] = "done";
+                r["cached"] = true;
+                r["analysis"] = json::parse(audio_analysis_to_json(*a));
+                return r;
+            }
+        }
         s_audio_analysis.running.store(true);
         s_audio_analysis.done.store(false);
-        if (client_fd >= 0) {
-            fd_mark_busy(client_fd);
-            std::thread([apath, client_fd, req_id]() {
-                s_audio_analysis.result = beat_detect(apath);
-                s_audio_analysis.done.store(true);
-                s_audio_analysis.running.store(false);
-                auto& res = s_audio_analysis.result;
-                json r;
-                if (res.ok) {
-                    r["status"]   = "done";
-                    r["bpm"]      = res.bpm;
-                    r["duration"] = res.duration;
-                    r["beats"]    = res.beats;
-                    r["rms"]      = res.rms;
+        s_audio_analysis.progress.store(0.f);
+        {
+            std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+            s_audio_analysis.stage.clear();
+            s_audio_analysis.ok = false;
+            s_audio_analysis.error.clear();
+            s_audio_analysis.cache_path = cache;
+            s_audio_analysis.source = apath;
+        }
+        std::thread([apath, opt, cache]() {
+            AudioAnalysis a;
+            std::string aerr;
+            bool ok = audio_analysis_run(
+                apath, opt, a,
+                [](float p, const char* s) {
+                    s_audio_analysis.progress.store(p);
+                    std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+                    s_audio_analysis.stage = s ? s : "";
+                },
+                &aerr);
+            {
+                std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+                if (ok) {
+                    audio_analysis_save_json(a, cache, nullptr);
+                    s_audio_analysis.result = std::move(a);
+                    s_audio_analysis.ok = true;
                 } else {
-                    r["status"]  = "error";
-                    r["message"] = "beat detection failed";
+                    s_audio_analysis.error = aerr;
+                    s_audio_analysis.ok = false;
+                }
+            }
+            // Hand to the UI thread for AppState publish (never write
+            // AppState from this worker). The poll drains the queue.
+            if (ok) {
+                std::lock_guard<std::mutex> lk(s_aa_pub_mu);
+                std::lock_guard<std::mutex> lk2(s_audio_analysis.mu);
+                s_aa_pub = std::make_shared<const AudioAnalysis>(s_audio_analysis.result);
+            }
+            s_audio_analysis.done.store(true);
+            s_audio_analysis.running.store(false);
+        }).detach();
+        if (client_fd >= 0) {
+            // Streaming socket: hold the reply until the worker finishes
+            // (matches the old beat_detect blocking behaviour MCP expects),
+            // polling the done flag so other clients stay responsive.
+            fd_mark_busy(client_fd);
+            std::thread([client_fd, req_id]() {
+                for (int i = 0; i < 36000; ++i) {
+                    if (s_audio_analysis.done.load()) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                json r;
+                std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+                if (!s_audio_analysis.done.load()) {
+                    r["status"] = "running";
+                    r["progress"] = s_audio_analysis.progress.load();
+                } else if (!s_audio_analysis.ok) {
+                    r["status"] = "error";
+                    r["message"] = s_audio_analysis.error;
+                } else {
+                    r["status"] = "done";
+                    r["analysis"] = json::parse(audio_analysis_to_json(s_audio_analysis.result));
                 }
                 send_ok_id(client_fd, req_id, r);
                 agent_done();
@@ -1898,25 +2067,34 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }).detach();
             json sentinel; sentinel["__async"] = true; return sentinel;
         }
-        std::thread([apath]() {
-            s_audio_analysis.result = beat_detect(apath);
-            s_audio_analysis.done.store(true);
-            s_audio_analysis.running.store(false);
-        }).detach();
         json r; r["status"] = "started"; return r;
     }
 
     if (method == "get_audio_analysis") {
-        if (s_audio_analysis.running.load()) { json r; r["status"] = "running"; return r; }
-        if (!s_audio_analysis.done.load())   { json r; r["status"] = "idle"; return r; }
-        auto& res = s_audio_analysis.result;
-        if (!res.ok) { json r; r["status"] = "error"; r["message"] = "beat detection failed"; return r; }
         json r;
-        r["status"]   = "done";
-        r["bpm"]      = res.bpm;
-        r["duration"] = res.duration;
-        r["beats"]    = res.beats;
-        r["rms"]      = res.rms;
+        if (s_audio_analysis.running.load()) {
+            r["status"] = "running";
+            r["progress"] = s_audio_analysis.progress.load();
+            std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+            if (!s_audio_analysis.stage.empty()) r["stage"] = s_audio_analysis.stage;
+            return r;
+        }
+        // Prefer the live AppState analysis (covers cache-hit + load paths);
+        // else the last background result.
+        if (state.audio_analysis) {
+            r["status"] = "done";
+            r["analysis"] = json::parse(audio_analysis_to_json(*state.audio_analysis));
+            return r;
+        }
+        std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+        if (!s_audio_analysis.done.load()) { r["status"] = "idle"; return r; }
+        if (!s_audio_analysis.ok) {
+            r["status"] = "error";
+            r["message"] = s_audio_analysis.error;
+            return r;
+        }
+        r["status"] = "done";
+        r["analysis"] = json::parse(audio_analysis_to_json(s_audio_analysis.result));
         return r;
     }
 
@@ -4884,7 +5062,133 @@ void ipc_server_start() {
     fprintf(stdout, "[ipc] listening on %s\n", g_sock_path.c_str());
 }
 
+// Republish the saved (.pms v72) analysis request on project load: cached
+// analysis publishes synchronously (first frame renders with it); a cache
+// miss starts the background analysis with progress like analyze_audio.
+void audio_analysis_republish(AppState& state) {
+    const auto rq = state.audio_request;
+    if (!rq.active) return;
+    if (s_audio_analysis.running.load()) return;
+    if (rq.from_json) {
+        if (rq.json_path.empty() || !std::filesystem::exists(rq.json_path)) return;
+        auto a = std::make_shared<AudioAnalysis>();
+        std::string lerr;
+        if (!audio_analysis_load_json(rq.json_path, *a, &lerr)) return;
+        state.audio_analysis = std::move(a);
+        state.beats.assign(state.audio_analysis->beats.begin(),
+                           state.audio_analysis->beats.end());
+        state.beat_bpm = state.audio_analysis->bpm;
+        return;
+    }
+    if (rq.audio_path.empty() || !std::filesystem::exists(rq.audio_path)) return;
+    AudioAnalysisOptions opt;
+    opt.lyrics = rq.lyrics;
+    opt.has_range = rq.has_range;
+    opt.range_t0 = rq.range_t0;
+    opt.range_t1 = rq.range_t1;
+    opt.separate_stems = rq.separate;
+    opt.stems_dir = rq.stems_dir;
+    // Same cache key as analyze_audio.
+    std::error_code ec;
+    uint64_t fsize = 0;
+    long long fmtime = 0;
+    {
+        auto st = std::filesystem::last_write_time(rq.audio_path, ec);
+        if (!ec) fmtime = (long long)st.time_since_epoch().count();
+        ec.clear();
+        fsize = (uint64_t)std::filesystem::file_size(rq.audio_path, ec);
+    }
+    size_t lh = 1469598103934665603ull;
+    auto hash_str = [&](const std::string& s) {
+        for (unsigned char c : s) { lh ^= c; lh *= 1099511628211ull; }
+    };
+    for (auto& l : opt.lyrics) {
+        hash_str(l.text);
+        if (l.has_window) {
+            hash_str(std::to_string(l.w0));
+            hash_str(std::to_string(l.w1));
+        }
+    }
+    if (opt.has_range) {
+        hash_str("range" + std::to_string(opt.range_t0) + "-" + std::to_string(opt.range_t1));
+    }
+    char key[128];
+    snprintf(key, sizeof(key), "%llu_%lld_%zx_%d", (unsigned long long)fsize,
+             fmtime, lh, opt.separate_stems ? 1 : 0);
+    std::string cache = cache_path(rq.audio_path + '\n' + key, "_analysis.json");
+    {
+        AudioAnalysis cached;
+        std::string lerr;
+        if (audio_analysis_load_json(cache, cached, &lerr) &&
+            cached.source == std::filesystem::absolute(rq.audio_path).string()) {
+            auto a = std::make_shared<AudioAnalysis>(std::move(cached));
+            state.audio_analysis = a;
+            state.beats.assign(a->beats.begin(), a->beats.end());
+            state.beat_bpm = a->bpm;
+            return;
+        }
+    }
+    std::string apath = rq.audio_path;
+    s_audio_analysis.running.store(true);
+    s_audio_analysis.done.store(false);
+    s_audio_analysis.progress.store(0.f);
+    {
+        std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+        s_audio_analysis.stage.clear();
+        s_audio_analysis.ok = false;
+        s_audio_analysis.error.clear();
+        s_audio_analysis.cache_path = cache;
+        s_audio_analysis.source = apath;
+    }
+    std::thread([apath, opt, cache]() {
+        AudioAnalysis a;
+        std::string aerr;
+        bool ok = audio_analysis_run(
+            apath, opt, a,
+            [](float p, const char* s) {
+                s_audio_analysis.progress.store(p);
+                std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+                s_audio_analysis.stage = s ? s : "";
+            },
+            &aerr);
+        {
+            std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+            if (ok) {
+                audio_analysis_save_json(a, cache, nullptr);
+                s_audio_analysis.result = std::move(a);
+                s_audio_analysis.ok = true;
+            } else {
+                s_audio_analysis.error = aerr;
+                s_audio_analysis.ok = false;
+            }
+        }
+        if (ok) {
+            std::lock_guard<std::mutex> lk(s_aa_pub_mu);
+            std::lock_guard<std::mutex> lk2(s_audio_analysis.mu);
+            s_aa_pub = std::make_shared<const AudioAnalysis>(s_audio_analysis.result);
+        }
+        s_audio_analysis.done.store(true);
+        s_audio_analysis.running.store(false);
+    }).detach();
+}
+
 void ipc_server_poll(AppState& state) {
+    // v2 analysis publish: the analyze_audio worker never writes AppState
+    // itself; it queues the immutable result here and the UI thread swaps
+    // the pointer (plus legacy beats/bpm fields) once per frame.
+    {
+        std::shared_ptr<const AudioAnalysis> pub;
+        {
+            std::lock_guard<std::mutex> lk(s_aa_pub_mu);
+            pub = std::move(s_aa_pub);
+            s_aa_pub.reset();
+        }
+        if (pub) {
+            state.audio_analysis = std::move(pub);
+            state.beats.assign(state.audio_analysis->beats.begin(), state.audio_analysis->beats.end());
+            state.beat_bpm = state.audio_analysis->bpm;
+        }
+    }
     bench_tick(state);
     if (g_srv_fd < 0) return;
 
@@ -4908,6 +5212,26 @@ void ipc_server_poll(AppState& state) {
         g_clients.end());
 }
 // ── th/perf bench main-loop driver ────────────────────────────────────────────
+void ipc_wait_for_request(int timeout_ms) {
+    if (g_srv_fd < 0 && g_clients.empty()) return;
+    // +1 for the listen fd; cap clients so one pathological burst can't blow
+    // the stack (extra fds just wait for the timeout instead of waking us).
+    constexpr size_t kCap = 65;
+    size_t ncli = g_clients.size();
+    if (ncli > kCap - 1) ncli = kCap - 1;
+    struct pollfd fds[kCap];
+    size_t n = 0;
+    if (g_srv_fd >= 0) {
+        fds[n].fd = g_srv_fd; fds[n].events = POLLIN; fds[n].revents = 0; ++n;
+    }
+    for (size_t i = 0; i < ncli; ++i) {
+        int fd = g_clients[i].fd;
+        if (fd < 0) continue;
+        fds[n].fd = fd; fds[n].events = POLLIN; fds[n].revents = 0; ++n;
+    }
+    if (n == 0) return;
+    (void)::poll(fds, (nfds_t)n, timeout_ms);
+}
 static double pct(std::vector<double> v, double p) {
     if (v.empty()) return 0.0;
     std::sort(v.begin(), v.end());
@@ -4938,21 +5262,34 @@ static void bench_finish(AppState& state) {
         state.scrub_active = false;
     } else {
         // Dropped frames: expected vs presented at ~60 fps.
+        // th/perf-finish: headless rigs often have no audio device, so the
+        // audio clock never advances and the playhead (wall-clock fallback in
+        // app.cpp) is the only valid progress signal. When neither advanced
+        // (adv < 1 frame), the drop metric is INVALID, not zero — report
+        // explicitly instead of a meaningless 0.06%.
         double adv = (double)state.playhead - (double)state.bench_play_t0;
         if (adv < 0.0) adv = 0.0;
         double expect = wall * 60.0;
         double shown = (double)state.bench_frames;
-        double dropped = expect - shown;
-        if (dropped < 0.0) dropped = 0.0;
         r["playhead_advance_s"] = adv;
         r["expected_frames"] = expect;
         r["presented_frames"] = shown;
-        r["dropped_frames"] = dropped;
-        r["dropped_pct"] = expect > 0.0 ? 100.0 * dropped / expect : 0.0;
+        if (adv < 1.0 / 60.0 && shown <= expect) {
+            r["dropped_frames"] = nullptr;
+            r["dropped_pct"] = nullptr;
+            r["dropped_note"] = "audio clock did not advance headless (no audio device); "
+                "playhead fallback also stalled — drop metric invalid, use ui_frame_ms + presented_frames";
+        } else {
+            double dropped = expect - shown;
+            if (dropped < 0.0) dropped = 0.0;
+            r["dropped_frames"] = dropped;
+            r["dropped_pct"] = expect > 0.0 ? 100.0 * dropped / expect : 0.0;
+        }
         if (state.playing) { state.playing = false; audio_pause(); }
     }
     state.bench_running = false;
     state.pending_seek = -1.f;
+    s_bench_t0_wall = 0.0;  // disarm the no-present guard
     int fd = s_bench_fd;
     std::string id = s_bench_id;
     s_bench_fd = -1; s_bench_id.clear();
@@ -4971,6 +5308,34 @@ static void bench_tick(AppState& state) {
     s_bench_last_frame_t = now;
     if (!state.bench_running) return;
     state.bench_frames++;
+    // th/perf-finish: present heartbeat for the no-present guard. The canvas
+    // hook stamps last_shown_t after every presented frame; any advance means
+    // the preview is drawing (vs the setup-screen-no-draw failure mode).
+    if (state.last_shown_t > s_bench_last_present_t)
+        s_bench_last_present_t = state.last_shown_t;
+    // No-present guard: fail loudly instead of returning zeros when the
+    // preview never presents (headless no-draw failure mode).
+    if (s_bench_t0_wall > 0.0 && s_bench_last_present_t < s_bench_t0_wall &&
+        (now - s_bench_t0_wall) > 1.0) {
+        std::string detail = "preview canvas presented no frames within 1 s — "
+            "is the app in the studio (draw_preview running)? Launch headless with "
+            "`--open <project>` (which skips the model setup screen), a 1920x1080 "
+            "Xvfb screen, and a clean imgui.ini (delete it or use a fresh HOME); "
+            "see BENCHMARKS.md.";
+        state.bench_running = false;
+        state.pending_seek = -1.f;
+        if (s_bench_kind == 0) state.scrub_active = false;
+        else if (state.playing) { state.playing = false; audio_pause(); }
+        s_bench_t0_wall = 0.0;
+        int gfd = s_bench_fd;
+        std::string gid = s_bench_id;
+        s_bench_fd = -1; s_bench_id.clear();
+        s_bench_seeks.clear();
+        send_err_id(gfd, gid, detail);
+        agent_done();
+        fd_mark_free(gfd);
+        return;
+    }
     // Correct-frame tracking: the pending seek's target is "on screen" once
     // the presented playhead reaches it (draw used the new playhead).
     if (state.last_shown_playhead == state.last_seek_to && state.last_seek_t > 0.0 &&

@@ -247,13 +247,15 @@ def _normalize_rms(rms: list[float], start: float, end: float) -> list[float]:
 
 
 def _build_bars(beats: list[float], start: float, end: float, bpb: int,
-                rms_norm: list[float]) -> list[dict]:
+                rms_norm: list[float],
+                downbeats: list[float] | None = None) -> list[dict]:
     """Group section beats into bars of `bpb` beats, each with an energy 0..1.
 
     Bar i starts at the i-th section beat; a bar's end is the next bar's start
     (or the section end). `next_end` = the end of the following bar (or the
-    section end) so a motif may span up to two bars. The first bar is the
-    section's downbeat.
+    section end) so a motif may span up to two bars. With real downbeats
+    (v2 analysis) a bar starting on one is flagged downbeat; without them
+    only the first bar is (legacy fallback).
     """
     sec = [b for b in beats if start - 1e-3 <= b < end]
     if not sec:
@@ -271,13 +273,15 @@ def _build_bars(beats: list[float], start: float, end: float, bpb: int,
                                            int(math.ceil(b_end)))
                 if 0 <= s < len(rms_norm)]
         energy = round(sum(vals) / len(vals), 4) if vals else 0.0
+        is_down = (any(abs(b_start - d) < 1e-3 for d in (downbeats or []))
+                     if downbeats else len(bars) == 0)
         bars.append({
             "index": len(bars),
             "start": round(b_start, 4),
             "end": round(b_end, 4),
             "beat_index": i,                    # section-local index of first beat
             "beats": [round(x, 4) for x in group],
-            "downbeat": len(bars) == 0,
+            "downbeat": is_down,
             "energy": energy,
             "next_end": round(min(nxt2, end), 4),
             "motif": None,
@@ -884,7 +888,8 @@ def _snap_bars(bars: list[dict], fps: float) -> list[dict]:
 
 def _expand_field(recipe: dict, section: dict, beats: list[float], rms: list[float],
                   fps: float, density: float, seed: int, colors: list[list[float]],
-                  track: int, clip_base: int, track_name: str | None) -> dict:
+                  track: int, clip_base: int, track_name: str | None,
+                  downbeats: list[float] | None = None) -> dict:
     """Field composition — an animated Wildflower-album-cover look. Emits, in
     z-order (later on top): warm ribbon bands in the bottom fraction of the
     canvas, a grid-scattered field of flat flowers (each its own clip, all
@@ -905,7 +910,7 @@ def _expand_field(recipe: dict, section: dict, beats: list[float], rms: list[flo
     period = max(1, int(color_motion.get("period_beats", 1)))
 
     rms_norm = _normalize_rms([float(x) for x in rms], start, end)
-    bars = _build_bars(beats, start, end, bpb, rms_norm)
+    bars = _build_bars(beats, start, end, bpb, rms_norm, downbeats=downbeats)
     if not bars:
         raise ValueError(f"no beats in section [{start}, {end}) — check start/end "
                          "against the beat grid")
@@ -1277,7 +1282,8 @@ def _expand_field(recipe: dict, section: dict, beats: list[float], rms: list[flo
 def expand(recipe: dict, section: dict, beats: list[float], rms: list[float],
            fps: float = 30.0, density: float = 0.7, seed: int = 0,
            palette: list[str] | None = None, track: int = 0,
-           clip_base: int = 0, track_name: str | None = None) -> dict:
+           clip_base: int = 0, track_name: str | None = None,
+           downbeats: list[float] | None = None) -> dict:
     """Expand a recipe over a timeline section into replayable IPC ops.
 
     Args:
@@ -1340,11 +1346,12 @@ def expand(recipe: dict, section: dict, beats: list[float], rms: list[float],
     if recipe.get("composition") == "field":
         return _expand_field(recipe, {"start": start, "end": end}, beats,
                              [float(x) for x in rms], fps, density, seed,
-                             colors, track, clip_base, track_name)
+                             colors, track, clip_base, track_name,
+                             downbeats=downbeats)
 
     rng = random.Random(seed)
     rms_norm = _normalize_rms([float(x) for x in rms], start, end)
-    bars = _build_bars(beats, start, end, bpb, rms_norm)
+    bars = _build_bars(beats, start, end, bpb, rms_norm, downbeats=downbeats)
     if not bars:
         raise ValueError(f"no beats in section [{start}, {end}) — check start/end "
                          "against the beat grid")
