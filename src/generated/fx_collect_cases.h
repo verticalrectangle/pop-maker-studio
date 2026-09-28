@@ -8,6 +8,16 @@
                 float _bv = cl.eval_prop("fx_pixelate_size", _cl_t);
                 acc.pixelate_size = fmaxf(acc.pixelate_size, (_bi > 0.001f) ? (1.0f + (64.0f - 1.0f) * _bi * _cl_beat_pulse) : _bv);
             }
+            {
+                float _bi = cl.fx_pixelate_sampling_beat;
+                float _bv = cl.eval_prop("fx_pixelate_sampling", _cl_t);
+                acc.pixelate_sampling = fmaxf(acc.pixelate_sampling, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_pixelate_palette_levels_beat;
+                float _bv = cl.eval_prop("fx_pixelate_palette_levels", _cl_t);
+                acc.pixelate_palette_levels = fmaxf(acc.pixelate_palette_levels, (_bi > 0.001f) ? (0.0f + (8.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
             break;
         case FXType::FilmGrain:
             acc.film_grain_on = true;
@@ -1377,6 +1387,16 @@
                 float _bi = cl.fx_pixel_mosaic_color_steps_beat;
                 float _bv = cl.eval_prop("fx_pixel_mosaic_color_steps", _cl_t);
                 acc.pixel_mosaic_color_steps = fmaxf(acc.pixel_mosaic_color_steps, (_bi > 0.001f) ? (2.0f + (16.0f - 2.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_pixel_mosaic_sampling_beat;
+                float _bv = cl.eval_prop("fx_pixel_mosaic_sampling", _cl_t);
+                acc.pixel_mosaic_sampling = fmaxf(acc.pixel_mosaic_sampling, (_bi > 0.001f) ? (0.0f + (2.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
+            }
+            {
+                float _bi = cl.fx_pixel_mosaic_palette_levels_beat;
+                float _bv = cl.eval_prop("fx_pixel_mosaic_palette_levels", _cl_t);
+                acc.pixel_mosaic_palette_levels = fmaxf(acc.pixel_mosaic_palette_levels, (_bi > 0.001f) ? (0.0f + (8.0f - 0.0f) * _bi * _cl_beat_pulse) : _bv);
             }
             break;
         case FXType::ThermalMap:

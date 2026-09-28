@@ -5,6 +5,10 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "amount") { c.fx_pixelate_amount = value; return true; }
         if (param == "size") { c.fx_pixelate_size = value; return true; }
         if (param == "size_beat") { c.fx_pixelate_size_beat = value; return true; }
+        if (param == "sampling") { c.fx_pixelate_sampling = value; return true; }
+        if (param == "sampling_beat") { c.fx_pixelate_sampling_beat = value; return true; }
+        if (param == "palette_levels") { c.fx_pixelate_palette_levels = value; return true; }
+        if (param == "palette_levels_beat") { c.fx_pixelate_palette_levels_beat = value; return true; }
         return false;
     }
     if (fx_id == "film_grain") {
@@ -715,6 +719,10 @@ static bool fx_clip_set_param(Clip& c, const std::string& fx_id,
         if (param == "block_size_beat") { c.fx_pixel_mosaic_block_size_beat = value; return true; }
         if (param == "color_steps") { c.fx_pixel_mosaic_color_steps = value; return true; }
         if (param == "color_steps_beat") { c.fx_pixel_mosaic_color_steps_beat = value; return true; }
+        if (param == "sampling") { c.fx_pixel_mosaic_sampling = value; return true; }
+        if (param == "sampling_beat") { c.fx_pixel_mosaic_sampling_beat = value; return true; }
+        if (param == "palette_levels") { c.fx_pixel_mosaic_palette_levels = value; return true; }
+        if (param == "palette_levels_beat") { c.fx_pixel_mosaic_palette_levels_beat = value; return true; }
         return false;
     }
     if (fx_id == "thermal_map") {

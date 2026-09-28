@@ -5,6 +5,8 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             acc.pixelate_on = true;
             acc.pixelate_amount = fmaxf(acc.pixelate_amount, amount);
             if ((int)pv.size() > 0) acc.pixelate_size = fmaxf(acc.pixelate_size, pv[0]);
+            if ((int)pv.size() > 1) acc.pixelate_sampling = fmaxf(acc.pixelate_sampling, pv[1]);
+            if ((int)pv.size() > 2) acc.pixelate_palette_levels = fmaxf(acc.pixelate_palette_levels, pv[2]);
             acc.any_gen_fx = true;
             break;
         case FXType::FilmGrain:
@@ -603,6 +605,8 @@ static void fx_accum_from_attached(CreativeFXAccum& acc, FXType type, float amou
             acc.pixel_mosaic_amount = fmaxf(acc.pixel_mosaic_amount, amount);
             if ((int)pv.size() > 0) acc.pixel_mosaic_block_size = fmaxf(acc.pixel_mosaic_block_size, pv[0]);
             if ((int)pv.size() > 1) acc.pixel_mosaic_color_steps = fmaxf(acc.pixel_mosaic_color_steps, pv[1]);
+            if ((int)pv.size() > 2) acc.pixel_mosaic_sampling = fmaxf(acc.pixel_mosaic_sampling, pv[2]);
+            if ((int)pv.size() > 3) acc.pixel_mosaic_palette_levels = fmaxf(acc.pixel_mosaic_palette_levels, pv[3]);
             acc.any_gen_fx = true;
             break;
         case FXType::ThermalMap:

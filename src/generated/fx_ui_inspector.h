@@ -26,6 +26,56 @@
                     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Beat Intensity");
                 }
             }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_pixelate_sampling_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Sampling");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_pixelate_sampling", &clip.fx_pixelate_sampling, 0.0f, 2.0f, "%.0f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_pixelate_sampling", "Sampling", &clip.fx_pixelate_sampling, 0.0f, 2.0f, "%.0f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_pixelate_sampling")) {
+                    clip.fx_pixelate_sampling_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Pixelate: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixelate_sampling", &clip.fx_pixelate_sampling_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_pixelate_palette_levels_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Palette Levels");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_pixelate_palette_levels", &clip.fx_pixelate_palette_levels, 0.0f, 8.0f, "%.0f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_pixelate_palette_levels", "Palette Levels", &clip.fx_pixelate_palette_levels, 0.0f, 8.0f, "%.0f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_pixelate_palette_levels")) {
+                    clip.fx_pixelate_palette_levels_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Pixelate: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixelate_palette_levels", &clip.fx_pixelate_palette_levels_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Beat Intensity");
+                }
+            }
             break;
 
         case FXType::FilmGrain:
@@ -5172,6 +5222,56 @@
                 if (_bon) {
                     ImGui::SetNextItemWidth(sw);
                     ImGui::SliderFloat("##bi_pixel_mosaic_color_steps", &clip.fx_pixel_mosaic_color_steps_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_pixel_mosaic_sampling_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Sampling");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_pixel_mosaic_sampling", &clip.fx_pixel_mosaic_sampling, 0.0f, 2.0f, "%.0f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_pixel_mosaic_sampling", "Sampling", &clip.fx_pixel_mosaic_sampling, 0.0f, 2.0f, "%.0f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_pixel_mosaic_sampling")) {
+                    clip.fx_pixel_mosaic_sampling_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Pixel Mosaic: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixel_mosaic_sampling", &clip.fx_pixel_mosaic_sampling_beat, 0.0f, 1.0f, "beat %.2f");
+                    if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Beat Intensity");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+            {
+                bool _bon = clip.fx_pixel_mosaic_palette_levels_beat > 0.001f;
+                if (_bon) {
+                    ui_label("Palette Levels");
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(sw - 26.f);
+                    ImGui::SliderFloat("##gen_pixel_mosaic_palette_levels", &clip.fx_pixel_mosaic_palette_levels, 0.0f, 8.0f, "%.0f");
+                    ImGui::EndDisabled();
+                } else {
+                    kfx("fx_pixel_mosaic_palette_levels", "Palette Levels", &clip.fx_pixel_mosaic_palette_levels, 0.0f, 8.0f, "%.0f", sw - 26.f);
+                }
+                ImGui::SameLine(0.f, 4.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, _bon ? IM_COL32(255,200,50,255) : IM_COL32(120,120,140,200));
+                if (ImGui::SmallButton("B##bt_pixel_mosaic_palette_levels")) {
+                    clip.fx_pixel_mosaic_palette_levels_beat = _bon ? 0.f : 0.5f;
+                    history_push(state, "Pixel Mosaic: Beat Sync");
+                }
+                ImGui::PopStyleColor();
+                if (_bon) {
+                    ImGui::SetNextItemWidth(sw);
+                    ImGui::SliderFloat("##bi_pixel_mosaic_palette_levels", &clip.fx_pixel_mosaic_palette_levels_beat, 0.0f, 1.0f, "beat %.2f");
                     if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Beat Intensity");
                 }
             }

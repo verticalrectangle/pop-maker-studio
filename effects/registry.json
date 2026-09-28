@@ -24,6 +24,26 @@
           "default": 12.0,
           "fmt": "%.0f px",
           "curve": 1.0
+        },
+        {
+          "name": "sampling",
+          "label": "Sampling",
+          "min": 0.0,
+          "max": 2.0,
+          "default": 0.0,
+          "fmt": "%.0f",
+          "curve": 1.0,
+          "since_version": 69
+        },
+        {
+          "name": "palette_levels",
+          "label": "Palette Levels",
+          "min": 0.0,
+          "max": 8.0,
+          "default": 0.0,
+          "fmt": "%.0f",
+          "curve": 1.0,
+          "since_version": 69
         }
       ],
       "amount_default": 1.0,
@@ -3210,6 +3230,30 @@
           "step": 1,
           "fmt": "%.0f",
           "curve": 1.0
+        },
+        {
+          "name": "sampling",
+          "label": "Sampling",
+          "type": "float",
+          "min": 0,
+          "max": 2,
+          "default": 0,
+          "step": 1,
+          "fmt": "%.0f",
+          "curve": 1.0,
+          "since_version": 69
+        },
+        {
+          "name": "palette_levels",
+          "label": "Palette Levels",
+          "type": "float",
+          "min": 0,
+          "max": 8,
+          "default": 0,
+          "step": 1,
+          "fmt": "%.0f",
+          "curve": 1.0,
+          "since_version": 69
         }
       ],
       "shader": "shaders/pixel_mosaic.glsl",
