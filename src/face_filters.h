@@ -141,7 +141,11 @@ void      face_filter_preview_dims(int* w, int* h);
 // tracker and use its latest result (preview: real-time, ~1 frame behind).
 uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
                                  uintptr_t tex, int video_slot, int w, int h,
-                                 bool sync_track = false);
+                                 bool sync_track = false,
+                                 // th/perf-frame: false while scrubbing — skip the
+                                 // full-res glReadPixels fallback; use the cached /
+                                 // async observation (or no filter) instead.
+                                 bool allow_readback = true);
 
 // Doggy overlay: ears, nose, tongue drawn from landmarks. `to_screen` maps
 // frame UV → screen px (the mirror's quad mapping, mirrored/rotated).

@@ -838,7 +838,7 @@ uintptr_t face_filter_apply_obs(int filter_id, float amount, const FaceObs& obs,
 // landmark pass (kicking the background build if missing).
 uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
                                  uintptr_t tex, int video_slot, int w, int h,
-                                 bool sync_track) {
+                                 bool sync_track, bool allow_readback) {
     if (cl.face_filter == 0 || cl.text.empty() || w <= 0 || h <= 0 ||
         !face_track_available())
         return tex;
@@ -846,7 +846,13 @@ uintptr_t face_filter_apply_take(const Clip& cl, double src_t,
     face_cache_request(cl.text, rot_q);          // no-op once built
     FaceObs obs;
     bool have = face_cache_obs(cl.text, rot_q, src_t, obs);
-    if (!have) {
+    // th/perf-frame: while scrubbing there is no cached observation yet and no
+    // full-res readback is allowed — fall back to the tracker's latest async
+    // result (build_plan normalizes by obs.w/h, so any frame size works) or
+    // skip the filter this frame rather than stall the UI thread.
+    if (!have && !allow_readback)
+        have = face_track_latest(obs) && obs.valid;
+    if (!have && allow_readback) {
         // The bake isn't current (building, or stale version). Track LIVE on
         // this frame instead of showing unfiltered/frozen makeup — the cache
         // is a fast-path, never the only path. Half-res download; the roll

@@ -2175,12 +2175,16 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
 
                 // Face filter on the take (Pretty/Doggy…): cached landmark
                 // pass per take, same helper as export — no divergence.
+                // th/perf-frame: while scrubbing skip the full-res glReadPixels
+                // fallback — use the cached/async observation instead.
                 if (cl_ptr && cl_ptr->face_filter != 0 && slot >= 0) {
                     VideoInfo vi_f = video_info(slot);
                     int fwd = (vi_f.width  > 0) ? vi_f.width  : (int)w;
                     int fhd = (vi_f.height > 0) ? vi_f.height : (int)h;
                     tex = face_filter_apply_take(*cl_ptr, (double)src_t,
-                                                 tex, slot, fwd, fhd);
+                                                 tex, slot, fwd, fhd,
+                                                 /*sync_track=*/false,
+                                                 /*allow_readback=*/!state.scrub_active);
                 }
 
                 float px    = cl_ptr->eval_prop("pos_x",    at_time);

@@ -23,6 +23,12 @@
 #include <unordered_map>
 #include <list>
 #include <vector>
+// (th/perf-frame: async mask decode workers)
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <condition_variable>
+#include <thread>
 
 // ── GLSL vertex shader (fullscreen triangle, no VBO) ─────────────────────────
 
@@ -1072,12 +1078,99 @@ static struct {
     int w = 0, h = 0;
 } g_out;
 
-
-// Mask texture cache: key = "mask_dir/NNNNNN.png", value = GLuint
-// LRU: list of keys in use order, map for O(1) lookup
+// ── Async mask decode + upload budget (th/perf-frame) ─────────────────────────
+// The UI thread must never do synchronous fopen/fread/stbi decode/glTexImage2D
+// per mask frame: a scrub across body-FX clips stalls on a JPEG decode +
+// upload per clip. Instead a small worker pool reads + decodes JPEGs
+// off-thread and the UI thread only does a bounded number of glTexImage2D
+// uploads per frame (kMaskUploadsPerFrame). body_fx_mask_texture() returns the
+// cached texture when present, else 0 after queueing the async fetch — the
+// caller keeps the unmasked frame this cycle and the mask lands a frame or
+// two later. Export (render.cpp) is unaffected: it calls the same function
+// and simply gets 0 until the mask is cached, same as a missing mask today.
+namespace {
+struct MaskFetch {
+    std::string mask_dir;
+    int frame_idx = 0;
+    std::string key;        // cache key "mask_dir/m%07d"
+    int w = 0, h = 0;
+    std::vector<unsigned char> px;    // decoded grayscale pixels
+    bool ok = false;
+};
+struct MaskAsync {
+    std::mutex mu;
+    std::condition_variable cv;
+    std::deque<std::shared_ptr<MaskFetch>> work;   // pending read+decode
+    std::deque<std::shared_ptr<MaskFetch>> ready;  // decoded, awaiting upload
+    std::unordered_map<std::string, char> inflight;  // key → queued (any stage)
+    std::vector<std::thread> workers;
+    bool stop = false;
+    bool started = false;
+};
+static MaskAsync g_mask_async;
+// Mask texture cache: key = "mask_dir/m%07d", value = GLuint texture.
+// LRU: list of keys in use order, map for O(1) lookup.
 static std::list<std::string>                          g_mask_lru;
 static std::unordered_map<std::string, std::pair<GLuint, std::list<std::string>::iterator>> g_mask_cache;
 static const int k_mask_cache_max = 128;
+// (mask_read_jpeg_bytes is defined below with the seek-table cache, in the
+// same anonymous namespace, so the worker sees it.)
+static std::vector<unsigned char> mask_read_jpeg_bytes(const std::string& mask_dir,
+                                                       int frame_idx);
+static const int kMaskUploadsPerFrame = 2;  // GL uploads the UI thread does per frame
+static const int kMaskWorkers = 2;          // file-read + CPU decode threads
+static const size_t kMaskReadyMax = 16;     // decoded-but-unuploaded cap (drop oldest)
+static const size_t kMaskQueueMax = 32;     // total queued cap (shed load while scrubbing)
+static void mask_worker_fn() {
+    for (;;) {
+        std::shared_ptr<MaskFetch> job;
+        {
+            std::unique_lock<std::mutex> lk(g_mask_async.mu);
+            g_mask_async.cv.wait(lk, []{ return g_mask_async.stop || !g_mask_async.work.empty(); });
+            if (g_mask_async.stop) return;
+            job = std::move(g_mask_async.work.front());
+            g_mask_async.work.pop_front();
+        }
+        std::vector<unsigned char> jpeg = mask_read_jpeg_bytes(job->mask_dir, job->frame_idx);
+        if (!jpeg.empty()) {
+            int w = 0, h = 0, n = 0;
+            unsigned char* data = stbi_load_from_memory(jpeg.data(), (int)jpeg.size(),
+                                                        &w, &h, &n, 1);
+            if (data && w > 0 && h > 0 && (size_t)w * (size_t)h <= 16 * 1024 * 1024) {
+                job->px.assign(data, data + (size_t)w * (size_t)h);
+                job->w = w; job->h = h; job->ok = true;
+            }
+            if (data) stbi_image_free(data);
+        }
+        std::lock_guard<std::mutex> lk(g_mask_async.mu);
+        if (!job->ok) g_mask_async.inflight.erase(job->key);  // allow retry later
+        else {
+            if (g_mask_async.ready.size() >= kMaskReadyMax) {
+                // Shed the oldest decoded frame (scrub moved on); its key
+                // leaves inflight so a later revisit re-queues it.
+                g_mask_async.inflight.erase(g_mask_async.ready.front()->key);
+                g_mask_async.ready.pop_front();
+            }
+            g_mask_async.ready.push_back(std::move(job));
+        }
+    }
+}
+static void mask_async_ensure() {
+    std::lock_guard<std::mutex> lk(g_mask_async.mu);
+    if (g_mask_async.started) return;
+    g_mask_async.started = true;
+    for (int i = 0; i < kMaskWorkers; ++i)
+        g_mask_async.workers.emplace_back(mask_worker_fn);
+}
+
+// Read one JPEG frame's bytes from the mask mjpeg stream (worker thread).
+// Pure file I/O + seek-table lookup — no GL. Returns empty on any failure.
+// Lives in the same anonymous namespace as the worker above.
+static std::vector<unsigned char> mask_read_jpeg_bytes(const std::string& mask_dir,
+                                                       int frame_idx);
+}  // namespace
+
+
 
 // ── MJPEG seek-table cache ────────────────────────────────────────────────────
 // Maps mask_dir → offsets vector (byte offset of each JPEG in bg_masks.mjpeg).
@@ -1180,6 +1273,112 @@ static const MaskIndex* get_mask_index(const std::string& mask_dir) {
     entry = std::move(mi);
     return &g_mask_index[mask_dir];
 }
+namespace {
+// Read one JPEG frame's bytes from the mask mjpeg stream (worker thread).
+// Pure file I/O + seek-table lookup — no GL. Returns empty on any failure.
+static std::vector<unsigned char> mask_read_jpeg_bytes(const std::string& mask_dir,
+                                                       int frame_idx) {
+    const MaskIndex* mi = get_mask_index(mask_dir);
+    if (!mi) return {};
+    if (frame_idx < 0 || frame_idx >= (int)mi->offsets.size()) return {};
+    std::string mjpeg = mask_dir + "/bg_masks.mjpeg";
+    FILE* f = fopen(mjpeg.c_str(), "rb");
+    if (!f) return {};
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return {}; }
+    long file_size = ftell(f);
+    if (file_size <= 0) { fclose(f); return {}; }
+    long off = (long)mi->offsets[frame_idx];
+    if (off < 0 || off >= file_size) { fclose(f); return {}; }
+    if (fseek(f, off, SEEK_SET) != 0) { fclose(f); return {}; }
+    long next_off = file_size;
+    if (frame_idx + 1 < (int)mi->offsets.size()) {
+        long no = (long)mi->offsets[frame_idx + 1];
+        if (no > off) next_off = no;
+    }
+    size_t jpeg_size = (size_t)(next_off - off);
+    if (jpeg_size == 0 || jpeg_size > 4 * 1024 * 1024) { fclose(f); return {}; }
+    std::vector<unsigned char> buf(jpeg_size);
+    if (fread(buf.data(), 1, jpeg_size, f) != jpeg_size) { fclose(f); return {}; }
+    fclose(f);
+    return buf;
+}
+
+// Queue an async fetch for key (no-op if cached or already queued). File I/O
+// + decode happen on the worker; the UI thread only uploads (bounded, below).
+static void mask_async_request(const std::string& mask_dir, int frame_idx,
+                               const std::string& key) {
+    mask_async_ensure();
+    std::lock_guard<std::mutex> lk(g_mask_async.mu);
+    if (g_mask_cache.find(key) != g_mask_cache.end()) return;
+    if (g_mask_async.inflight.find(key) != g_mask_async.inflight.end()) return;
+    if (g_mask_async.work.size() + g_mask_async.ready.size() >= kMaskQueueMax)
+        return;  // shed load while scrubbing — caller retries next frame
+    auto job = std::make_shared<MaskFetch>();
+    job->mask_dir = mask_dir;
+    job->frame_idx = frame_idx;
+    job->key = key;
+    g_mask_async.inflight[key] = 1;
+    g_mask_async.work.push_back(std::move(job));
+    g_mask_async.cv.notify_one();
+}
+
+// Upload up to kMaskUploadsPerFrame decoded masks. Called at the top of
+// body_fx_mask_texture() so every preview frame drains the ready queue even
+// when the requested frame itself is still decoding.
+static void mask_async_upload_ready() {
+    for (int i = 0; i < kMaskUploadsPerFrame; ++i) {
+        std::shared_ptr<MaskFetch> job;
+        {
+            std::lock_guard<std::mutex> lk(g_mask_async.mu);
+            if (g_mask_async.ready.empty()) return;
+            job = std::move(g_mask_async.ready.front());
+            g_mask_async.ready.pop_front();
+        }
+        if (!job->ok || job->px.empty() || job->w <= 0 || job->h <= 0) {
+            std::lock_guard<std::mutex> lk(g_mask_async.mu);
+            g_mask_async.inflight.erase(job->key);
+            continue;
+        }
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, job->w, job->h, 0,
+                     GL_RED, GL_UNSIGNED_BYTE, job->px.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        if ((int)g_mask_cache.size() >= k_mask_cache_max) {
+            const std::string& evict_key = g_mask_lru.back();
+            auto evict_it = g_mask_cache.find(evict_key);
+            if (evict_it != g_mask_cache.end()) {
+                glDeleteTextures(1, &evict_it->second.first);
+                g_mask_cache.erase(evict_it);
+            }
+            g_mask_lru.pop_back();
+        }
+        g_mask_lru.push_front(job->key);
+        g_mask_cache[job->key] = { tex, g_mask_lru.begin() };
+        std::lock_guard<std::mutex> lk(g_mask_async.mu);
+        g_mask_async.inflight.erase(job->key);
+    }
+}
+
+static void mask_async_shutdown() {
+    std::vector<std::thread> workers;
+    {
+        std::lock_guard<std::mutex> lk(g_mask_async.mu);
+        if (!g_mask_async.started) return;
+        g_mask_async.stop = true;
+        g_mask_async.cv.notify_all();
+        workers.swap(g_mask_async.workers);
+    }
+    for (auto& t : workers) if (t.joinable()) t.join();
+}
+}  // namespace (async mask fetch)
+
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -1273,6 +1472,7 @@ void body_fx_init() {
 }
 
 void body_fx_shutdown() {
+    mask_async_shutdown();  // join decode workers (th/perf-frame)
     for (int i = 0; i < (int)BodyFXType::Count; ++i) {
         if (g_programs[i]) { glDeleteProgram(g_programs[i]); g_programs[i] = 0; }
     }
@@ -1303,6 +1503,10 @@ unsigned body_fx_mask_texture(const std::string& mask_dir, int frame_idx) {
     snprintf(buf, sizeof(buf), "m%07d", frame_idx);
     std::string key = mask_dir + "/" + buf;
 
+    // Drain any decoded masks first (bounded uploads) so the ready queue
+    // can't stall behind a frame whose own mask is still decoding.
+    mask_async_upload_ready();
+
     // Check texture cache
     auto it = g_mask_cache.find(key);
     if (it != g_mask_cache.end()) {
@@ -1312,73 +1516,18 @@ unsigned body_fx_mask_texture(const std::string& mask_dir, int frame_idx) {
         return it->second.first;
     }
 
-    // Load from bg_masks.mjpeg via seek table.
-    // frame_idx is the MASK-STREAM frame (0-based; callers map source time t to
-    // it via round((t - start_time)*fps) with start_time from start_time.txt) —
-    // it indexes bg_masks.mjpeg directly, no start-frame offset.
-    const MaskIndex* mi = get_mask_index(mask_dir);
-    if (!mi) return 0;
-    int local_idx = frame_idx;
-    if (local_idx < 0 || local_idx >= (int)mi->offsets.size()) return 0;
-
-    std::string mjpeg = mask_dir + "/bg_masks.mjpeg";
-    FILE* f = fopen(mjpeg.c_str(), "rb");
-    if (!f) return 0;
-
-    // Get the real file size up front: a stale/regenerated mask stream can make
-    // the seek-table offsets point past EOF — clamp everything to the file so a
-    // bad read degrades to "no mask this frame" instead of reading garbage or
-    // throwing on an absurd allocation.
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
-    long file_size = ftell(f);
-    if (file_size <= 0) { fclose(f); return 0; }
-    long off = (long)mi->offsets[local_idx];
-    if (off < 0 || off >= file_size) { fclose(f); return 0; }
-    if (fseek(f, off, SEEK_SET) != 0) { fclose(f); return 0; }
-
-    // Determine JPEG size: distance to next frame offset (or EOF), clamped.
-    long next_off = file_size;
-    if (local_idx + 1 < (int)mi->offsets.size()) {
-        long no = (long)mi->offsets[local_idx + 1];
-        if (no > off) next_off = no;
-    }
-    size_t jpeg_size = (size_t)(next_off - off);
-    if (jpeg_size > 4 * 1024 * 1024) { fclose(f); return 0; }   // sanity cap
-
-    std::vector<unsigned char> jpeg_buf(jpeg_size);
-    if (fread(jpeg_buf.data(), 1, jpeg_size, f) != jpeg_size) { fclose(f); return 0; }
-    fclose(f);
-
-    int w, h, n;
-    unsigned char* data = stbi_load_from_memory(jpeg_buf.data(), (int)jpeg_size, &w, &h, &n, 1);
-    if (!data) return 0;
-
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, data);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    stbi_image_free(data);
-
-    // Evict LRU if too many
-    if ((int)g_mask_cache.size() >= k_mask_cache_max) {
-        const std::string& evict_key = g_mask_lru.back();
-        auto evict_it = g_mask_cache.find(evict_key);
-        if (evict_it != g_mask_cache.end()) {
-            glDeleteTextures(1, &evict_it->second.first);
-            g_mask_cache.erase(evict_it);
-        }
-        g_mask_lru.pop_back();
-    }
-
-    g_mask_lru.push_front(key);
-    g_mask_cache[key] = { tex, g_mask_lru.begin() };
-    return tex;
+    // Miss: queue an async read+decode+upload and return 0 for this frame.
+    // No synchronous fopen/stbi/glTexImage on the UI thread — the caller
+    // keeps the unmasked frame and the mask lands within a frame or two.
+    // frame_idx is the MASK-STREAM frame (0-based; callers map source time t
+    // to it via round((t - start_time)*fps)) — it indexes bg_masks.mjpeg
+    // directly, no start-frame offset.
+    mask_async_request(mask_dir, frame_idx, key);
+    // Upload anything that finished while we queued (common when scrubbing
+    // back and forth over a small range): if OUR frame decoded instantly we
+    // still return 0 this cycle — one frame of patience keeps the UI thread
+    // free of unbounded upload work.
+    return 0;
 }
 
 uintptr_t body_fx_apply(BodyFXType type,
