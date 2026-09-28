@@ -367,6 +367,8 @@ The LLM reads FX.md for the exact change list and wiring pattern, reads the curr
 
 **Current gap before this is fully automatic**: the `FXType` enum and `project.cpp` version bump are the most fragile steps — an LLM must read the current version number and enum values carefully. These are good candidates to automate via a code-generation script that keeps them in sync with a JSON effect registry.
 
+**No-rebuild alternative**: a Script clip (`docs/SCRIPT_API.md`) runs agent-written JS through an HTML Canvas 2D context plus one optional fragment shader (`pms.post(frag, uniforms)`), reloaded on save and driven by `pms.audio` (beats, hits, envelopes, words). Its shader sees only the script layer's own pixels, so a look that must process the picture has the script draw the picture itself (`pms.image()` + `drawImage`), as `~/Projects/seen-and-not-seen-pms/scene/picture.js` does with the portrait layers. Native FX bricks remain the way to process every layer below a track.
+
 ---
 
 ## Known constraints
