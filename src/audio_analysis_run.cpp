@@ -374,30 +374,25 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
     out.lines = opt.lyrics;
     if (!opt.lyrics.empty()) {
         report(progress, 0.86f, "Aligning lyrics…");
-        // Vocal audio for the aligner: vocals stem when present, else the mix.
-        const std::vector<float>* vptr = have_vocals ? &stems[3] : &mix;
-        // Resample to 16 kHz mono (libswresample path via decode helper would
-        // re-decode; do it directly from the decoded mix-rate buffer).
+        // Vocal audio for the aligner at 16 kHz: decode the vocals stem (or
+        // the mix when there is none) DIRECTLY at 16 kHz via libswresample.
+        // The old path decoded at 44.1 kHz then linear-interpolated to 16k;
+        // the interpolation images aliased high-frequency stem content down
+        // into the vocal band and destroyed the first-word emissions (probe:
+        // line1 "They/had/also" at conf 0.00/0.00/0.25 with interp vs
+        // 0.98/0.96/1.00 with a direct 16 kHz decode of the same stem).
         std::vector<float> v16;
+        std::string align_err;
+        bool aligned = false;
         {
-            // Rational resample 44100 → 16000 via linear interpolation
-            // (the aligner normalises per-window; interpolation error is
-            // negligible for CTC emissions).
-            size_t n16 = (size_t)((double)vptr->size() * 16000 / kOutSR);
-            v16.resize(n16);
-            for (size_t i = 0; i < n16; i++) {
-                double p = (double)i * kOutSR / 16000;
-                size_t i0 = (size_t)p;
-                double f = p - i0;
-                float a = (i0 < vptr->size()) ? (*vptr)[i0] : 0.f;
-                float b = (i0 + 1 < vptr->size()) ? (*vptr)[i0 + 1] : 0.f;
-                v16[i] = (float)(a + (b - a) * f);
-            }
+            const char* vsrc = nullptr;
+            if (have_vocals && !out.stems[3].empty()) vsrc = out.stems[3].c_str();
+            std::string derr;
+            if (!aadsp::decode_mono(vsrc ? vsrc : audio_path, 16000, v16, &derr))
+                align_err = derr;
         }
         std::string model_path = wav2vec2_ctc_path();
         CtcVocab vocab = load_ctc_vocab(model_path);
-        bool aligned = false;
-        std::string align_err;
         if (!vocab.ok) align_err = "vocab load failed";
         else if (!fs::exists(model_path)) align_err = "model missing: " + model_path;
         else if (v16.empty()) align_err = "empty vocal pcm";

@@ -270,6 +270,7 @@ bool whisper_coarse_windows(const std::vector<float>& audio16k,
         pos = best_b;
     }
 
+    wins_out.resize(nl);
     float prev_end = 0.f;
     // Precompute split ends: lines sharing one segment split at the next
     // anchored line's first-word onset. Computed up front (not inline during
@@ -286,40 +287,51 @@ bool whisper_coarse_windows(const std::vector<float>& audio16k,
             break;
         }
     }
+    // Window starts use SEGMENT starts (minus a small cushion): the segment
+    // boundary is whisper's phrase onset and always sits before the line's
+    // true onset (probe: seg1 starts 5.38, line1's They at 5.94; windows
+    // [5.08,N] align They=5.94/1.00 for any end, while [6.57,N] collapses
+    // They onto frame 0 with conf 0). The matched first word's time is NOT
+    // used: whisper mis-hears sung onsets ("They" decoded at 5.62, 0.3 s
+    // early of the true 5.94). A line sharing its segment with an earlier
+    // line starts at that line's END (the split point). The prev_end clamp
+    // in the assembly loop is REMOVED for matched lines: it pushed word-
+    // anchored windows late (line1's 5.32 → 6.57 via line0's 6.52 end) and
+    // caused exactly the collapse this scheme avoids; overlaps are harmless
+    // (each line aligns only its own lyric text).
+    std::vector<float> win_start(nl, 0.f);
     for (size_t li = 0; li < nl; li++) {
-        if (spans[li].ok) {
-            // Start at the first word's SEGMENT start (minus cushion), not
-            // at the matched word's time: the matched first word is only a
-            // guess at which decoded word corresponds to the line start
-            // (whisper mis-hears sung onsets — "Or"→"on", "Maybe"→"baby" —
-            // so the true onset word often ISN'T in the decoded stream at
-            // all). The segment boundary is the reliable phrase onset: the
-            // CTC then finds the real onsets inside the window (probe:
-            // line1 wide 5.4–10.22 → They=5.94/1.00 vs tight 6.57–11.16 →
-            // They=6.57/0.00; tight windows collapse first words onto
-            // frame 0). Never before the previous line's end.
-            int sg = dec[spans[li].a].seg;
-            float s = (sg >= 0 && sg < (int)seg_bounds.size())
-                          ? seg_bounds[sg].first - 0.30f
-                          : dec[spans[li].a].t0 - 0.30f;
-            float e = dec[spans[li].b - 1].t1 + 1.20f;
-            if (split_end[li] > 0.f) e = std::min(e, split_end[li]);
-            if (s < prev_end) s = prev_end;
-            // One segment per line: a line never starts inside the previous
-            // line's segment (the floor above uses the segment's start, so
-            // without this two lines matched into the same segment get the
-            // same window start — line3 sat at seg2's start 9.92 and starved
-            // line2's CTC to 3 words).
-            if (sg >= 0) {
-                for (size_t k = 0; k < li; k++) {
-                    if (!spans[k].ok) continue;
-                    if (dec[spans[k].a].seg == sg) {
-                        s = std::max(s, wins_out[k].second);
-                        break;
-                    }
+        if (!spans[li].ok) continue;
+        int sg = dec[spans[li].a].seg;
+        float s = (sg >= 0 && sg < (int)seg_bounds.size())
+                      ? seg_bounds[sg].first - 0.30f
+                      : dec[spans[li].a].t0 - 0.30f;
+        if (sg >= 0) {
+            for (size_t k = 0; k < li; k++) {
+                if (!spans[k].ok) continue;
+                if (dec[spans[k].a].seg == sg && split_end[k] > 0.f) {
+                    s = split_end[k];
+                    break;
                 }
             }
-            if (s < prev_end) s = prev_end;
+        }
+        if (s < 0.f) s = 0.f;
+        win_start[li] = s;
+    }
+    for (size_t li = 0; li < nl; li++) {
+        if (spans[li].ok) {
+            // Window starts are precomputed segment starts (see win_start):
+            // the matched first word is only a guess at the line start
+            // (whisper mis-hears sung onsets), while the segment boundary
+            // is the reliable phrase onset and the CTC finds real onsets
+            // inside the window (probe: line1 wide 5.4–10.22 → They=5.94
+            // vs tight 6.57–11.16 → They=6.57/0.00 collapsed onto frame 0).
+            float s = win_start[li];
+            float e = dec[spans[li].b - 1].t1 + 1.20f;
+            if (split_end[li] > 0.f) e = std::min(e, split_end[li]);
+            // No prev_end clamp: segment starts already order the lines and
+            // the clamp pushed windows late (line1's 5.32 → 6.57), collapsing
+            // first words onto frame 0. Overlaps are harmless.
             if (e < s + 0.5f) e = s + 0.5f;
             if (e > (float)dur) e = (float)dur;
             wins_out[li] = {s < 0.f ? 0.f : s, e};
@@ -341,18 +353,6 @@ bool whisper_coarse_windows(const std::vector<float>& audio16k,
             if (e > (float)dur) e = (float)dur;
             wins_out[li] = {s < 0.f ? 0.f : s, e};
             prev_end = e;
-        }
-    }
-    // Clamp any matched window that overshoots a LATER matched window's start
-    // (the +1.2 s tail can cross into the next anchor when lines are dense).
-    for (size_t li = 0; li < nl; li++) {
-        if (!spans[li].ok) continue;
-        for (size_t k = li + 1; k < nl; k++) {
-            if (!spans[k].ok) continue;
-            float cap = wins_out[k].first - 0.05f;
-            if (wins_out[li].second > cap && cap > wins_out[li].first + 0.3f)
-                wins_out[li].second = cap;
-            break;
         }
     }
     if (getenv("PMS_AA_DEBUG")) {
