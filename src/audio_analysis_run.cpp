@@ -454,17 +454,19 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         // fuzzy match of each line onto the decoded word stream). The old
         // greedy-CTC windows drifted whole lines by seconds on sung material.
         std::vector<std::pair<float, float>> wins;
+        std::vector<std::vector<std::pair<float, float>>> wtimes;
         if (align_err.empty()) {
             auto wprog = [&](float p, const char* s) {
                 report(progress, 0.86f + p * 0.04f, s);
             };
             std::string werr;
-            if (!whisper_coarse_windows(v16, opt.lyrics, wins, wprog, &werr) ||
+            if (!whisper_coarse_windows(v16, opt.lyrics, wins, &wtimes, wprog, &werr) ||
                 wins.size() != opt.lyrics.size()) {
                 if (werr.empty()) werr = "coarse pass failed";
                 fprintf(stderr, "[align] coarse fallback (%s): even splits\n",
                         werr.c_str());
                 wins.clear();
+                wtimes.clear();
                 for (size_t i = 0; i < opt.lyrics.size(); i++)
                     wins.push_back({(float)(out.duration * i / opt.lyrics.size()),
                                     (float)(out.duration * (i + 1) / opt.lyrics.size())});
@@ -627,6 +629,22 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                         float t1 = w0 + (fmax)* (float)sec_per_frame;
                         if (conf < 0.5f)
                             t0 = std::max(t0, t1 - (0.07f * (float)nw.size() + 0.05f));
+                        // Low-confidence CTC words parked on unrelated sound;
+                        // whisper's token time marks the sung onset. Blend the
+                        // clamped start toward it (measured: line6 "are" CTC
+                        // 31.64 vs whisper 32.00 vs ref 32.33; line5 "to" CTC
+                        // 22.45 vs whisper ~22.1 vs ref 21.45). High-conf
+                        // words are untouched.
+                        if (conf < 0.5f && li < wtimes.size() && wi < wtimes[li].size() &&
+                            wtimes[li][wi].first >= 0.f) {
+                            float wt0 = wtimes[li][wi].first;
+                            // Never move before the window start or past the
+                            // clamped end; weight 0.7 toward whisper.
+                            float bt = t0 + 0.7f * (wt0 - t0);
+                            if (bt < w0) bt = w0;
+                            if (bt > t1) bt = t1;
+                            t0 = bt;
+                        }
                         AnalysisWord w;
                         w.w = ltoks[li][wi];
                         w.line = (int)li;

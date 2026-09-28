@@ -94,9 +94,11 @@ float word_sim(const std::string& a, const std::string& b) {
 bool whisper_coarse_windows(const std::vector<float>& audio16k,
                             const std::vector<std::string>& lyrics,
                             std::vector<std::pair<float, float>>& wins_out,
+                            std::vector<std::vector<std::pair<float, float>>>* word_times_out,
                             const std::function<void(float, const char*)>& progress,
                             std::string* err) {
     wins_out.clear();
+    if (word_times_out) word_times_out->clear();
     auto fail = [&](const std::string& m) {
         if (err) *err = m;
         return false;
@@ -355,18 +357,30 @@ bool whisper_coarse_windows(const std::vector<float>& audio16k,
             prev_end = e;
         }
     }
-    if (getenv("PMS_AA_DEBUG")) {
-        for (size_t s = 0; s < seg_bounds.size(); s++)
-            fprintf(stderr, "[wcoarse] seg%zu %.2f-%.2f\n", s,
-                    seg_bounds[s].first, seg_bounds[s].second);
-        for (size_t li = 0; li < nl; li++)
-            fprintf(stderr, "[wcoarse] line%zu win=%.2f-%.2f %s (a=%zu b=%zu sg=%d wt=%.2f '%s')\n",
-                    li, wins_out[li].first, wins_out[li].second,
-                    spans[li].ok ? "anchored" : "even-split",
-                    spans[li].a, spans[li].b,
-                    spans[li].ok ? dec[spans[li].a].seg : -1,
-                    spans[li].ok ? (double)dec[spans[li].a].t0 : -1.0,
-                    spans[li].ok ? dec[spans[li].a].text.c_str() : "");
+    // Per-word whisper times, aligned to lyric word indices: for anchored
+    // lines, map lyric words onto the matched decoded span in order (extra
+    // decoded words from whisper insertions collapse onto the nearest lyric
+    // word). Unanchored lines get [-1,-1] for every word.
+    if (word_times_out) {
+        word_times_out->resize(nl);
+        for (size_t li = 0; li < nl; li++) {
+            (*word_times_out)[li].assign(ltoks[li].size(), {-1.f, -1.f});
+            if (!spans[li].ok) continue;
+            size_t ndec = spans[li].b - spans[li].a;
+            size_t nlw = ltoks[li].size();
+            if (ndec == 0 || nlw == 0) continue;
+            for (size_t k = 0; k < nlw; k++) {
+                // Pro-rata map: lyric word k owns decoded words
+                // [k*ndec/nlw, (k+1)*ndec/nlw).
+                size_t d0 = spans[li].a + k * ndec / nlw;
+                size_t d1 = spans[li].a + (k + 1) * ndec / nlw;
+                if (d1 <= d0) d1 = d0 + 1;
+                if (d1 > spans[li].b) d1 = spans[li].b;
+                float t0 = dec[d0].t0, t1 = dec[d1 - 1].t1;
+                if (t1 < t0) t1 = t0;
+                (*word_times_out)[li][k] = {t0, t1};
+            }
+        }
     }
     return true;
 }
