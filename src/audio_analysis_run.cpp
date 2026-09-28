@@ -83,7 +83,7 @@ float percentile_vec(std::vector<float> v, float q) {
 }
 
 // Timing grid: onset frames at 10 ms hop, frame f ↔ t = f * hop / sr.
-inline float onset_frame_time(int f) { return (float)f * kHop / kSR; }
+inline double onset_frame_time(int f) { return (double)f * kHop / kSR; }
 
 // Peak-pick an onset envelope per the spec table; write hits with p90 strengths.
 // norm_q: quantile for norm = env / p97; delta = 0.5 * quantile(norm, delta_q).
@@ -236,9 +236,9 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         auto bt = aadsp::beat_track(oenv.data(), (int)oenv.size(), kSR, kHop, 400.f, false);
         out.bpm = bt.bpm;
         for (int f : bt.frames) {
-            float t = onset_frame_time(f);
-            if (t >= -0.05f && t < (float)out.duration) out.beats.push_back(t);
-            else if (t >= (float)out.duration && t < (float)out.duration + 0.011f)
+            double t = onset_frame_time(f);
+            if (t >= -0.05 && t < out.duration) out.beats.push_back(t);
+            else if (t >= out.duration && t < out.duration + 0.011)
                 out.beats.push_back(t);  // keep the closing-frame beat (trim=False)
         }
     }
@@ -277,7 +277,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         std::vector<float> chroma;
         aadsp::chroma_from_power(cfb, mag.data(), nfr, chroma);
         std::vector<int> bf;
-        for (float b : out.beats) bf.push_back((int)(b * kSR / kHop));
+        for (double b : out.beats) bf.push_back((int)(b * kSR / kHop));
         int phase = 0;
         if (!bf.empty())
             phase = aadsp::downbeat_phase(bo.data(), (int)bo.size(), bf.data(),
@@ -517,7 +517,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                     line_targets.push_back(tgt);
                 }
                 for (size_t li = 0; li < opt.lyrics.size(); li++) {
-                    float w0 = wins[li].first, w1 = wins[li].second;
+                    double w0 = wins[li].first, w1 = wins[li].second;
                     int f0 = std::max(0, (int)(w0 / sec_per_frame));
                     int f1 = std::min(T, (int)(w1 / sec_per_frame));
                     if (f1 <= f0) continue;
@@ -625,10 +625,10 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                             cn++;
                         }
                         float conf = (float)(ps / cn);
-                        float t0 = w0 + (fmin)* (float)sec_per_frame;
-                        float t1 = w0 + (fmax)* (float)sec_per_frame;
+                        double t0 = w0 + fmin * sec_per_frame;
+                        double t1 = w0 + fmax * sec_per_frame;
                         if (conf < 0.5f)
-                            t0 = std::max(t0, t1 - (0.07f * (float)nw.size() + 0.05f));
+                            t0 = std::max(t0, t1 - (0.07 * (double)nw.size() + 0.05));
                         // Low-confidence CTC words parked on unrelated sound;
                         // whisper's token time marks the sung onset. Blend the
                         // clamped start toward it (measured: line6 "are" CTC
@@ -637,10 +637,10 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                         // words are untouched.
                         if (conf < 0.5f && li < wtimes.size() && wi < wtimes[li].size() &&
                             wtimes[li][wi].first >= 0.f) {
-                            float wt0 = wtimes[li][wi].first;
+                            double wt0 = wtimes[li][wi].first;
                             // Never move before the window start or past the
                             // clamped end; weight 0.7 toward whisper.
-                            float bt = t0 + 0.7f * (wt0 - t0);
+                            double bt = t0 + 0.7 * (wt0 - t0);
                             if (bt < w0) bt = w0;
                             if (bt > t1) bt = t1;
                             t0 = bt;
@@ -687,8 +687,8 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                     w.w = ws[wi];
                     w.line = (int)li;
                     w.i = (int)wi;
-                    w.t0 = (float)(dur * (li + (double)wi / ws.size()) / opt.lyrics.size());
-                    w.t1 = (float)(dur * (li + (double)(wi + 1) / ws.size()) / opt.lyrics.size());
+                    w.t0 = dur * (li + (double)wi / ws.size()) / opt.lyrics.size();
+                    w.t1 = dur * (li + (double)(wi + 1) / ws.size()) / opt.lyrics.size();
                     w.conf = 0.f;
                     out.words.push_back(w);
                 }

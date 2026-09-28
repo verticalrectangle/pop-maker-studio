@@ -87,12 +87,12 @@ bool audio_analysis_load_json(const std::string& path, AudioAnalysis& out, std::
         a.source = j.value("source", std::string());
         a.duration = j.value("duration", 0.0);
         a.bpm = j.value("bpm", 0.f);
-        a.beats = j.value("beats", std::vector<float>());
-        a.downbeats = j.value("downbeats", std::vector<float>());
+        a.beats = j.value("beats", std::vector<double>());
+        a.downbeats = j.value("downbeats", std::vector<double>());
         if (j.contains("hits")) {
             for (int k = 0; k < (int)HitKind::Count; k++) {
                 if (!j["hits"].contains(k_hit_names[k])) continue;
-                for (const json& h : j["hits"][k_hit_names[k]]) a.hits[k].push_back({h.at("t").get<float>(), h.at("s").get<float>()});
+                for (const json& h : j["hits"][k_hit_names[k]]) a.hits[k].push_back({h.at("t").get<double>(), h.at("s").get<float>()});
             }
         }
         a.fps = j.value("fps", 60);
@@ -112,7 +112,7 @@ bool audio_analysis_load_json(const std::string& path, AudioAnalysis& out, std::
         if (j.contains("words")) {
             for (const json& w : j["words"]) {
                 a.words.push_back({w.at("w").get<std::string>(), w.value("line", 0), w.value("i", 0),
-                                   w.at("t0").get<float>(), w.at("t1").get<float>(), w.value("conf", 1.f)});
+                                   w.at("t0").get<double>(), w.at("t1").get<double>(), w.value("conf", 1.f)});
             }
         }
         if (j.contains("stems")) {

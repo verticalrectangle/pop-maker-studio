@@ -298,12 +298,12 @@ static double audio_offset_for(const AppState& state, const AudioAnalysis& a,
     return 0.0;
 }
 
-static JSValue new_float_array(JSContext* ctx, const std::vector<float>& v,
+static JSValue new_float_array(JSContext* ctx, const std::vector<double>& v,
                                double shift) {
     JSValue arr = JS_NewArray(ctx);
     for (uint32_t i = 0; i < v.size(); ++i)
         JS_DefinePropertyValueUint32(ctx, arr, i,
-            JS_NewFloat64(ctx, (double)v[i] + shift), JS_PROP_C_W_E);
+            JS_NewFloat64(ctx, v[i] + shift), JS_PROP_C_W_E);
     return arr;
 }
 
