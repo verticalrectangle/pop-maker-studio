@@ -5,8 +5,8 @@
 // Pipeline (all times are source-file seconds):
 //   1. Decode the mix to 44.1 kHz mono; also decode each stem.
 //   2. Stems: with_separation ? separate_stems4() : injected stems_dir (a real
-//      feature — reuse of precomputed stems) : no-stems fallback. Stems are
-//      cached as <stem>_analysis.json next to the audio when writable.
+//      feature — reuse of precomputed stems) : no-stems fallback. Callers
+//      cache results (audio_analysis_cache_file, media cache dir).
 //   3. Beats/bpm: librosa-faithful beat tracking on the MIX (never the vocal
 //      stem), trim off (the DP tail select keeps the final frame; clipping to
 //      the file then matches the reference).
@@ -34,6 +34,7 @@
 #include "separate4.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -65,18 +66,6 @@ bool stems_in_dir(const std::string& dir, std::array<std::string, 4>& paths) {
         paths[i] = p.string();
     }
     return true;
-}
-
-// Cache path: <audio stem>_analysis.json next to the audio, or the project
-// cache dir when that is not writable.
-std::string cache_json_path(const std::string& audio_path) {
-    fs::path a(audio_path);
-    fs::path beside = a.parent_path() / (a.stem().string() + "_analysis.json");
-    std::error_code ec;
-    // Writable if the parent exists and we can create the file.
-    std::ofstream t(beside, std::ios::app);
-    if (t) return beside.string();
-    return cache_path(audio_path, "_analysis.json");
 }
 
 float percentile_vec(std::vector<float> v, float q) {
@@ -168,6 +157,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
     char absbuf[4096] = {};
     (void)absbuf;
     out.source = fs::absolute(audio_path).string();
+    out.env_start = 0.0;
 
     // Optional analysis range [range_t0, range_t1) in source seconds: decode,
     // separate, analyse and normalise only that span; all event times stay in
@@ -195,6 +185,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
             }
             span_s0 = (size_t)std::llround(span_t0 * kOutSR);
             span_n = mix.size();
+            out.env_start = span_t0;
         } else {
             if (!aadsp::decode_mono(audio_path, kOutSR, mix, &derr)) {
                 if (err) *err = derr;
@@ -756,12 +747,32 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
             }
         }
     }
-    // ── Cache + publish ──────────────────────────────────────────────────────
-    report(progress, 0.95f, "Writing cache…");
-    {
-        std::string err2;
-        audio_analysis_save_json(out, cache_json_path(audio_path), &err2);
-    }
     report(progress, 1.f, "Done");
     return true;
+}
+
+std::string audio_analysis_cache_file(const std::string& audio_path, const AudioAnalysisOptions& opt) {
+    // Bump when the analysis output changes meaning (r2: env_start for spans).
+    static const char* kSchemaRevision = "r2";
+    std::error_code ec;
+    long long mtime = 0;
+    auto wt = fs::last_write_time(audio_path, ec);
+    if (!ec) mtime = (long long)wt.time_since_epoch().count();
+    ec.clear();
+    uint64_t size = (uint64_t)fs::file_size(audio_path, ec);
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](const std::string& s) {
+        for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
+        h ^= 0xff; h *= 1099511628211ull;  // field separator
+    };
+    for (const LyricLine& l : opt.lyrics) {
+        mix(l.text);
+        if (l.has_window) { mix(std::to_string(l.w0)); mix(std::to_string(l.w1)); }
+    }
+    if (opt.has_range) { mix("range"); mix(std::to_string(opt.range_t0)); mix(std::to_string(opt.range_t1)); }
+    mix(opt.stems_dir);
+    char key[160];
+    snprintf(key, sizeof(key), "%s_%llu_%lld_%016llx_%d", kSchemaRevision, (unsigned long long)size, mtime,
+             (unsigned long long)h, opt.separate_stems ? 1 : 0);
+    return cache_path(fs::absolute(audio_path).string() + '\n' + key, "_analysis.json");
 }

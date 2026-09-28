@@ -40,6 +40,8 @@ struct AudioAnalysis {
     std::vector<double> downbeats;  // seconds, ascending, subset of beats
     std::array<std::vector<AudioHit>, (int)HitKind::Count> hits;
     int fps = 60;                                                // envelope/spectrum frame rate
+    double env_start = 0.0;                                      // source seconds of env/spectrum frame 0
+                                                                 // (the range start of a span analysis)
     std::array<std::vector<float>, (int)EnvKind::Count> env;     // 0..1 per frame (p98-normalised RMS)
     int spectrum_bands = 32;
     std::vector<uint8_t> spectrum;   // frames * spectrum_bands, row-major, 0..99
@@ -69,6 +71,11 @@ struct AudioAnalysisOptions {
                                          // decode/separate/analyse/normalise that span; times stay absolute
     double range_t0 = 0.0, range_t1 = 0.0;
 };
+
+// Media-cache file for an analysis of `audio_path` with `opt` (never next to the
+// source): keyed by file size + mtime + lyrics (text + windows) + range + stems flag
+// + schema revision, so any change re-analyses.
+std::string audio_analysis_cache_file(const std::string& audio_path, const AudioAnalysisOptions& opt);
 
 // Blocking full analysis; run on a worker thread. progress(0..1, stage label).
 bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOptions& opt,

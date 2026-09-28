@@ -986,6 +986,7 @@ struct AppState {
 
     // IPC-requested snapshot (ipc_server sets request; GL thread fulfills and sets done)
     bool        snapshot_request    = false;
+    std::string snapshot_out_path;      // render snapshot destination ("" = default naming, see render_snapshot_gl)
     // Save-thumbnail request: canvas capture writes a small PNG here on the
     // next rendered frame (set on every successful project save). Runtime.
     std::string thumb_request;

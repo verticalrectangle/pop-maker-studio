@@ -32,6 +32,7 @@ static json to_json_obj(const AudioAnalysis& a) {
     }
     j["hits"] = std::move(hits);
     j["fps"] = a.fps;
+    j["env_start"] = a.env_start;
     json env = json::object();
     for (int k = 0; k < (int)EnvKind::Count; k++) env[k_env_names[k]] = a.env[k];
     j["env"] = std::move(env);
@@ -96,6 +97,7 @@ bool audio_analysis_load_json(const std::string& path, AudioAnalysis& out, std::
             }
         }
         a.fps = j.value("fps", 60);
+        a.env_start = j.value("env_start", 0.0);
         if (j.contains("env")) {
             for (int k = 0; k < (int)EnvKind::Count; k++) {
                 if (j["env"].contains(k_env_names[k])) a.env[k] = j["env"][k_env_names[k]].get<std::vector<float>>();

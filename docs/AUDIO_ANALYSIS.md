@@ -21,7 +21,7 @@ audio clip playing the file: `timeline = source − in_point + clip.start`).
 `range: [t0, t1]` (source seconds) restricts decode, separation, analysis and normalisation to that
 span — like the reference, which analysed the 80–130 s segment of the song (SEG_START=80). Event
 times stay absolute (beats/hits/words carry source seconds; `duration` is the span end); `env` and
-`spectrum` stay span-local (frame 0 = span start), exactly like analysing a clipped file. The range
+`spectrum` stay span-local (frame 0 = span start, recorded as `env_start`), exactly like analysing a clipped file. The range
 is part of the cache key. Without `range` the whole file is analysed.
 
 ## JSON schema
@@ -43,6 +43,7 @@ is part of the cache key. Without `range` the whole file is analysed.
     "vocal": []                         // vocals stem onset strength
   },
   "fps": 60,                            // envelope + spectrum frame rate
+  "env_start": 0.0,                     // source seconds of env/spectrum frame 0 (range start for spans)
   "env": { "mix": [], "drums": [], "bass": [], "other": [], "vocals": [] },  // RMS per frame, 0..1
   "spectrum_bands": 32,
   "spectrum": [[0, 12, 99]],            // per frame: log-mel bands, 0..99

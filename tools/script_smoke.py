@@ -349,8 +349,9 @@ export function render(f) {
         run("audio.js", """
 export function render(f) {
   const a = pms.audio;
-  pms.log(JSON.stringify({offset: a.offset, beat0: a.beats[0], kick: a.hits.kick[0].t, word: pms.words[0].t0,
-                          env: a.env.mix.length, same: a === pms.audio}));
+  pms.log(JSON.stringify({offset: a.offset, beat0: a.beats[0], kick: a.hits.kick.length ? a.hits.kick[0].t : null,
+                          word: pms.words.length ? pms.words[0].t0 : null, env: a.env.mix.length,
+                          same: a === pms.audio}));
 }
 """)
         log = sm.errors("0:0")["log"]
@@ -360,6 +361,16 @@ export function render(f) {
                  and abs(m.get("word", -1) - 1.25) < 1e-6, m)
         sm.check("env re-indexed to timeline 0", m.get("env") == 720 - 120, m)
         sm.check("pms.audio identity-stable", m.get("same") is True, m)
+        # A span analysis (range [2, 14)): env frame 0 is source 2 s = timeline 0 here.
+        with open(analysis, "w") as f:
+            json.dump({"version": 2, "source": wav, "duration": 14.0, "bpm": 120, "fps": 60, "env_start": 2.0,
+                       "beats": [2.5], "downbeats": [2.5], "hits": {}, "env": {"mix": [0.0] * 720},
+                       "lines": [], "words": []}, f)
+        sm.call("load_audio_analysis", {"path": analysis})
+        sm.still("audio_span")
+        log = sm.errors("0:0")["log"]
+        m = json.loads(log[-1]) if log else {}
+        sm.check("span env re-indexed via env_start", m.get("env") == 720, m)
 
         if sm.failures:
             print(f"FAIL: {len(sm.failures)}/{sm.n} checks")

@@ -522,34 +522,35 @@ static std::string draw_script_clips(ImDrawList& dl, const AppState& state, int 
 void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
     if (state.snapshot_running) return;
 
-    // Build output path: <stem>_frame_<MM>m<SS>s<mmm>ms.png next to first audio/video file
-    std::string base_path = state.audio_path;
-    if (base_path.empty()) {
-        for (auto& tr : state.tracks)
-            for (auto& cl : tr.clips)
-                if (clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
-                    { base_path = cl.text; goto snap_found_base; }
-    }
-    snap_found_base:
-    if (base_path.empty()) {
-        // No video/audio media — a text / background / image / FX composition,
-        // i.e. someone making a still image. base_path is only used to name the
-        // output file, so derive one from the project (else HOME) and render the
-        // frame full-res anyway instead of refusing.
+    // Output: the requested path (render_still), else
+    // <project dir | ~/Pictures/Pop Maker Studio>/<name>_frame_<MM>m<SS>s<mmm>ms.png —
+    // never next to the source media (derived files stay out of the user's
+    // media folders).
+    std::string out = std::move(state.snapshot_out_path);
+    state.snapshot_out_path.clear();
+    std::string dir;
+    if (out.empty()) {
+        std::string stem = "snapshot";
         if (!state.project_path.empty()) {
-            base_path = state.project_path;
+            dir = fs::path(state.project_path).parent_path().string();
+            stem = fs::path(state.project_path).stem().string();
         } else {
             const char* home = std::getenv("HOME");
-            base_path = std::string(home ? home : ".") + "/pms_snapshot";
+            dir = std::string(home ? home : ".") + "/Pictures/Pop Maker Studio";
+            std::error_code ec;
+            fs::create_directories(dir, ec);
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips)
+                    if (stem == "snapshot" && clip_is_videolike_type(cl.clip_type) && !cl.text.empty())
+                        stem = fs::path(cl.text).stem().string();
         }
+        int total_ms = (int)(snap_t * 1000.f);
+        int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
+        char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
+        out = dir + "/" + stem + "_frame_" + ts + ".png";
+    } else {
+        dir = fs::path(out).parent_path().string();
     }
-
-    int total_ms = (int)(snap_t * 1000.f);
-    int ms = total_ms % 1000, ss = (total_ms / 1000) % 60, mm = total_ms / 60000;
-    char ts[32]; snprintf(ts, sizeof(ts), "%02dm%02ds%03dms", mm, ss, ms);
-    std::string stem = fs::path(base_path).stem().string();
-    std::string dir  = fs::path(base_path).parent_path().string();
-    std::string out  = dir + "/" + stem + "_frame_" + ts + ".png";
 
     int out_w = 1080, out_h = 1920;
     output_format_px(state.format, out_w, out_h);
