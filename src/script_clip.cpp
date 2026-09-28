@@ -43,7 +43,7 @@ struct Entry {
     bool force_build = false;
     std::vector<ScriptError> build_errors;
     // §9 cache key of the texture's current contents.
-    double last_t = NAN;
+    long last_frame = -1;
     int last_w = -1, last_h = -1, last_sw = -1, last_sh = -1;
     uint64_t last_audio = 0;
     bool last_exporting = false;
@@ -104,15 +104,19 @@ unsigned script_clip_texture(const AppState& state, const Clip& clip, const std:
     if (!slot) slot = std::make_unique<Entry>();
     Entry& e = *slot;
     uint64_t audio = script_audio_epoch(state);
+    // Scripts see the frame grid: t is quantised to the project frame so
+    // preview, render_still and export agree exactly on event boundaries.
+    const double fps = state.fps > 0 ? (double)state.fps : 30.0;
+    const long frame = std::lround((double)t * fps);
     bool rebuild = !e.built || e.force_build || e.script_path != clip.script_path ||
                    e.script_params != clip.script_params || e.rt.poll_dirty();
-    if (!rebuild && !e.faces_waiting && e.last_t == (double)t && e.last_w == canvas_w &&
+    if (!rebuild && !e.faces_waiting && e.last_frame == frame && e.last_w == canvas_w &&
         e.last_h == canvas_h && e.last_sw == surface_w && e.last_sh == surface_h &&
         e.last_audio == audio && e.last_exporting == exporting) {
         errors.insert(errors.end(), e.errors.begin(), e.errors.end());
         return e.surface.texture();
     }
-    e.last_t = (double)t;
+    e.last_frame = frame;
     e.last_w = canvas_w;
     e.last_h = canvas_h;
     e.last_sw = surface_w;
@@ -130,10 +134,10 @@ unsigned script_clip_texture(const AppState& state, const Clip& clip, const std:
     }
 
     ScriptFrame f;
-    f.t = t;
-    f.local = (double)t - (double)clip.start;
-    f.fps = state.fps;
-    f.frame = (int)std::lround((double)t * (double)state.fps);
+    f.frame = (int)frame;
+    f.fps = fps;
+    f.t = (double)frame / fps;
+    f.local = f.t - (double)clip.start;
     f.width = canvas_w;
     f.height = canvas_h;
     f.duration = (double)clip.end - (double)clip.start;

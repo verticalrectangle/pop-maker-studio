@@ -21,7 +21,7 @@ namespace {
 // eyeOpen (geometric ratio) + source presentation time (seconds into the
 // take, from the container's per-frame pts — VFR sources report real times).
 static constexpr size_t FC_REC = 1 + (size_t)FT_NPTS * 2 + FT_NBLEND + 2;
-static constexpr uint32_t FC_VERSION = 12;  // v12: real per-frame pts times + unsmoothed eyeOpen/blendshapes (v11: VFR passthrough)
+static constexpr uint32_t FC_VERSION = 13;  // v13: display orientation for rotation-tagged media (v12: real pts + unsmoothed eye signals)
 
 struct CacheData {
     int   rot_q = 0;
@@ -60,7 +60,7 @@ std::shared_ptr<CacheData> load_file(const std::string& take_path, int rot_q) {
                fread(&rq, 4, 1, f) == 1 && fread(&fps, 4, 1, f) == 1 &&
                fread(&rw, 4, 1, f) == 1 && fread(&rh, 4, 1, f) == 1 &&
                fread(&count, 4, 1, f) == 1;
-    // v12 = real pts + unsmoothed eye signals; older sidecars are rebuilt.
+    // Older sidecars (pre-v13) are rebuilt.
     if (!hdr || magic != 0x46534D50 || version != FC_VERSION || rq != rot_q ||
         count == 0 || count > 1000000 || fps <= 0.f) {
         fclose(f);
@@ -220,6 +220,7 @@ bool face_cache_frame(const std::string& take_path, int rot_q, int fi,
     }
     if (fi < 0 || fi >= d->count) return false;
     const float* r = &d->rec[(size_t)fi * FC_REC];
+    if (src_time) *src_time = (double)r[FC_REC - 1];
     if (r[0] <= 0.f) return false;       // no face on this frame
     out.valid = true;
     out.score = r[0];
@@ -235,7 +236,6 @@ bool face_cache_frame(const std::string& take_path, int rot_q, int fi,
         if (bl[k] != 0.f) out.has_blend = true;
     }
     out.eye_open = bl[FT_NBLEND];
-    if (src_time) *src_time = (double)r[FC_REC - 1];
     return true;
 }
 
@@ -256,12 +256,15 @@ bool face_cache_ensure_sync(const std::string& take_path, int rot_q,
 
 // Frame count + fps for the ready cache (script runtime / FaceTrack dump).
 // Returns -1 / 0 when no ready cache exists for this rotation.
-int face_cache_frame_count(const std::string& take_path, int rot_q, float* fps_out) {
+int face_cache_frame_count(const std::string& take_path, int rot_q, float* fps_out,
+                           int* raw_w, int* raw_h) {
     std::lock_guard<std::mutex> lk(g_mtx);
     auto it = g_entries.find(take_path);
     if (it == g_entries.end() || it->second.status != FaceCacheStatus::Ready ||
         !it->second.data || it->second.data->rot_q != rot_q)
         return -1;
     if (fps_out) *fps_out = it->second.data->fps;
+    if (raw_w) *raw_w = it->second.data->raw_w;
+    if (raw_h) *raw_h = it->second.data->raw_h;
     return it->second.data->count;
 }

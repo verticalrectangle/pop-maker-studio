@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -30,7 +32,30 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from mcp_server.server import _call  # noqa: E402  (PMS IPC client)
+from mcp_server.framing import album_box  # noqa: E402  (shared with crop_media)
+
+SOCK_PATH = os.environ.get("PMS_SOCK") or "/tmp/pop-maker-studio.sock"
+
+
+def _call(method: str, params: dict) -> dict:
+    """One PMS IPC request (newline-delimited JSON over the app's Unix socket)."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.connect(SOCK_PATH)
+        s.sendall((json.dumps({"id": "1", "method": method, "params": params}) + "\n").encode())
+        buf = b""
+        while True:
+            while b"\n" not in buf:
+                chunk = s.recv(1 << 20)
+                if not chunk:
+                    raise RuntimeError(f"{method}: PMS closed the connection")
+                buf += chunk
+            line, buf = buf.split(b"\n", 1)
+            reply = json.loads(line)
+            if reply.get("type") == "progress":
+                continue
+            if "error" in reply:
+                raise RuntimeError(f"{method}: {reply['error']}")
+            return reply.get("result", {})
 
 SIZE = 1080  # portrait layer resolution (square)
 GRID = 108  # final block grid: 10 px blocks at 1080
@@ -108,17 +133,6 @@ def segment(frame_path: Path, work: Path) -> dict[str, np.ndarray]:
     """Soft class maps (0..1) from PMS's multiclass selfie segmenter."""
     res = _call("segment_image", {"path": str(frame_path), "out_dir": str(work / "classes")})
     return {name: cv2.imread(p, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0 for name, p in res["classes"].items()}
-
-
-def crop_box(pts_px: np.ndarray, w: int, h: int) -> tuple[int, int, int]:
-    """Album framing: face (forehead->chin) fills ~57% of the square, chin at 80% height."""
-    top, chin = pts_px[10], pts_px[152]
-    face_h = chin[1] - top[1]
-    side = int(round(1.75 * face_h))
-    cx = (pts_px[234][0] + pts_px[454][0]) / 2
-    x0 = int(round(np.clip(cx - side / 2, 0, w - side)))
-    y0 = int(round(np.clip(chin[1] - 0.80 * side, 0, h - side)))
-    return x0, y0, side
 
 
 def crop(img: np.ndarray, box: tuple[int, int, int], interp=cv2.INTER_AREA) -> np.ndarray:
@@ -272,7 +286,7 @@ def main() -> None:
         save(out / "live" / f"f_{i:02d}.jpg", cv2.resize(f, (LIVE_WIDTH, live_h), interpolation=cv2.INTER_AREA), 92)
 
     # ---- portrait crop + segmentation ------------------------------------------------
-    box = crop_box(pts_px, W, H)
+    box = album_box(pts_px, W, H)
     x0, y0, side = box
     classes = {k: crop(v, box) for k, v in segment(paths[snap_i], work).items()}
     portrait = crop(snap, box)

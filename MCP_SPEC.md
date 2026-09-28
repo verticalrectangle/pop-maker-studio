@@ -166,10 +166,11 @@ The server registers ~70 tools spanning the full editing surface. **The canonica
 | **Media probing** | `get_media_info`, `get_stills`, `describe_video`, `get_video_description` |
 | **Multicam** | `apply_multicam_cuts` |
 | **Style recipes** | `get_song_structure`, `list_style_recipes`, `get_style_recipe`, `animate_section` |
-| **Media operations** | `crop_media`, `extract_clip_segment` |
+| **Media operations** | `crop_media` (`framing: "album"` = cover-portrait square from PMS face landmarks), `extract_clip_segment` |
+| **Script clips** | `add_script_clip`, `set_script_clip`, `get_script_errors`, `render_still`, `get_media_face`, `segment_image`, `load_audio_analysis` |
 | **Vision model** | `download_vision_model`, `get_vision_model_status` |
 | **Playback** | `play`, `pause`, `seek` |
-| **Export / project** | `trigger_export`, `cancel_export`, `get_export_status`, `take_snapshot`, `save_project`, `load_project`, `new_project`, `set_format` |
+| **Export / project** | `trigger_export`, `cancel_export`, `get_export_status`, `take_snapshot`, `save_project`, `load_project`, `new_project`, `set_format`, `set_fps` |
 | **Runtime FX** | `validate_glsl` (register / list / delete handled by editing the JSON files directly — see Section 1) |
 | **Batching** | `begin_batch`, `end_batch` (mostly optional — see auto-batching in Section 2) |
 | **Cancellation** | `cancel_search`, `cancel_export` |
@@ -185,6 +186,10 @@ The server registers ~70 tools spanning the full editing surface. **The canonica
 **Bin vs timeline.** `add_to_bin` makes a media file available to the project without placing it. `add_clip` actually places. `add_clip` on a video/audio path automatically mirrors the file into the bin, so for direct placements just call `add_clip` and skip the bin step.
 
 **Proxy-required tools.** `remove_background` and `process_body_fx_masks` fail synchronously if the source clip's MJPEG proxy isn't on disk yet (they read masks keyed by proxy frame index). Poll the source clip's `proxy_status` via `get_project` and retry when ready.
+
+**Script clips.** A Script clip is authored as files (an ES module + data) and placed with `add_script_clip {track, start, duration, path, params}`; the app hot-reloads on every file change. The loop for an agent is: edit the module → `render_still {t, path, format}` (a full-resolution composite rendered like export; the image comes back inline) → `get_script_errors` (per clip: `errors [{message, file, line}]`, the `pms.log` tail, `render_ms`/`flush_ms`) → repeat. The contract scripts code against is `docs/SCRIPT_API.md`; `pms.audio` comes from `load_audio_analysis` / `analyze_audio`, mapped to timeline seconds through the audio clip that plays the analysed file. `set_fps` sets the frame grid `f.frame` counts on. A script error aborts export (`get_export_status.stage` names the clip and message).
+
+**Large replies.** Replies are single JSON lines of any size (`get_media_face` on a clip is ~1 MB); the app writes them completely even when the client reads slowly.
 
 **Generic dispatch.** Tools that don't have explicit Python handlers (most of them) forward through the catch-all dispatcher at the bottom of `server.py` — the method name is sent verbatim over IPC. So the surface in `server.py` is also a near-1:1 reflection of the IPC methods in `ipc_server.cpp`.
 

@@ -305,6 +305,17 @@ export function render(f) {
         errs = sm.errors("0:0")["errors"]
         sm.check("unknown assignment throws", bool(errs) and "fillColour" in errs[0]["message"], errs[:1])
 
+        missing = os.path.join(work, "late.js")
+        run("imports_missing.js", "import {v} from './late.js';\nexport function render(f) { pms.log(String(v)); }\n")
+        errs = sm.errors("0:0")["errors"]
+        sm.check("missing import reported", bool(errs) and "cannot find module" in errs[0]["message"]
+                 and errs[0]["message"].find("late.js") >= 0, errs[:1])
+        with open(missing, "w") as f:
+            f.write("export const v = 42;\n")
+        sm.still("imports_missing_fixed")
+        c = sm.errors("0:0")
+        sm.check("creating the missing module rebuilds", not c["errors"] and c["log"][-1:] == ["42"], c)
+
         print("Hot reload")
         hot = sm.script("hot.js", "export function render(f) { pms.canvas.fillStyle = '#f00'; pms.canvas.fillRect(0, 0, f.width, f.height); }\n")
         sm.call("set_script_clip", {"track": 0, "clip": 0, "path": hot, "params": {}})
