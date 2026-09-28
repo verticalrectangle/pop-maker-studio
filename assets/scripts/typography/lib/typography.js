@@ -571,7 +571,51 @@ export function renderPreset(f, cfg) {
   const isRave = id === 'rave';
 
   let fsz = eff.fontSize * H;
-  const lineH0 = fsz * LINE_H;
+  // Pen shift per family as a fraction of font size: (nativeRate - skiaRate).
+  // Native quads start below the pen by nativeRate*fsz (ImGui baked Y0);
+  // Skia 'top' ink starts above the pen by -skiaRate*fsz. Both measured
+  // per family (native: Text-clip H at 44px; skia: script-clip H at 345px).
+  const PEN_SHIFT_RATE = {
+    INTER: 0.1773, allura: 0.1099, anton: 0.2826,
+    archivoblack: 0.0632, bebasneue: 0.1099, bungee: 0.1752,
+    caveat: 0.1665, cinzel: 0.1814, cormorant: 0.1367,
+    dancingscript: 0.1128, dmserifdisplay: 0.2, ebgaramond: 0.1541,
+    fraunces: 0.1376, greatvibes: 0.15, homemadeapple: 0.5807,
+    instrumentserif: 0.164, lobster: 0.1553, majormono: 0.0248,
+    monoton: 0.2939, montserrat: 0.1347, pacifico: 0.3633,
+    permanentmarker: 0.2579, playfairdisplay: 0.1714, poppins: 0.1979,
+    pressstart2p: 0.0, righteous: 0.1347, rubikmonoone: 0.1524,
+    sacramento: 0.2662, scratchl: 0.1943, silkscreen: 0.1615,
+    sora: 0.1669, spacegrotesk: 0.1579, spacemono: 0.2405,
+    syne: 0.1087, vt323: 0.0098,
+  };
+  // ImGui bakes with stbtt_ScaleForPixelHeight (1px = 1/(ascent-descent) em)
+  // while Skia px are em px: multiply the requested size by
+  // (ascent-descent)/upm so both rasterizers produce the same glyphs.
+  // Measured per family from hhea (Anton 3083/2048 = 1.5054):
+  const BAKED_SCALE = {
+    allura: 1.25, anton: 1.5054, archivoblack: 1.088, bebasneue: 1.2,
+    bungee: 1.32, caveat: 1.26, cinzel: 1.348, cormorant: 1.211,
+    dmserifdisplay: 1.371, dancingscript: 1.2, ebgaramond: 1.305,
+    fraunces: 1.233, greatvibes: 1.252, homemadeapple: 2.1416,
+    instrumentserif: 1.3, lobster: 1.25, majormono: 1.0, monoton: 1.5566,
+    montserrat: 1.219, pacifico: 1.756, permanentmarker: 1.4268,
+    playfairdisplay: 1.333, poppins: 1.4, pressstart2p: 1.0,
+    righteous: 1.2417, rubikmonoone: 1.238, sacramento: 1.4595,
+    scratchl: 1.29, silkscreen: 1.28, sora: 1.26, spacegrotesk: 1.276,
+    spacemono: 1.481, syne: 1.2, vt323: 1.0,
+  };
+  const famKey = (family || '').toLowerCase();
+  // Geometry (wrap, line height, slots) lives in native px; only the Skia
+  // font size is scaled to match the ImGui bake.
+  const requested = fsz;
+  const baked = famKey in BAKED_SCALE ? BAKED_SCALE[famKey] : 1.0;
+  fsz = fsz / baked;
+  const topOff = (famKey in PEN_SHIFT_RATE ? PEN_SHIFT_RATE[famKey] : 0.15) * requested;
+  const lineH0 = requested * LINE_H;
+
+  ctx.textBaseline = 'top';
+  const drawY = (topY) => topY + topOff;
   ctx.font = fontFor(family, fsz, heavy);
   if (eff.tracking) ctx.letterSpacing = `${eff.tracking}em`;
   else ctx.letterSpacing = '0px';
@@ -586,7 +630,7 @@ export function renderPreset(f, cfg) {
     ctx.font = fontFor(family, fsz, heavy);
     lines = wrapLines(ctx, applyCase(g.text, eff.textCase), maxLineW);
   }
-  const lineH = fsz * LINE_H;
+  const lineH = requested * LINE_H;
   void lineH0;
   const widths = lines.map((ln) => ctx.measureText(ln).width);
   const blockMaxW = Math.max(0, ...widths);
@@ -653,6 +697,7 @@ export function renderPreset(f, cfg) {
     fsz *= animScale;
     ctx.font = fontFor(family, fsz, heavy);
   }
+  void requested;
   const lh = fsz * LINE_H;
   void lh;
 
@@ -682,7 +727,14 @@ export function renderPreset(f, cfg) {
     ctx.rotate(eff.rotationDeg * Math.PI / 180);
     ctx.translate(-cx, -cy);
   }
-  ctx.textBaseline = 'top';
+  // Native quads start exactly at the pen (measured: H ink top == pen row
+  // for every family at 44px); Skia's 'top' em-box top sits `skiaTopOff` px
+  // above the ink (measured per family at 44px, scales linearly). Draw with
+  // a top baseline shifted down by the scaled offset so ink lands on the pen.
+  // Per-face Skia 'top'-baseline ink offset as a fraction of font size:
+  // measured by rendering 'H' at 345.6px per family (inkTop-800)/345.6.
+  // Native quads start exactly at the pen, so the pen must shift by this.
+
 
   const baseCol = eff.color;
   const ts = eff.ts;
@@ -703,10 +755,10 @@ export function renderPreset(f, cfg) {
     if (strokeOnly) {
       ctx.strokeStyle = colCss;
       ctx.lineWidth = 1;
-      ctx.strokeText(ln, lx, ly);
+      ctx.strokeText(ln, lx, drawY(ly));
     } else {
       ctx.fillStyle = colCss;
-      ctx.fillText(ln, lx, ly);
+      ctx.fillText(ln, lx, drawY(ly));
     }
     ctx.globalAlpha = 1;
   };
@@ -764,7 +816,7 @@ export function renderPreset(f, cfg) {
               ctx.globalAlpha = a;
               ctx.font = fontFor(family, es, heavy);
               ctx.fillStyle = css(col);
-              ctx.fillText(part.text, ex, ey);
+              ctx.fillText(part.text, ex, drawY(ey));
               ctx.globalAlpha = 1;
               ctx.font = fontFor(family, fsz, heavy);
               if (style === 'ScratchFilm') scratchOverlay(ctx, ex, ey, ws, es * 1.2, gi, frameI, a);
@@ -794,7 +846,7 @@ export function renderPreset(f, cfg) {
                 ctx.globalAlpha = a;
                 ctx.font = fontFor(family, es, heavy);
                 ctx.fillStyle = css(col);
-                ctx.fillText(ch, ex, ey);
+                ctx.fillText(ch, ex, drawY(ey));
                 ctx.globalAlpha = 1;
                 ctx.font = fontFor(family, fsz, heavy);
                 if (style === 'ScratchFilm') scratchOverlay(ctx, ex, ey, ws, es * 1.2, gi, frameI, a);
@@ -844,13 +896,13 @@ export function renderPreset(f, cfg) {
           ctx.globalAlpha = animAlpha;
           ctx.fillStyle = css(c);
           ctx.font = fontFor(family, es, heavy);
-          ctx.fillText(tok, cx + ox, ly + oy);
+          ctx.fillText(tok, cx + ox, drawY(ly) + oy);
           ctx.font = fontFor(family, fsz, heavy);
           ctx.globalAlpha = 1;
         } else if (eff.karaokeMode === 1) {
           ctx.globalAlpha = animAlpha;
           ctx.fillStyle = css(base);
-          ctx.fillText(tok, cx, ly);
+          ctx.fillText(tok, cx, drawY(ly));
           let fillw = wprog > 0 ? wordW * wprog : 0;
           if (wprog >= 1) fillw = wordW + fsz;
           if (fillw > 0) {
@@ -859,7 +911,7 @@ export function renderPreset(f, cfg) {
             ctx.rect(cx, ly - fsz, fillw, fsz * 2.6);
             ctx.clip();
             ctx.fillStyle = css(hl);
-            ctx.fillText(tok, cx, ly);
+            ctx.fillText(tok, cx, drawY(ly));
             ctx.restore();
           }
           ctx.globalAlpha = 1;
@@ -870,7 +922,7 @@ export function renderPreset(f, cfg) {
           const dim = (!we || (!isActive && wprog < 1)) && (cfg.id === 'karaoke');
           ctx.globalAlpha = animAlpha;
           ctx.fillStyle = dim ? 'rgba(255,255,255,0.4)' : css(c);
-          ctx.fillText(tok, cx, ly);
+          ctx.fillText(tok, cx, drawY(ly));
           ctx.globalAlpha = 1;
         }
         cx += wordW;
@@ -885,37 +937,32 @@ export function renderPreset(f, cfg) {
         ? [0, 0, 0, 1] : baseCol;
       // Glow (block only).
       if (ts.glow_enabled) {
-        const draw = () => ctx.fillText(ln, lx, ly);
+        const draw = () => ctx.fillText(ln, lx, drawY(ly));
         drawGlow(ctx, draw, ts.glow_r, ts.glow_col, animAlpha);
       }
-      // Shadow.
+      // Shadow: offset duplicate of the text (native AddText at +ox/+oy),
+      // drawn FIRST under the main fill — not a blur shadow.
       if (ts.shadow_enabled) {
         ctx.save();
-        ctx.shadowColor = css(withAlpha(ts.shadow_col, animAlpha));
-        ctx.shadowBlur = 0;
-        ctx.shadowOffsetX = ts.shadow_ox;
-        ctx.shadowOffsetY = ts.shadow_oy;
         ctx.globalAlpha = animAlpha;
-        ctx.fillStyle = css(col);
-        ctx.fillText(ln, lx, ly);
+        ctx.fillStyle = css(withAlpha(ts.shadow_col, 1));
+        ctx.fillText(ln, lx + ts.shadow_ox, drawY(ly) + ts.shadow_oy);
         ctx.restore();
         ctx.globalAlpha = 1;
       }
       // Stroke ring.
       if (ts.stroke_enabled) {
         const draw = (strokeOnly) => {
-          if (strokeOnly) ctx.strokeText(ln, lx, ly);
-          else { ctx.fillStyle = css(withAlpha(col, animAlpha)); ctx.fillText(ln, lx, ly); }
+          if (strokeOnly) ctx.strokeText(ln, lx, drawY(ly));
+          else { ctx.fillStyle = css(withAlpha(col, animAlpha)); ctx.fillText(ln, lx, drawY(ly)); }
         };
         ctx.save();
         ctx.globalAlpha = 1;
         strokeDraw(ctx, draw, ts.stroke_w, ts.stroke_col, animAlpha);
         ctx.restore();
       }
-      // Fill (skip when shadow already drew it — shadow draws fill+offset).
-      if (!ts.shadow_enabled) {
-        drawLineText(ln, lx, ly, css(col), animAlpha, false);
-      }
+      // Fill (the shadow pass above only drew the offset duplicate).
+      drawLineText(ln, lx, ly, css(col), animAlpha, false);
       // Scratch-on-film overlay for Stack-style scratch preset.
       if (style === 'ScratchFilm') {
         const frameI = Math.floor(localT * 24);
@@ -936,7 +983,7 @@ export function renderPreset(f, cfg) {
           ctx.save();
           ctx.globalAlpha = animAlpha;
           ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(gg * 255)},${Math.round(b * 255)},1)`;
-          ctx.fillText(ln, lx, ly);
+          ctx.fillText(ln, lx, drawY(ly));
           ctx.restore();
           continue;
         } else {
@@ -962,7 +1009,7 @@ export function renderPreset(f, cfg) {
           ctx.save();
           ctx.globalAlpha = animAlpha;
           ctx.fillStyle = grad;
-          ctx.fillText(ln, lx, ly);
+          ctx.fillText(ln, lx, drawY(ly));
           ctx.restore();
         }
       }
