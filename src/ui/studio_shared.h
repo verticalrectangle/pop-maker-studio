@@ -259,13 +259,11 @@ bool ui_dropper_active();
 void ui_dropper_feed(float r, float g, float b);
 void ui_dropper_cancel();
 
-// ── group_words helpers (defined in pipeline.cpp, used by panel_animation) ────
-// Segment-accurate grouping: words + Whisper segments (same time space) → clips.
-std::vector<Clip> read_segment_clips(const std::string& seg_path);
+
 
 // ── Panel-view write access ───────────────────────────────────────────────────
-// Defined in screen_studio.cpp; some helpers (add_clip_to_track, panel_media,
-// generate_typography) need to switch the panel on selection changes.
+// Defined in screen_studio.cpp; some helpers (add_clip_to_track, panel_media)
+// need to switch the panel on selection changes.
 extern PanelView s_panel_view;
 void app_register_engine_hooks();   // wire app callbacks into engine hook points
 

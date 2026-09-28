@@ -773,7 +773,7 @@ void ui_studio(AppState& state) {
         run_envelope_extract(state);
 
         // Run the caller-supplied completion action exactly once, then clear it.
-        // UI buttons set this to apply_subtitle_mode or generate_typography;
+        // UI buttons set this to apply_subtitle_mode or a typography lay;
         // MCP trigger_pipeline leaves it null so the timeline stays clean.
         if (state.pipeline_on_done) {
             auto cb = std::move(state.pipeline_on_done);

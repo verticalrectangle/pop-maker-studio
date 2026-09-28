@@ -495,7 +495,7 @@ void apply_lyrics_edits(AppState& state, Clip& c) {
 }
 
 // Load word JSON and apply current grouping mode.
-// generate_typography is defined in panel_animation.cpp, declared in panel_animation.h
+// typography layers are Script clips — see typography_script.h
 
 // Removes all Lyrics clips with matching source_id from ALL tracks, then
 // places fresh grouped clips on the "Lyrics" track.

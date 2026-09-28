@@ -1142,7 +1142,7 @@ FxBrickColors fx_brick_colors(FXType ft, bool sel) {
 }
 
 
-// Engine hook (engine_seams.h): generate_typography asks the app to surface
+// Engine hook (engine_seams.h): lay_typography_script asks the app to surface
 // the Typography tab after a rebuild. Registered from app_init.
 void app_register_engine_hooks() {
     set_focus_typography_hook([] { s_panel_view = PanelView::Typography; });
