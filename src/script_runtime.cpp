@@ -148,26 +148,37 @@ ScriptRuntime::~ScriptRuntime() { teardown(); }
 
 // ── Module loader hooks ──────────────────────────────────────────────────
 
+// Module specifier → absolute path (js_malloc'd, owned by QuickJS). A file
+// that does not exist still normalises to its path, so the loader reports it
+// by name (and watches it: creating the file triggers a rebuild).
 static char* script_normalize(JSContext* ctx, const char* base_name,
                               const char* name, void* opaque) {
     ScriptRuntime::Impl* self = (ScriptRuntime::Impl*)opaque;
-    (void)ctx;
-    std::string r = script_resolve_spec(name ? name : "",
-                                        base_name ? base_name : "",
-                                        self->entry_dir);
-    if (r.empty()) return nullptr;
-    return strdup(r.c_str());
+    const std::string spec = name ? name : "";
+    const std::string base = base_name ? base_name : "";
+    std::string r = script_resolve_spec(spec, base, self->entry_dir);
+    if (r.empty() && spec.rfind("pms:", 0) != 0) {
+        fs::path p = fs::path(base.empty() ? self->entry_dir : fs::path(base).parent_path().string()) / spec;
+        if (p.extension().empty()) p += ".js";
+        r = p.lexically_normal().string();
+    }
+    if (r.empty()) {
+        JS_ThrowReferenceError(ctx, "unknown built-in module '%s' (imported from %s)", spec.c_str(),
+                               base.c_str());
+        return nullptr;
+    }
+    return js_strdup(ctx, r.c_str());
 }
 
 static JSModuleDef* script_loader(JSContext* ctx, const char* module_name,
                                   void* opaque) {
     ScriptRuntime::Impl* self = (ScriptRuntime::Impl*)opaque;
     std::string src;
+    self->watched[module_name] = file_mtime_ns(module_name);
     if (!read_file(module_name, src)) {
-        JS_ThrowReferenceError(ctx, "could not load module '%s'", module_name);
+        JS_ThrowReferenceError(ctx, "cannot find module '%s'", module_name);
         return nullptr;
     }
-    self->watched[module_name] = file_mtime_ns(module_name);
     JSValue func = JS_Eval(ctx, src.c_str(), src.size(), module_name,
                            JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
     if (JS_IsException(func)) return nullptr;
