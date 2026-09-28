@@ -54,11 +54,17 @@ def load_htdemucs():
 
 
 def torch_stems(model, mix):
-    from demucs.apply import apply_model
+    # Reference = what users get from `python -m demucs`: Separator wraps
+    # apply_model with mono-mix mean/std normalisation (api.py
+    # separate_tensor: ref = wav.mean(0), out = model((wav-mean)/std)*std+mean).
+    # C++ separate_stems4 applies the same normalisation, so this compares
+    # like with like; raw apply_model() without it differs by ~55-60 dB SNR.
+    from demucs.api import Separator
+    sep = Separator(model="htdemucs", shifts=0, split=True, overlap=0.25,
+                    progress=False)
     with torch.no_grad():
-        out = apply_model(model, torch.from_numpy(mix.T)[None],
-                          shifts=0, split=True, overlap=0.25)
-    return out[0].permute(0, 2, 1).numpy()  # [4, N, 2]
+        _, stems = sep.separate_tensor(torch.from_numpy(mix.T).contiguous())
+    return torch.stack([stems[s] for s in SOURCES], 0).permute(0, 2, 1).numpy()
 
 
 def cpp_stems(cli, work, tag, mix):

@@ -32,7 +32,21 @@ Used for word-level transcription with DTW token timestamps via whisper.cpp. No 
 | **License** | Community model; see source repository |
 | **When downloaded** | Automatically on first vocal separation |
 
-Used to separate vocals from instrumental. Instrumental is derived as `original − vocals`. The pipeline uses FFTW3 for STFT/iSTFT; inference runs via ONNX Runtime.
+---
+
+## htdemucs — 4-Stem Music Separation
+
+| | |
+|---|---|---|
+| **File** | `htdemucs.onnx` |
+| **Size** | ~167 MB |
+| **Path** | `models/` next to the binary (hard-linked from the shared-models store) |
+| **Source** | Meta Demucs `htdemucs` checkpoint (demucs 4.1.0 `htdemucs` bag, single model signature `955717e8`), via torch.hub: `https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th` |
+| **Conversion** | `~/Projects/seen-and-not-seen/.venv/bin/python tools/export_htdemucs_onnx.py --out /home/alexis/dev/pms-wt/shared-models/htdemucs.onnx` (HTDemucs core as a real-valued ONNX graph — spectrogram front/back end in C++/FFTW; the committed file was built this way) |
+| **License** | [MIT](https://github.com/facebookresearch/demucs/blob/main/LICENSE) |
+| **When downloaded** | Must be placed manually — not auto-downloaded |
+
+Separates drums/bass/other/vocals (`separate_stems4` in `src/separate4.cpp`): ffmpeg decode to 44.1 kHz stereo, `python -m demucs` input normalisation (mono-mix mean/std, undone on the stems), 7.8 s training-length segments with 25% overlap and triangle crossfade (exactly `apply_model(shifts=0, split=True, overlap=0.25)`), FFTW STFT/iSTFT (n_fft 4096, hop 1024) around the ONNX core, weighted overlap-add. Parity: ≥ 71 dB per-stem SNR vs the PyTorch `Separator` on both reference excerpts (see `tools/separate4_parity.py`).
 
 ---
 
@@ -127,6 +141,7 @@ The detector runs sparse (re-detect on loss or every ~2 s), the landmark net den
 |---|---|---|---|
 | Whisper ggml-large-v3-turbo-q5_0 | ~584 MB | Yes (Setup screen) | Transcription |
 | Kim_Vocal_2 MDX-Net | ~64 MB | Yes (on first use) | Vocal separation |
+| htdemucs | ~167 MB | **No — manual** | 4-stem music separation |
 | u2net_human_seg | ~176 MB | Yes (Setup screen) | Background removal |
 | HuBERT | ~190 MB | **No — manual** | Voice conversion |
 | Piper voices | ~30–60 MB each | Yes (on first use) | TTS |

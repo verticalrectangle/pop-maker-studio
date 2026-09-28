@@ -5,14 +5,16 @@
 // HTDemucs core only: spectrogram in/out, real-valued
 // (complex-as-channels), STFT/iSTFT live in C++ with FFTW.
 //
-// Pipeline: ffmpeg decode (44.1 kHz stereo float) → segment
-// (343980-sample training-length chunks, 25% overlap, triangle weights —
-// exactly demucs.apply.apply_model(shifts=0, split=True, overlap=0.25))
-// → per segment: _spec (reflect-pad 1536, STFT n_fft=4096 hop=1024,
-// periodic Hann, normalized=True, center=True reflect, drop Nyquist +
-// guard frames) → ONNX (mix + spec → zout CaC spectrogram + xt time
-// branch) → _ispec (pad guards/Nyquist, iSTFT, strip pad) + xt →
-// weighted overlap-add → four float WAVs (drums/bass/other/vocals).
+// Pipeline: ffmpeg decode (44.1 kHz stereo float) → `python -m demucs`
+// input normalisation (Separator.separate_tensor: mono-mix mean/std) →
+// segment (343980-sample training-length chunks, 25% overlap, triangle
+// weights — exactly demucs.apply.apply_model(shifts=0, split=True,
+// overlap=0.25)) → per segment: _spec (reflect-pad 1536, STFT n_fft=4096
+// hop=1024, periodic Hann, normalized=True, center=True reflect, drop
+// Nyquist + guard frames) → ONNX (mix + spec → zout CaC spectrogram + xt
+// time branch) → _ispec (pad guards/Nyquist, iSTFT, strip pad) + xt →
+// weighted overlap-add → denormalise (*std+mean) → four float WAVs
+// (drums/bass/other/vocals).
 #include "separate4.h"
 
 #include "platform.h"
@@ -188,7 +190,6 @@ static void ispec_mono(const std::vector<std::vector<cx>>& spec, const std::vect
                        fftwf_plan iplan, float* out_f, fftwf_complex* in_c,
                        std::vector<float>& out) {
     int T = kFrames + 4;  // 340 with guards
-    int le2 = kTrainLen + 2 * kSpecPad;  // 347136
     int buflen = (T - 1) * kHop + kNFFT;
     std::vector<float> buf(buflen, 0.f), env(buflen, 0.f);
     // Materialise guarded frames.
@@ -209,10 +210,12 @@ static void ispec_mono(const std::vector<std::vector<cx>>& spec, const std::vect
             env[start + i] += win[i] * win[i];
         }
     }
-    // torch.istft(center=True): OLA over the center-padded signal, divide
-    // by envelope, then trim n_fft/2 each side.
-    int center = kNFFT / 2;
-    for (int i = 0; i < le2; i++) {
+    // torch.istft(center=True,length=le): OLA each frame at t*hop over the
+    // n_fft/2 reflect-padded signal, divide by the window-square envelope,
+    // trim n_fft/2 each side (giving `le` samples); demucs then strips the
+    // _spec kSpecPad samples each side, leaving exactly kTrainLen samples.
+    int center = kNFFT / 2 + kSpecPad;
+    for (int i = 0; i < kTrainLen; i++) {
         float e = env[i + center];
         out.push_back(e > 1e-8f ? buf[i + center] / e : 0.f);
     }
@@ -237,6 +240,23 @@ bool separate_stems4(const std::string& audio_path, const std::string& out_dir,
     std::vector<float> L(N), R(N);
     for (int i = 0; i < N; i++) { L[i] = interleaved[2 * i]; R[i] = interleaved[2 * i + 1]; }
     interleaved.clear(); interleaved.shrink_to_fit();
+    // `python -m demucs` input normalisation (Separator.separate_tensor):
+    // mean/std of the mono downmix, applied to both channels, undone on
+    // the stems after overlap-add (out = out * std + mean). Matches what
+    // users get from the CLI; the parity script's raw apply_model() call
+    // skips it, so it compares through the same Separator path.
+    double m1 = 0.0, m2 = 0.0;
+    for (int i = 0; i < N; i++) {
+        double v = 0.5 * ((double)L[i] + (double)R[i]);
+        m1 += v; m2 += v * v;
+    }
+    m1 /= N;
+    double var = m2 / N - m1 * m1;
+    double cli_mean = m1, cli_std = sqrt(var > 0.0 ? var : 0.0) + 1e-8;
+    for (int i = 0; i < N; i++) {
+        L[i] = (float)(((double)L[i] - cli_mean) / cli_std);
+        R[i] = (float)(((double)R[i] - cli_mean) / cli_std);
+    }
 
     // ── Segmenting (demucs apply_model split/overlap) ───────────────────────
     // Triangle weights 1..seg/2+1, seg-seg/2..1 normalised to peak 1
@@ -379,10 +399,12 @@ bool separate_stems4(const std::string& audio_path, const std::string& out_dir,
     fftwf_free(fft_in); fftwf_free(fft_out);
     fftwf_free(iff_in); fftwf_free(iff_out);
 
-    // Normalise by overlap-add weights (demucs: out /= sum_weight).
+    // Normalise by overlap-add weights (demucs: out /= sum_weight), then
+    // undo the CLI input normalisation (Separator: out = out * std + mean).
     for (size_t k = 0; k < acc.size(); k++)
         for (int i = 0; i < N; i++)
-            acc[k][i] = (wsum[i] > 1e-6f) ? acc[k][i] / wsum[i] : 0.f;
+            acc[k][i] = (wsum[i] > 1e-6f)
+                ? (float)(acc[k][i] / wsum[i] * cli_std + cli_mean) : 0.f;
 
     // ── Write four float WAVs ───────────────────────────────────────────────
     if (progress) progress(0.95f);
