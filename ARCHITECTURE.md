@@ -73,9 +73,58 @@ Three tiers, picked per-slot at open time, transparently upgraded as media becom
 
 **Tier 3 — Single-frame still** (`PreviewSource::Still`). Fallback when libav can't open the file. `proxy_ensure_still` runs ffmpeg once, caches the JPEG.
 
-Every slot keeps an 8-frame `DecodedFrame ring` (RGB pixels, optional RGBA composite for chroma-key / bg_remove / glitch corruption-bleed). The canvas pre-walk (`canvas.cpp`) dispatches a parallel JPEG/decoder batch via the thread pool for the active clip per track plus a 3-frame boundary warm into neighbour clips when the playhead is within 1 s of a cut. `video_get_texture` is a ring lookup; misses fall through to sync decode on the main thread.
+**Async decode + two-sided/LRU cache (th/perf-decode).** `video_get_texture`
+never decodes on the calling thread: on a miss it submits at most one async
+decode for the requested frame (per-slot latest-request-wins; a newer request
+bumps `async_seq` so the worker's stale result is discarded) and meanwhile
+presents the nearest already-cached frame for that slot (previous GL texture,
+or 0 when nothing is cached yet). `video_prefetch_frames` only submits, never
+waits (the old blocking `tp.wait_idle()` is gone): current frame ± lookahead
+on both sides of the playhead — 1 back-fill + 1 forward-fill probe per slot
+per frame plus a 3-frame boundary warm into neighbour clips within 1 s of a
+cut — plus loop-wrap prefetch at the loop seam. Each slot keeps an 8-frame
+`DecodedFrame` ring around the playhead keyed by `(frame_idx, fx_stamp)`
+(`fx_stamp` captures decode-affecting FX params; pure-time changes don't
+bump), and a global CPU-side preview LRU (1 GiB budget, oldest-shown-first
+eviction) re-serves recently visited frames from RAM without re-decoding. GPU
+textures stay bounded (one live texture per slot + 1 thumbnail). Worker CPU
+time accumulates via `perf::record_decode_cpu` and folds into the S_DECODE
+stage once per UI frame (`perf::drain_decode` in the prefetch path).
+
+**Proxy index memo (th/perf-decode).** The proxy seek table loads once and
+stays in memory (no fopen/fread per call); `proxy_is_ready` ready-hits never
+re-stat (terminal session-scope cache) and in-progress paths throttle to
+~4 Hz per path. `clip_video_src()` memoizes per (source, ready-epoch):
+`proxy_ready_epoch()` bumps when a path becomes ready, so a mid-session
+proxy finish swaps Native → Proxy without per-frame polling. The main-loop
+idle gate watches the epoch and keeps rendering for one pass after a swap.
+
+**Drag quality (th/perf-decode).** While the playhead is dragged
+(`AppState::scrub_active`, set by bench/drag seeks), `video_set_scrubbing`
+puts decodes in draft mode: reduced resolution, CPU pixel FX skipped
+(datamosh etc.). The fullscreen pass refines once the drag stops
+(`get_texture` re-requests full quality and re-decodes on miss).
 
 `gc_video_slots` frees slots whose clips were deleted. `proxy_is_ready` is cached at session scope — terminal "ready" hits never re-stat; in-progress paths are throttled to one stat per 250 ms so the timeline draw loop can't flood syscalls at 60 fps × N visible clips.
+
+**Perf stage timers + idle throttle (th/perf-finish).** Every presented
+frame records `perf::S_CLIPFX` (per video clip: glass/body/runtime/face FX),
+`S_COMPOSITE` (BG layer + per-clip `scene_add_layer` + per-track
+`scene_apply_fx`), `S_TEXT` (per-track `scene_add_text_layer`),
+`S_SHAPES` (tessellation + replication), `S_SWAP` (vsync-inclusive present),
+plus the th/perf-decode S_PREFETCH/S_DECODE/S_UPLOAD, into last/EMA/max
+(`get_perf_stats`). `perf::frame_sample` runs every present so `ui_frame_ms`
+is live outside benches. Shape clips use a tessellation cache keyed on a
+stable identity (track index + clip start + content hash of the evaluated
+path/style/props) with per-frame pruning — static shapes re-emit cached
+triangles; add/remove/reorder can't alias entries. The main loop renders
+every frame while busy (playing/scrubbing/exporting/bench, pending seeks,
+slot opens, proxies/decodes/jobs, live camera, animated BG, playhead motion
++ 0.5 s settle, proxy-epoch change) and otherwise drains events then blocks
+in `poll()` on the IPC socket + client fds with a 250 ms cap
+(`ipc_wait_for_request`) — idle presents drop to ~4/s (≈ 0.4% CPU vs 22.6%
+at 60 Hz) while IPC still wakes the loop immediately. (`glfwWaitEventsTimeout`
+can't be used: Xvfb posts events continuously so it returns instantly.)
 
 ---
 

@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -1478,6 +1479,10 @@ static uintptr_t camera_live_tex(AppState& st, const Clip*& out_brick,
 AppState* g_state_for_mirror = nullptr;
 
 void draw_preview(AppState& state, ImVec2 p, float w, float h) {
+    // th/perf-finish: shape tessellation cache lives for the whole frame pass
+    // (stable-identity map + serial); pruned right after Pass 1 below.
+    static std::unordered_map<ShapeTessKey, ShapeTessCache, ShapeTessKeyHash> s_tess;
+    static uint64_t s_tess_frame = 0;
     // IPC-triggered snapshot — fulfilled here on the GL thread
     if (state.snapshot_request) {
         state.snapshot_request = false;
@@ -1938,7 +1943,10 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 float cx = px * w, cy = py * h;
                 float hw = w * sx * 0.5f, hh = h * sy * 0.5f;
                 float rad = rot * 3.14159265f / 180.f;
+                auto t0bg = std::chrono::steady_clock::now();
                 scene_add_layer(tex, cx, cy, hw, hh, cosf(rad), sinf(rad), alpha);
+                perf::record(perf::S_COMPOSITE, std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0bg).count());
             }
             break;
         }
@@ -1970,18 +1978,25 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             float rad = rot * 3.14159265f / 180.f;
 
             ShapePath path = cl.eval_path(state.playhead);
-            ShapeGeometry geom = shape_tessellate(path, stroke_len, width_mul,
-                                                  style.stroke_width,
-                                                  (int)w, (int)h,
-                                                  cx, cy, hw, hh,
-                                                  cosf(rad), sinf(rad));
-            if (mirror_fold > 1)
-                geom = shape_radial_replicate(geom, cx, cy, mirror_fold, mirror_refl);
-            // Fill fades in over the last 40% of the stroke reveal.
-            float fill_alpha = stroke_len >= 1.f ? 1.f
-                             : stroke_len <= 0.6f ? 0.f
-                             : (stroke_len - 0.6f) / 0.4f;
-            scene_add_shape(geom, style, alpha, fill_alpha, (int)w, (int)h);
+            // th/perf-finish: tessellation cache on a STABLE identity (track
+            // index + clip start + content hash of evaluated inputs) — never
+            // on Clip* addresses (vector realloc would alias/leak). Static
+            // shapes hit every frame; any visual change re-tessellates.
+            if (ti == (int)state.tracks.size() - 1) ++s_tess_frame;  // first track each frame
+            uint64_t content = shape_tess_content_hash(
+                path, stroke_len, width_mul, style.stroke_width,
+                (int)w, (int)h, cx, cy, hw, hh, cosf(rad), sinf(rad),
+                mirror_fold, mirror_refl);
+            ShapeTessKey tkey{ti, cl.start, content};
+            float fill_alpha = 0.f;
+            auto t0sh = std::chrono::steady_clock::now();
+            const ShapeGeometry* geomp = shape_tessellate_cached(
+                s_tess, s_tess_frame, tkey, path, stroke_len, width_mul,
+                style.stroke_width, (int)w, (int)h, cx, cy, hw, hh,
+                cosf(rad), sinf(rad), mirror_fold, mirror_refl, fill_alpha);
+            perf::record(perf::S_SHAPES, std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0sh).count());
+            scene_add_shape(*geomp, style, alpha, fill_alpha, (int)w, (int)h);
         }
 
         // ── Script clip ────────────────────────────────────────────────────────
@@ -2053,6 +2068,9 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 uintptr_t tex = (slot >= 0 && video_is_open(slot))
                     ? video_get_texture(slot, (double)(src_t + lookahead)) : 0;
                 if (!tex) return;
+                // th/perf-finish: clip-FX timer covers glass/body/runtime/face
+                // FX below (per clip; record() folds into last/EMA/max).
+                auto t0fx = std::chrono::steady_clock::now();
 
                 // Glass FX: applied pre-composite to this clip only.
                 // ML skin-mask source for this source frame: half-res texture
@@ -2217,6 +2235,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                                                  /*sync_track=*/false,
                                                  /*allow_readback=*/!state.scrub_active);
                 }
+                perf::record(perf::S_CLIPFX, std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0fx).count());
 
                 float px    = cl_ptr->eval_prop("pos_x",    at_time);
                 float py    = cl_ptr->eval_prop("pos_y",    at_time);
@@ -2277,6 +2297,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 // recording stops, which reads as the image jumping. Mirror =
                 // swap the horizontal UV window.
                 bool mirror = (cl_ptr->clip_type == ClipType::VideoRecord);
+                auto t0cmp = std::chrono::steady_clock::now();
                 if (editing_crop)
                     // Crop-edit shows the full frame, unrotated — the crop is
                     // defined in source space, so the editing view is source
@@ -2292,6 +2313,8 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                     if (cl_ptr->flip_v) { float t = v0; v0 = v1; v1 = t; }
                     scene_add_layer(tex, cx, cy, hw, hh, cos_r, sin_r, alpha, u0, v0, u1, v1);
                 }
+                perf::record(perf::S_COMPOSITE, std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0cmp).count());
             };
 
             // Find the active video clip and check for transitions
@@ -2432,7 +2455,12 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
         // Composite this track's text overlay at its z-order (interleaved with
         // video), so text is occluded by video on more-foreground tracks instead
         // of always drawing on top.
-        scene_add_text_layer(state, state.playhead, ti, (int)w, (int)h);
+        {
+            auto t0t = std::chrono::steady_clock::now();
+            scene_add_text_layer(state, state.playhead, ti, (int)w, (int)h);
+            perf::record(perf::S_TEXT, std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0t).count());
+        }
 
         // Standalone (uncoupled) FX/MultiFX bricks on this track act as a video
         // group-bus: they process the composite of the tracks BELOW them (already
@@ -2442,10 +2470,14 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             CreativeFXAccum cfx = collect_creative_fx_for_track(state, state.playhead, ti);
             if (ea.any_color || ea.any_blur || ea.any_vignette || ea.any_text ||
                 cfx.any_cfx || cfx.any_gen_fx) {
+                auto t0c = std::chrono::steady_clock::now();
                 scene_apply_fx((int)w, (int)h, ea, cfx, t_anim);
+                perf::record(perf::S_COMPOSITE, std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0c).count());
             }
         }
     }  // end Pass 1 track loop
+    shape_tess_cache_prune(s_tess, s_tess_frame);
 
     // (Live camera preview now composites at its track's z-order inside the
     // Pass 1 loop above — it used to be drawn here, on top of every track.)

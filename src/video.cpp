@@ -1754,6 +1754,17 @@ static uintptr_t decode_native_frame(PreviewState& pv, int frame_idx) {
 // ── Preview API ───────────────────────────────────────────────────────────────
 
 static void close_slot(PreviewState& pv) {
+    // th/perf-finish: serialize teardown against in-flight async workers under
+    // pv.file_mu. close_slot historically only bumped async_seq and cleared
+    // async_busy WITHOUT holding the lock, so a worker inside
+    // intermediate_decode_locked/native sws_scale kept raw AVFrame/AVPacket
+    // pointers into fmt_ctx/dec_ctx/sws while we freed them underneath it —
+    // SIGSEGV in libswscale (sws_scale reading a freed scaler/frame) on rapid
+    // slot churn (add_clip bursts, Native→Proxy upgrades, project loads).
+    // Taking file_mu first makes teardown wait for the in-flight decode to
+    // finish; the seq bump then discards its result on publish. Open paths
+    // below already funnel through close_slot, so all teardown is covered.
+    std::lock_guard<std::mutex> tlk(pv.file_mu);
     if (pv.bg_mjpeg_file) { fclose(pv.bg_mjpeg_file); pv.bg_mjpeg_file = nullptr; }
     if (pv.sws)           { sws_freeContext(pv.sws);  pv.sws           = nullptr; }
     pv.sws_src_fmt = AV_PIX_FMT_NONE;

@@ -105,6 +105,8 @@ static int s_bench_fd = -1;
 static std::string s_bench_id;
 static int s_bench_remaining = 0;  // seeks left to issue (scrub)
 static double s_bench_last_frame_t = 0.0;
+static double s_bench_last_present_t = 0.0;  // bench_now_s() of last present (guard input)
+static double s_bench_t0_wall = 0.0;         // bench start for the no-present guard
 double bench_now_s() {
     using clock = std::chrono::steady_clock;
     static const auto t0 = clock::now();
@@ -1415,6 +1417,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.bench_frames = 0;
         state.bench_t0 = now_s();
         state.pending_seek = -1.f;
+        // th/perf-finish: arm the no-present guard (bench_tick fails loudly if
+        // the canvas never presents, instead of returning zeroed stats).
+        s_bench_t0_wall = state.bench_t0;
+        s_bench_last_present_t = state.last_shown_t;
         perf::frame_reset();
         fd_mark_busy(client_fd);
         json sentinel; sentinel["__async"] = true; return sentinel;
@@ -1447,6 +1453,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             audio_seek(state.playhead);
             audio_play();
         }
+        // th/perf-finish: arm the no-present guard (see bench_scrub).
+        s_bench_t0_wall = state.bench_t0;
+        s_bench_last_present_t = state.last_shown_t;
         perf::frame_reset();
         fd_mark_busy(client_fd);
         json sentinel; sentinel["__async"] = true; return sentinel;
@@ -4896,6 +4905,26 @@ void ipc_server_poll(AppState& state) {
         g_clients.end());
 }
 // ── th/perf bench main-loop driver ────────────────────────────────────────────
+void ipc_wait_for_request(int timeout_ms) {
+    if (g_srv_fd < 0 && g_clients.empty()) return;
+    // +1 for the listen fd; cap clients so one pathological burst can't blow
+    // the stack (extra fds just wait for the timeout instead of waking us).
+    constexpr size_t kCap = 65;
+    size_t ncli = g_clients.size();
+    if (ncli > kCap - 1) ncli = kCap - 1;
+    struct pollfd fds[kCap];
+    size_t n = 0;
+    if (g_srv_fd >= 0) {
+        fds[n].fd = g_srv_fd; fds[n].events = POLLIN; fds[n].revents = 0; ++n;
+    }
+    for (size_t i = 0; i < ncli; ++i) {
+        int fd = g_clients[i].fd;
+        if (fd < 0) continue;
+        fds[n].fd = fd; fds[n].events = POLLIN; fds[n].revents = 0; ++n;
+    }
+    if (n == 0) return;
+    (void)::poll(fds, (nfds_t)n, timeout_ms);
+}
 static double pct(std::vector<double> v, double p) {
     if (v.empty()) return 0.0;
     std::sort(v.begin(), v.end());
@@ -4926,21 +4955,34 @@ static void bench_finish(AppState& state) {
         state.scrub_active = false;
     } else {
         // Dropped frames: expected vs presented at ~60 fps.
+        // th/perf-finish: headless rigs often have no audio device, so the
+        // audio clock never advances and the playhead (wall-clock fallback in
+        // app.cpp) is the only valid progress signal. When neither advanced
+        // (adv < 1 frame), the drop metric is INVALID, not zero — report
+        // explicitly instead of a meaningless 0.06%.
         double adv = (double)state.playhead - (double)state.bench_play_t0;
         if (adv < 0.0) adv = 0.0;
         double expect = wall * 60.0;
         double shown = (double)state.bench_frames;
-        double dropped = expect - shown;
-        if (dropped < 0.0) dropped = 0.0;
         r["playhead_advance_s"] = adv;
         r["expected_frames"] = expect;
         r["presented_frames"] = shown;
-        r["dropped_frames"] = dropped;
-        r["dropped_pct"] = expect > 0.0 ? 100.0 * dropped / expect : 0.0;
+        if (adv < 1.0 / 60.0 && shown <= expect) {
+            r["dropped_frames"] = nullptr;
+            r["dropped_pct"] = nullptr;
+            r["dropped_note"] = "audio clock did not advance headless (no audio device); "
+                "playhead fallback also stalled — drop metric invalid, use ui_frame_ms + presented_frames";
+        } else {
+            double dropped = expect - shown;
+            if (dropped < 0.0) dropped = 0.0;
+            r["dropped_frames"] = dropped;
+            r["dropped_pct"] = expect > 0.0 ? 100.0 * dropped / expect : 0.0;
+        }
         if (state.playing) { state.playing = false; audio_pause(); }
     }
     state.bench_running = false;
     state.pending_seek = -1.f;
+    s_bench_t0_wall = 0.0;  // disarm the no-present guard
     int fd = s_bench_fd;
     std::string id = s_bench_id;
     s_bench_fd = -1; s_bench_id.clear();
@@ -4959,6 +5001,34 @@ static void bench_tick(AppState& state) {
     s_bench_last_frame_t = now;
     if (!state.bench_running) return;
     state.bench_frames++;
+    // th/perf-finish: present heartbeat for the no-present guard. The canvas
+    // hook stamps last_shown_t after every presented frame; any advance means
+    // the preview is drawing (vs the setup-screen-no-draw failure mode).
+    if (state.last_shown_t > s_bench_last_present_t)
+        s_bench_last_present_t = state.last_shown_t;
+    // No-present guard: fail loudly instead of returning zeros when the
+    // preview never presents (headless no-draw failure mode).
+    if (s_bench_t0_wall > 0.0 && s_bench_last_present_t < s_bench_t0_wall &&
+        (now - s_bench_t0_wall) > 1.0) {
+        std::string detail = "preview canvas presented no frames within 1 s — "
+            "is the app in the studio (draw_preview running)? Launch headless with "
+            "`--open <project>` (which skips the model setup screen), a 1920x1080 "
+            "Xvfb screen, and a clean imgui.ini (delete it or use a fresh HOME); "
+            "see BENCHMARKS.md.";
+        state.bench_running = false;
+        state.pending_seek = -1.f;
+        if (s_bench_kind == 0) state.scrub_active = false;
+        else if (state.playing) { state.playing = false; audio_pause(); }
+        s_bench_t0_wall = 0.0;
+        int gfd = s_bench_fd;
+        std::string gid = s_bench_id;
+        s_bench_fd = -1; s_bench_id.clear();
+        s_bench_seeks.clear();
+        send_err_id(gfd, gid, detail);
+        agent_done();
+        fd_mark_free(gfd);
+        return;
+    }
     // Correct-frame tracking: the pending seek's target is "on screen" once
     // the presented playhead reaches it (draw used the new playhead).
     if (state.last_shown_playhead == state.last_seek_to && state.last_seek_t > 0.0 &&
