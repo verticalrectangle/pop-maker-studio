@@ -103,6 +103,11 @@ std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
                                                       int track_idx,
                                                       const Clip& audio_clip);
 
+// ── Typography as Script clips (impl: typography_script.cpp — engine) ─────────
+bool lay_typography_script(AppState& state, const std::string& preset,
+                           const std::string& params_json, std::string& err);
+std::string active_typography_preset(const AppState& state);
+
 // ── Typography (impl: ui/panel_animation.cpp) ────────────────────────────────
 void    generate_typography(AppState& state);          // impl: typography_core.cpp (engine)
 void    apply_typo_style(Clip& c, const struct TypographyPreset& pr,

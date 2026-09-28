@@ -110,6 +110,7 @@ set(PMS_ENGINE_SOURCES
     src/app_state.cpp
     src/project_meta.cpp
     src/typography_core.cpp
+    src/typography_script.cpp
     src/stb_impl.cpp
     src/pms_engine.cpp
     src/engine_runtime.cpp

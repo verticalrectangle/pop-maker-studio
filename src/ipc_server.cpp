@@ -4105,7 +4105,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         // Optional preset chosen up front so the completion callback lays the
         // FINAL styled lyric bricks in one shot, the way the UI does.
         std::string preset = params.value("preset", "");
-        if (!preset.empty()) state.typo_preset_id = preset;
+        std::string pending_preset = preset;
         // Lay lyrics exactly like the UI's "Generate Lyrics" button: from the
         // pipeline-done callback (screen_studio fires it the instant the pipeline
         // reaches Done), while the audio brick is still where it was at transcribe
@@ -4143,7 +4143,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             if (sp && (sp >> lo >> hi) &&
                 clip_in >= lo - 0.05f && clip_in + clip_dur <= hi + 0.05f) {
                 load_words_cache(state);
-                generate_typography(state);
+                lay_typography_script(state, pending_preset.empty() ? "flash" : pending_preset, {}, err);
+                if (!err.empty()) { err.clear(); }
                 json r;
                 r["stage"]             = "done";
                 r["reused_transcript"] = true;
@@ -4152,9 +4153,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
         }
 
-        if (mode != PipelineMode::SeparateOnly && on_timeline)
-            state.pipeline_on_done = generate_typography;
-        else
+        if (mode != PipelineMode::SeparateOnly && on_timeline) {
+            std::string done_preset = pending_preset.empty() ? "flash" : pending_preset;
+            state.pipeline_on_done = [done_preset](AppState& st) {
+                std::string e;
+                lay_typography_script(st, done_preset, {}, e);
+            };
+        } else
             state.pipeline_on_done = {};
         kick_pipeline(state, state.audio_path, mode);
         // Non-blocking: return immediately with stage=running so the caller can
@@ -4169,11 +4174,19 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    // Typography is one Script clip (`pms:typography/<id>`, params = Tune
+    // overrides) spanning the words' time range. generate_typography is the
+    // legacy alias: same behaviour, current-or-given preset.
     if (method == "set_typography_preset" || method == "generate_typography") {
         std::string preset = params.value("preset", "");
-        if (!preset.empty()) state.typo_preset_id = preset;
-        generate_typography(state);
-        json r; r["preset"] = state.typo_preset_id; return r;
+        if (preset.empty()) {
+            preset = active_typography_preset(state);
+            if (preset.empty()) preset = "flash";
+        }
+        std::string params_json = "{}";
+        if (params.contains("params")) params_json = params["params"].dump();
+        if (!lay_typography_script(state, preset, params_json, err)) return {};
+        json r; r["preset"] = preset; return r;
     }
 
     if (method == "load_project") {
