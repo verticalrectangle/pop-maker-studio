@@ -26,6 +26,12 @@
 #include "portrait_preview.h"
 #include "ui/canvas.h"
 #include "ui/panel_media.h"  // bin_add for drain_bin_pending()
+#include "proxy.h"           // proxy_is_generating / proxy_ready_epoch
+#include "transcribe.h"      // transcribe_running
+#include "recorder.h"        // recorder_active
+#include "video_recorder.h"  // vrecorder_active / vrecorder_monitor_get
+#include "audio.h"           // audio_loading
+#include <cmath>             // fabsf (animated-BG check)
 namespace fs = std::filesystem;
 
 // Definitions of globals declared in globals.h
@@ -297,7 +303,76 @@ int main(int argc, char** argv) {
         }
         if (state.quit_confirmed) break;
 
-        glfwPollEvents();
+        // th/perf-finish: idle throttle — block on events with a timeout
+        // instead of redrawing at 60 Hz when nothing on screen can change.
+        // Wakes immediately on any OS input; IPC arrivals and background-job
+        // completions are picked up on the timeout (250 ms bound). Animated
+        // previews (playing/scrubbing/exporting, live camera, animated BG,
+        // in-flight decodes/proxies/jobs) and any playhead motion keep the
+        // loop free-running.
+        bool busy = state.playing || state.bench_running || state.scrub_active ||
+            state.pending_seek >= 0.f || state.render.running ||
+            state.export_request || !state.slot_open_queue.empty() ||
+            state.proxy_scan_needed || state.agent_active ||
+            state.beats_running || state.envelope_running ||
+            state.extract_running ||
+            state.snapshot_running || state.noise_reduce_running ||
+            state.setup_running || state.model_dl_running ||
+            state.snapshot_request || !state.thumb_request.empty() ||
+            state.pipeline.stage != PipelineStage::Idle ||
+            state.splash_timer > 0.f || state.quit_prompt ||
+            !state.in_studio ||
+            recorder_active() || vrecorder_active() ||
+            vrecorder_monitor_get() || proxy_is_generating() ||
+            transcribe_running() || audio_loading() ||
+            scene_analysis_progress(nullptr, nullptr, nullptr, nullptr) ||
+            ImGui::IsMouseDown(0) || ImGui::IsMouseDown(1) ||
+            ImGui::IsMouseDown(2) || canvas_shape_pen_active() ||
+            state.crop_edit_track >= 0 || s_scrub_until > 0.0;
+        // Playhead motion (drags, transport, bench seeks) plus a 0.5 s settle
+        // window so async decodes can land after each seek.
+        static float s_last_playhead = 0.f;
+        static double s_last_change = -10.0;
+        double now_wall = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (state.playhead != s_last_playhead) {
+            s_last_playhead = state.playhead;
+            s_last_change = now_wall;
+            busy = true;
+        }
+        if (now_wall - s_last_change < 0.5) busy = true;
+        // A proxy finishing swaps Native -> Proxy under the preview; notice.
+        static uint64_t s_last_proxy_epoch = 0;
+        uint64_t cur_epoch = proxy_ready_epoch();
+        if (cur_epoch != s_last_proxy_epoch) {
+            s_last_proxy_epoch = cur_epoch;
+            busy = true;
+        }
+        if (!busy) {
+            // Per-clip beat analysis and in-flight ML cutouts / conversions
+            // repaint on completion.
+            for (auto& tr : state.tracks)
+                for (auto& cl : tr.clips)
+                    if (cl.beats_analyzing) { busy = true; break; }
+            // In-flight ML cutouts / conversions repaint on completion.
+            for (auto& tr : state.tracks) {
+                for (auto& cl : tr.clips) {
+                    if (cl.bg_remove_status == BgRemoveStatus::Processing ||
+                        cl.bg_remove_status == BgRemoveStatus::WaitingForProxy ||
+                        cl.vc_status == VcStatus::Processing) { busy = true; break; }
+                    // Animated BG presets move at a fixed playhead; live
+                    // camera bricks show a live feed while monitoring.
+                    bool active = state.playhead >= cl.start && state.playhead < cl.end;
+                    if (active && cl.clip_type == ClipType::Background &&
+                        fabsf(cl.bg_speed) > 1e-3f) { busy = true; break; }
+                    if (active && cl.clip_type == ClipType::VideoRecord &&
+                        (vrecorder_monitor_get() || vrecorder_active())) { busy = true; break; }
+                }
+                if (busy) break;
+            }
+        }
+        if (busy) glfwPollEvents();
+        else glfwWaitEventsTimeout(0.25);
         // PMS_FRAME_DEBUG=1: log frames that stall the UI (>100 ms) — used to
         // hunt the "project open freezes for a bit" reports.
         static const bool s_fdbg = getenv("PMS_FRAME_DEBUG") != nullptr;
