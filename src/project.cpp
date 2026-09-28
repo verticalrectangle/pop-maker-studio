@@ -11,8 +11,8 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 66u;
-extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v66: shape colour keyframes + kaleidoscope mirror fold
+static const uint32_t VERSION = 70u;
+extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v70: script clip path + params
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry
@@ -325,6 +325,9 @@ static void write_clip(Writer& w, const Clip& c) {
             }
         }
     }
+    // v70: script clip — entry module path + params JSON
+    w.str(c.script_path);
+    w.str(c.script_params);
 }
 
 static Clip read_clip(Reader& r, uint32_t version) {
@@ -663,6 +666,10 @@ static Clip read_clip(Reader& r, uint32_t version) {
                     c.shape_color_tracks[name] = std::move(track);
             }
         }
+    }
+    if (version >= 70u) {
+        c.script_path   = r.str();
+        c.script_params = r.str();
     }
     return c;
 }

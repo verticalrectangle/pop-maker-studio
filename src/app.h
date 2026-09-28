@@ -97,7 +97,7 @@ enum class OutputFormat { Vertical, Horizontal, Square };
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
-enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord, AudioMultiFX, Bus, Shape };
+enum class ClipType { Text, Lyrics, Subtitle, Video, Audio, Effect, Background, BodyFX, MultiFX, Record, VideoRecord, AudioMultiFX, Bus, Shape, Script };
 
 // A clip that composites as video: a Video clip, or a VideoRecord brick whose
 // selected take is mirrored into `text` (path consumers stay unchanged).
@@ -467,6 +467,11 @@ struct Clip {
     float            shape_stroke_width_mul = 1.f; // global width multiplier (keyframable)
     float            shape_mirror_fold = 1.f;    // radial replicas, 1 = off (keyframable)
     float            shape_mirror_reflect = 1.f; // alternate reflection 0/1 (keyframable)
+    // ── Script clip (ClipType::Script) ───────────────────────────────────────
+    // Entry JS module + params JSON. script_path absolute, or relative to the
+    // project file. Standard transform/opacity/fade fields apply.
+    std::string      script_path;
+    std::string      script_params;              // JSON object string ("" = {})
     // Evaluate the effective path at absolute timeline time `playhead`:
     // morph keys if present, else the base path.
     ShapePath eval_path(float playhead) const;
