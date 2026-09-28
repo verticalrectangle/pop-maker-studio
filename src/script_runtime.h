@@ -82,3 +82,6 @@ std::string script_resolve_spec(const std::string& spec, const std::string& refe
 // load_audio_analysis / analyze_audio publish). The runtime memoises the
 // frozen pms.audio objects against this + the mapped clip offset.
 uint64_t script_audio_epoch(const AppState& state);
+// Identity of the project transcript behind pms.words fallback (changes when
+// the words, their timings, the lyrics edits or the audio source change).
+uint64_t script_words_epoch(const AppState& state);

@@ -103,7 +103,7 @@ unsigned script_clip_texture(const AppState& state, const Clip& clip, const std:
     std::unique_ptr<Entry>& slot = g_entries[key];
     if (!slot) slot = std::make_unique<Entry>();
     Entry& e = *slot;
-    uint64_t audio = script_audio_epoch(state);
+    uint64_t audio = script_audio_epoch(state) ^ script_words_epoch(state);
     // Scripts see the frame grid: t is quantised to the project frame so
     // preview, render_still and export agree exactly on event boundaries.
     const double fps = state.fps > 0 ? (double)state.fps : 30.0;

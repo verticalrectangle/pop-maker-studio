@@ -117,6 +117,29 @@ uint64_t script_audio_epoch(const AppState& state) {
     return (uint64_t)state.audio_analysis.get();
 }
 
+uint64_t script_words_epoch(const AppState& state) {
+    // FNV-1a over the transcript content + edits + source: any change forces
+    // a script re-render (the texture cache keys on audio ^ words epochs).
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&](uint64_t x) {
+        h ^= x;
+        h *= 1099511628211ull;
+    };
+    mix((uint64_t)state.words_cache.size());
+    for (auto& we : state.words_cache) {
+        for (char c : we.text) mix((uint64_t)(unsigned char)c);
+        mix((uint64_t)(we.start * 1000.0));
+        mix((uint64_t)(we.end * 1000.0));
+    }
+    mix((uint64_t)state.lyrics_edits.size());
+    for (auto& [k, v] : state.lyrics_edits) {
+        mix((uint64_t)(uint32_t)k);
+        for (char c : v) mix((uint64_t)(unsigned char)c);
+    }
+    for (char c : state.audio_path) mix((uint64_t)(unsigned char)c);
+    return h;
+}
+
 // ── Impl ─────────────────────────────────────────────────────────────────
 
 struct ScriptRuntime::Impl {
@@ -143,9 +166,7 @@ struct ScriptRuntime::Impl {
     // pms.audio: offset = in_point - start of the first Audio/Video clip
     // whose text/source_id equals the source). Memoised; rebuilt only when
     // the words, edits or mapping change.
-    uint64_t memo_words_n = 0;
-    double memo_words_first = 0.0, memo_words_last = 0.0;
-    size_t memo_edits_n = 0;
+    size_t memo_words_hash = 0;
     std::string memo_words_src;
     std::string memo_trans_key;
     double memo_trans_off = 0.0;
@@ -360,15 +381,23 @@ static void ensure_audio_memo(ScriptRuntime::Impl* self) {
         tkey = kb;
     }
     uint64_t wn = state.words_cache.size();
-    double wfirst = wn ? (double)state.words_cache.front().start : 0.0;
-    double wlast = wn ? (double)state.words_cache.back().end : 0.0;
-    size_t en = state.lyrics_edits.size();
+    // Identity of the transcript content: word texts + timings + edits.
+    // (Count/first/last alone misses an in-place word-text edit.)
+    size_t whash = wn + state.lyrics_edits.size() * 0x9e3779b1u;
+    for (auto& we : state.words_cache) {
+        for (char c : we.text) whash = whash * 1315423911u + (unsigned char)c;
+        whash ^= (size_t)(we.start * 1000.0) + 0x9e3779b9u + (whash << 6) + (whash >> 2);
+        whash ^= (size_t)(we.end * 1000.0) + 0x9e3779b9u + (whash << 6) + (whash >> 2);
+    }
+    for (auto& [k, v] : state.lyrics_edits) {
+        whash ^= (size_t)k + 0x9e3779b9u + (whash << 6) + (whash >> 2);
+        for (char c : v) whash = whash * 1315423911u + (unsigned char)c;
+    }
     const std::string& wsrc = state.audio_path;
     if (self->memo_valid && epoch == self->memo_audio_epoch && key == self->memo_audio_key &&
         use_transcript == !self->memo_trans_key.empty() &&
-        (!use_transcript || (tkey == self->memo_trans_key && wn == self->memo_words_n &&
-                             wfirst == self->memo_words_first && wlast == self->memo_words_last &&
-                             en == self->memo_edits_n && wsrc == self->memo_words_src)))
+        (!use_transcript || (tkey == self->memo_trans_key && whash == self->memo_words_hash &&
+                             wsrc == self->memo_words_src)))
         return;
     // Release old memoised values.
     for (JSValue* vp : {&self->memo_audio, &self->memo_words, &self->memo_lines}) {
@@ -380,10 +409,7 @@ static void ensure_audio_memo(ScriptRuntime::Impl* self) {
     self->memo_audio_key = key;
     self->memo_trans_key = use_transcript ? tkey : std::string();
     self->memo_trans_off = toff;
-    self->memo_words_n = wn;
-    self->memo_words_first = wfirst;
-    self->memo_words_last = wlast;
-    self->memo_edits_n = en;
+    self->memo_words_hash = whash;
     self->memo_words_src = wsrc;
     if (!a) {
         self->memo_audio = JS_NULL;
@@ -818,9 +844,14 @@ bool ScriptRuntime::build(const AppState& state, const Clip& clip, int width, in
     self->post_uniforms.clear();
     self->state = &state;
 
-    // Entry: absolute, or relative to the project file.
+    // Entry: a `pms:` specifier (portable: pms:typography/<id>, pms:rhythm,
+    // pms:text), an absolute path, or relative to the project file.
+    // `pms:` entries resolve via script_resolve_spec so projects stay
+    // portable across machines.
     std::string entry = clip.script_path;
-    if (!entry.empty() && entry[0] != '/') {
+    if (!entry.empty() && entry.rfind("pms:", 0) == 0)
+        entry = script_resolve_spec(entry, "", "");
+    else if (!entry.empty() && entry[0] != '/') {
         std::string base = fs::path(state.project_path).parent_path().string();
         if (!base.empty()) entry = (fs::path(base) / entry).string();
     }
