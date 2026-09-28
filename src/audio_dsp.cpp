@@ -124,8 +124,42 @@ bool decode_mono(const std::string& path, int out_sr, std::vector<float>& pcm,
     }
     return true;
 }
+bool decode_mono_span(const std::string& path, int out_sr, double t0, double t1,
+                      std::vector<float>& pcm, std::string* err) {
+    pcm.clear();
+    if (!(t1 > t0)) {
+        if (err) *err = "empty span";
+        return false;
+    }
+    // Decode whole-file then slice: sample-accurate to the resampled grid
+    // (boundaries round to the nearest output sample) and identical to the
+    // full-file path inside the span — no resampler phase drift from seeking
+    // into compressed audio, and no codec-priming offset at the cut point.
+    // (Spans are song excerpts, not hour-long files; the transient 2× memory
+    // is bounded by the source length.)
+    std::vector<float> full;
+    if (!decode_mono(path, out_sr, full, err)) return false;
+    size_t s0 = (size_t)std::llround(t0 * out_sr);
+    size_t s1 = (size_t)std::llround(t1 * out_sr);
+    if (s0 >= full.size()) {
+        if (err) *err = "span starts past end of file";
+        return false;
+    }
+    if (s1 > full.size()) s1 = full.size();
+    if (s1 <= s0) {
+        if (err) *err = "empty span";
+        return false;
+    }
+    pcm.assign(full.begin() + s0, full.begin() + s1);
+    return true;
+}
 #else
 bool decode_mono(const std::string&, int, std::vector<float>&, std::string* err) {
+    if (err) *err = "audio decode unavailable in this build";
+    return false;
+}
+bool decode_mono_span(const std::string&, int, double, double, std::vector<float>&,
+                      std::string* err) {
     if (err) *err = "audio decode unavailable in this build";
     return false;
 }
@@ -530,12 +564,20 @@ BeatTrack beat_track(const float* oenv, int n, int sr, int hop, float tightness,
         }
     }
 
-    // DP over predecessors in [i - round(fpb/2), i - 2*fpb - 1].
+    // DP over predecessors in [i - round(fpb/2), i - 2*fpb - 1], with
+    // librosa's frame-0 special case: backlink[0] = -1 and cumscore[0] =
+    // localscore[0] are set BEFORE the loop, and the i=0 iteration only
+    // fills best/bloc from an empty predecessor range (no link). Starting
+    // the loop at 0 without that init let frame 0 link backwards into the
+    // span start and shifted the whole backtracked grid by one hop on
+    // excerpts (the reference full-song grid has no beat at the span edge).
     std::vector<double> cum((size_t)n, 0.0);
     std::vector<int> back((size_t)n, -1);
     double score_thresh = 0.01 * *std::max_element(ls.begin(), ls.end());
-    bool first = true;
-    for (int i = 0; i < n; i++) {
+    cum[0] = ls[0];
+    back[0] = -1;
+    bool first = ls[0] >= score_thresh;
+    for (int i = 1; i < n; i++) {
         double best = -1e300;
         int bloc = -1;
         long lo = (long)i - llround(fpb / 2), hi = (long)i - (long)(2 * fpb) - 1;
