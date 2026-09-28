@@ -20,13 +20,16 @@
 //   6. Envelopes: RMS per 60 fps frame (frame_length 2048), /p98, clip.
 //   7. Spectrum: mel power, 32 bands 30 Hz–16 kHz, n_fft 4096, hop = sr/fps,
 //      center=False, dB rel max, (dB+70)/70 → 0..99.
-//   8. Words: forced alignment of opt.lyrics inside per-line windows derived
-//      from a coarse pass (greedy CTC decode anchored to the lyric text;
-//      falls back to even splits when the decode finds nothing), with the
-//      low-confidence clamp t0 = max(t0, t1 − (0.07·chars + 0.05)).
+//   8. Words: wav2vec2 CTC forced alignment of opt.lyrics inside per-line
+//      windows. Lines carrying {text,t0,t1} coarse windows (source seconds)
+//      align exactly like the reference (per-window inference, letter
+//      targets, merge_tokens, low-conf rule t0 = max(t0, t1−(0.07·n+0.05)));
+//      plain-text lines use the Whisper coarse pass for windows (same
+//      trellis + rule, no blend).
 #include "audio_analysis.h"
 
 #include "audio_dsp.h"
+#include "audio_whisper_coarse.h"
 #include "paths.h"
 #include "separate4.h"
 
@@ -81,7 +84,7 @@ float percentile_vec(std::vector<float> v, float q) {
 }
 
 // Timing grid: onset frames at 10 ms hop, frame f ↔ t = f * hop / sr.
-inline float onset_frame_time(int f) { return (float)f * kHop / kSR; }
+inline double onset_frame_time(int f) { return (double)f * kHop / kSR; }
 
 // Peak-pick an onset envelope per the spec table; write hits with p90 strengths.
 // norm_q: quantile for norm = env / p97; delta = 0.5 * quantile(norm, delta_q).
@@ -117,7 +120,10 @@ struct CtcVocab {
 };
 CtcVocab load_ctc_vocab(const std::string& model_path) {
     CtcVocab v;
-    fs::path vp = fs::path(model_path).parent_path() / "wav2vec2_vocab.json";
+    fs::path mp(model_path);
+    fs::path vp = mp.parent_path() / (mp.stem().string() == "wav2vec2_ctc_float"
+                                           ? "wav2vec2_vocab_float.json"
+                                           : "wav2vec2_vocab.json");
     std::ifstream f(vp.string());
     if (!f) return v;
     try {
@@ -128,7 +134,7 @@ CtcVocab load_ctc_vocab(const std::string& model_path) {
         for (auto& kv : j.items()) {
             const std::string& kk = kv.key();
             int id = kv.value().get<int>();
-            if (kk == "<pad>") v.blank = id;
+            if (kk == "<pad>" || kk == "-") v.blank = id;
             else if (kk == "|" || kk == "'") v.id2tok[id] = kk;
             else if (kk.size() == 1 && std::isalpha((unsigned char)kk[0]))
                 v.id2tok[id] = std::string(1, (char)std::toupper((unsigned char)kk[0]));
@@ -148,117 +154,6 @@ std::string norm_word(const std::string& w) {
     return o;
 }
 
-// Greedy CTC decode of the full vocal track: collapse repeats, drop blanks.
-struct GreedyTok {
-    int frame;
-    std::string tok;
-};
-std::vector<GreedyTok> greedy_decode(const float* logits, int T, int V) {
-    std::vector<GreedyTok> out;
-    // Logits are raw (not log-softmax); argmax is identical either way.
-    int prev = -1;
-    for (int t = 0; t < T; t++) {
-        const float* row = logits + (size_t)t * V;
-        int bi = 0;
-        for (int i = 1; i < V; i++)
-            if (row[i] > row[bi]) bi = i;
-        if (bi == 0) {
-            prev = -1;
-            continue;
-        }
-        if (bi == prev) continue;
-        prev = bi;
-        out.push_back({t, ""});
-        out.back().frame = t;
-        // token string filled by caller (needs vocab); stash id in frame's friend:
-        out.back().tok = std::to_string(bi);
-    }
-    return out;
-}
-
-// Anchor each lyric line to the greedy decode: for each line in order, scan
-// the decode token stream (with '|' word separators) for the window whose
-// concat chars best match the line's normed chars, then map the matched token
-// span to frames (cushioned, clamped to the track). Falls back to even splits
-// when the decode is empty or a line matches <30%.
-std::vector<std::pair<float, float>> coarse_line_windows(
-    const std::vector<std::vector<std::string>>& ltoks,
-    const std::vector<GreedyTok>& dec, const std::vector<std::string>& dec_toks,
-    int T, double sec_per_frame) {
-    std::vector<std::pair<float, float>> wins;
-    size_t nl = ltoks.size();
-    if (nl == 0) return wins;
-    double dur = T * sec_per_frame;
-    if (dec.empty()) {
-        for (size_t i = 0; i < nl; i++)
-            wins.push_back({(float)(dur * i / nl), (float)(dur * (i + 1) / nl)});
-        return wins;
-    }
-    // Decode token chars (single-char tokens; '|' marks word gaps).
-    std::vector<std::string> dchars;
-    std::vector<int> dframes;
-    for (size_t i = 0; i < dec.size(); i++) {
-        dchars.push_back(dec_toks[i]);
-        dframes.push_back(dec[i].frame);
-    }
-    // Line lengths in decode tokens (chars + separators); the search for
-    // line li starts where line li-1's match ENDED (no overlap), so windows
-    // tile left-to-right like the reference LINE_WINDOWS. A small reach-back
-    // (8 tokens) tolerates anchor wobble; the trellis + clamp handle the rest.
-    size_t pos = 0;
-    for (size_t li = 0; li < nl; li++) {
-        std::string tchars;
-        for (auto& w : ltoks[li]) tchars += norm_word(w);
-        if (tchars.empty()) {
-            wins.push_back({(float)(dur * li / nl), (float)(dur * (li + 1) / nl)});
-            continue;
-        }
-        size_t best_p = pos, best_hit = 0;
-        size_t max_p = (dchars.size() > tchars.size()) ? dchars.size() - tchars.size() : 0;
-        size_t start = (pos > 8) ? pos - 8 : 0;
-        size_t p_end = std::min(max_p + 1, pos + dchars.size());
-        if (p_end < start) p_end = start;
-        // Score = matches − 0.5 × mismatches over the line-length window, so a
-        // short strong overlap can't beat the true full-length span (the old
-        // matches-only score let line 5 sit inside line 4's tail). Empty
-        // targets (no vocab-mapped chars) can never match: skip them so a
-        // garbage line can't steal the true span of a later line.
-        size_t best_e = best_p;
-        for (size_t pp = start; pp < p_end; pp++) {
-            size_t hit = 0, mis = 0;
-            size_t e = pp;
-            for (size_t k = 0; k < tchars.size() && pp + k < dchars.size(); k++) {
-                char dc = dchars[pp + k][0];
-                if (dc == '|') continue;  // separator aligns to nothing; skip
-                if (dc == tchars[k]) hit++;
-                else mis++;
-                e = pp + k + 1;
-            }
-            if (hit > best_hit || (hit == best_hit && e > best_e)) {
-                best_hit = hit;
-                best_p = pp;
-                best_e = e;
-            }
-            if (best_hit == tchars.size()) {
-                best_e = pp + tchars.size();
-                break;
-            }
-        }
-        if (best_hit * 10 < tchars.size() * 3) {
-            wins.push_back({(float)(dur * li / nl), (float)(dur * (li + 1) / nl)});
-        } else {
-            size_t e = std::min(dchars.size(), best_e);
-            int f0 = dframes[best_p], f1 = (e < dframes.size()) ? dframes[e] : T;
-            // Widen asymmetrically: starts are reliable (consonant bursts),
-            // ends need room for held vowels the greedy decode drops.
-            f0 = std::max(0, f0 - 10);
-            f1 = std::min(T, f1 + 60);
-            wins.push_back({(float)(f0 * sec_per_frame), (float)(f1 * sec_per_frame)});
-            pos = e;
-        }
-    }
-    return wins;
-}
 
 }  // namespace
 
@@ -345,9 +240,9 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         auto bt = aadsp::beat_track(oenv.data(), (int)oenv.size(), kSR, kHop, 400.f, false);
         out.bpm = bt.bpm;
         for (int f : bt.frames) {
-            float t = onset_frame_time(f);
-            if (t >= -0.05f && t < (float)out.duration) out.beats.push_back(t);
-            else if (t >= (float)out.duration && t < (float)out.duration + 0.011f)
+            double t = onset_frame_time(f);
+            if (t >= -0.05 && t < out.duration) out.beats.push_back(t);
+            else if (t >= out.duration && t < out.duration + 0.011)
                 out.beats.push_back(t);  // keep the closing-frame beat (trim=False)
         }
     }
@@ -386,7 +281,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         std::vector<float> chroma;
         aadsp::chroma_from_power(cfb, mag.data(), nfr, chroma);
         std::vector<int> bf;
-        for (float b : out.beats) bf.push_back((int)(b * kSR / kHop));
+        for (double b : out.beats) bf.push_back((int)(b * kSR / kHop));
         int phase = 0;
         if (!bf.empty())
             phase = aadsp::downbeat_phase(bo.data(), (int)bo.size(), bf.data(),
@@ -480,143 +375,113 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
     }
 
     // ── 8. Words ─────────────────────────────────────────────────────────────
-    out.lines = opt.lyrics;
+    // Reference-faithful alignment (pipeline/audio.py align_words): per-line
+    // windows, wav2vec2 inference per window, trellis over the line's LETTERS
+    // (no "|" separators — the reference target has none), merge_tokens
+    // semantics, word spans from first/last char, conf = mean span score,
+    // low-conf rule t0 = max(t0, t1 − (0.07·n_letters + 0.05)) with t1 kept.
+    // Windows come from the line itself ({text,t0,t1}, source seconds) or
+    // from the Whisper coarse pass for plain-text lines. out.lines stays
+    // plain text.
+    for (size_t li = 0; li < opt.lyrics.size(); li++) out.lines.push_back(opt.lyrics[li].text);
     if (!opt.lyrics.empty()) {
         report(progress, 0.86f, "Aligning lyrics…");
-        // Vocal audio for the aligner: vocals stem when present, else the mix.
-        const std::vector<float>* vptr = have_vocals ? &stems[3] : &mix;
-        // Resample to 16 kHz mono (libswresample path via decode helper would
-        // re-decode; do it directly from the decoded mix-rate buffer).
+        // Vocal audio at 16 kHz, decoded DIRECTLY via libswresample (an
+        // earlier 44.1k-then-interp path aliased HF stem content into the
+        // vocal band and destroyed first-word emissions).
         std::vector<float> v16;
+        std::string align_err;
+        bool aligned = false;
         {
-            // Rational resample 44100 → 16000 via linear interpolation
-            // (the aligner normalises per-window; interpolation error is
-            // negligible for CTC emissions).
-            size_t n16 = (size_t)((double)vptr->size() * 16000 / kOutSR);
-            v16.resize(n16);
-            for (size_t i = 0; i < n16; i++) {
-                double p = (double)i * kOutSR / 16000;
-                size_t i0 = (size_t)p;
-                double f = p - i0;
-                float a = (i0 < vptr->size()) ? (*vptr)[i0] : 0.f;
-                float b = (i0 + 1 < vptr->size()) ? (*vptr)[i0 + 1] : 0.f;
-                v16[i] = (float)(a + (b - a) * f);
-            }
+            const char* vsrc = nullptr;
+            if (have_vocals && !out.stems[3].empty()) vsrc = out.stems[3].c_str();
+            std::string derr;
+            if (!aadsp::decode_mono(vsrc ? vsrc : audio_path, 16000, v16, &derr))
+                align_err = derr;
         }
         std::string model_path = wav2vec2_ctc_path();
         CtcVocab vocab = load_ctc_vocab(model_path);
-        bool aligned = false;
-        std::string align_err;
         if (!vocab.ok) align_err = "vocab load failed";
         else if (!fs::exists(model_path)) align_err = "model missing: " + model_path;
         else if (v16.empty()) align_err = "empty vocal pcm";
+        // Windows in source seconds: given ones verbatim (clamped to the
+        // track); the rest from the Whisper coarse pass (even splits only on
+        // total failure of the pass).
+        std::vector<std::pair<double, double>> wins(opt.lyrics.size(), {0.0, 0.0});
+        std::vector<char> win_given(opt.lyrics.size(), 0);
+        for (size_t li = 0; li < opt.lyrics.size(); li++) {
+            if (opt.lyrics[li].has_window && opt.lyrics[li].w1 > opt.lyrics[li].w0) {
+                double w0 = opt.lyrics[li].w0, w1 = opt.lyrics[li].w1;
+                if (w0 < 0.0) w0 = 0.0;
+                if (w1 > out.duration) w1 = out.duration;
+                if (w1 > w0) {
+                    wins[li] = {w0, w1};
+                    win_given[li] = 1;
+                }
+            }
+        }
+        bool need_whisper = false;
+        for (char g : win_given)
+            if (!g) {
+                need_whisper = true;
+                break;
+            }
+        if (align_err.empty() && need_whisper) {
+            std::vector<std::string> texts;
+            texts.reserve(opt.lyrics.size());
+            for (auto& l : opt.lyrics) texts.push_back(l.text);
+            auto wprog = [&](float p, const char* s) {
+                report(progress, 0.86f + p * 0.02f, s);
+            };
+            std::vector<std::pair<float, float>> ww;
+            std::string werr;
+            // word_times_out=nullptr: the reference low-conf rule needs no blend.
+            if (!whisper_coarse_windows(v16, texts, ww, nullptr, wprog, &werr) ||
+                ww.size() != opt.lyrics.size()) {
+                if (werr.empty()) werr = "coarse pass failed";
+                fprintf(stderr, "[align] coarse fallback (%s): even splits\n",
+                        werr.c_str());
+                ww.clear();
+                for (size_t i = 0; i < opt.lyrics.size(); i++)
+                    ww.push_back({(float)(out.duration * i / opt.lyrics.size()),
+                                  (float)(out.duration * (i + 1) / opt.lyrics.size())});
+            }
+            for (size_t i = 0; i < opt.lyrics.size(); i++)
+                if (!win_given[i]) wins[i] = {ww[i].first, ww[i].second};
+        }
+        // Token targets per line: LETTERS ONLY (the reference has no separators).
+        std::vector<std::vector<std::string>> ltoks;
+        for (auto& ln : opt.lyrics) {
+            std::vector<std::string> ws;
+            std::string cur;
+            for (char c : ln.text) {
+                if (c == ' ' || c == '\t') {
+                    if (!cur.empty()) {
+                        ws.push_back(cur);
+                        cur.clear();
+                    }
+                } else cur += c;
+            }
+            if (!cur.empty()) ws.push_back(cur);
+            ltoks.push_back(ws);
+        }
         if (align_err.empty()) {
             try {
-                Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "audio_analysis_align");
+                Ort::Env oenv(ORT_LOGGING_LEVEL_WARNING, "audio_analysis_align");
                 Ort::SessionOptions sopts;
                 sopts.SetIntraOpNumThreads(2);
-                Ort::Session sess(env, model_path.c_str(), sopts);
+                Ort::Session sess(oenv, model_path.c_str(), sopts);
                 Ort::MemoryInfo mem =
                     Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-                // Full-track inference (35 s clip ≈ 4 s on CPU).
-                std::vector<float> chunk = v16;
-                {
-                    double mean = 0;
-                    for (float x : chunk) mean += x;
-                    mean /= chunk.size();
-                    double var = 0;
-                    for (float x : chunk) {
-                        double d = x - mean;
-                        var += d * d;
-                    }
-                    float istd = (float)(1.0 / (sqrt(var / chunk.size()) + 1e-7));
-                    for (float& x : chunk) x = (float)((x - mean) * istd);
-                }
-                std::vector<int64_t> shp = {1, (int64_t)chunk.size()};
-                std::vector<Ort::Value> ins;
-                ins.push_back(Ort::Value::CreateTensor<float>(
-                    mem, chunk.data(), chunk.size(), shp.data(), 2));
                 bool need_mask = sess.GetInputCount() >= 2;
-                std::vector<float> mask;
                 const char* in_names[] = {"input_values", "attention_mask"};
-                if (need_mask) {
-                    mask.assign(chunk.size(), 1.f);
-                    ins.push_back(Ort::Value::CreateTensor<float>(
-                        mem, mask.data(), mask.size(), shp.data(), 2));
-                }
                 const char* out_names[] = {"logits"};
-                auto outs = sess.Run(Ort::RunOptions{nullptr}, in_names,
-                                     ins.data(), need_mask ? 2u : 1u, out_names, 1);
-                auto sh = outs[0].GetTensorTypeAndShapeInfo().GetShape();
-                int T = (int)sh[1], V = (int)sh[2];
-                const float* logits = outs[0].GetTensorData<float>();
-                double sec_per_frame = out.duration / T;
-
-                // Token targets per line.
-                std::vector<std::vector<std::string>> ltoks;
-                for (auto& ln : opt.lyrics) {
-                    std::vector<std::string> ws;
-                    std::string cur;
-                    for (char c : ln) {
-                        if (c == ' ' || c == '\t') {
-                            if (!cur.empty()) {
-                                ws.push_back(cur);
-                                cur.clear();
-                            }
-                        } else cur += c;
-                    }
-                    if (!cur.empty()) ws.push_back(cur);
-                    ltoks.push_back(ws);
-                }
-                // Greedy decode with vocab token strings. Dump the raw
-                // decode + per-line windows when PMS_AA_DEBUG is set.
-                auto dec = greedy_decode(logits, T, V);
-                std::vector<std::string> dec_toks;
-                dec_toks.reserve(dec.size());
-                for (auto& d : dec) {
-                    int id = std::stoi(d.tok);
-                    std::string tk = (id >= 0 && id < (int)vocab.id2tok.size())
-                                         ? vocab.id2tok[id]
-                                         : "";
-                    dec_toks.push_back(tk);
-                    d.tok = tk;
-                }
-                // Drop blanks-turned-empty (specials) from the decode stream.
-                std::vector<GreedyTok> dec2;
-                std::vector<std::string> dec_toks2;
-                for (size_t i = 0; i < dec.size(); i++) {
-                    if (dec_toks[i].empty()) continue;
-                    dec2.push_back(dec[i]);
-                    dec_toks2.push_back(dec_toks[i]);
-                }
-                auto wins = coarse_line_windows(ltoks, dec2, dec_toks2, T,
-                                                sec_per_frame);
-                if (getenv("PMS_AA_DEBUG")) {
-                    std::string ds;
-                    for (auto& t : dec_toks2) ds += t;
-                    fprintf(stderr, "[align] decode=%s\n", ds.c_str());
-                    for (size_t li = 0; li < wins.size(); li++)
-                        fprintf(stderr, "[align] line%zu win=%.2f-%.2f\n", li,
-                                wins[li].first, wins[li].second);
-                }
-
-                // Per-line forced alignment (torchaudio stay-advance trellis,
-                // reimplemented here over the sliced emission; windows are
-                // coarse-pass derived, so no Whisper dependency).
                 // Map vocab token → id for target building.
                 std::vector<std::vector<int>> line_targets;
                 for (auto& ws : ltoks) {
                     std::vector<int> tgt;
-                    for (size_t wi = 0; wi < ws.size(); wi++) {
-                        if (wi) {
-                            // word separator id
-                            for (size_t id = 0; id < vocab.id2tok.size(); id++)
-                                if (vocab.id2tok[id] == "|") {
-                                    tgt.push_back((int)id);
-                                    break;
-                                }
-                        }
-                        for (char c : norm_word(ws[wi])) {
+                    for (auto& w : ws) {
+                        for (char c : norm_word(w)) {
                             std::string s(1, c);
                             for (size_t id = 0; id < vocab.id2tok.size(); id++)
                                 if (vocab.id2tok[id] == s) {
@@ -627,20 +492,56 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                     }
                     line_targets.push_back(tgt);
                 }
-                for (size_t li = 0; li < opt.lyrics.size(); li++) {
-                    // coarse_line_windows returns seconds in all cases.
-                    float w0 = wins[li].first, w1 = wins[li].second;
-                    int f0 = std::max(0, (int)(w0 / sec_per_frame));
-                    int f1 = std::min(T, (int)(w1 / sec_per_frame));
-                    if (f1 <= f0) continue;
+                size_t nl = opt.lyrics.size();
+                for (size_t li = 0; li < nl; li++) {
+                    report(progress, 0.88f + 0.07f * (float)li / (float)nl,
+                           "Aligning lyrics…");
+                    double w0 = wins[li].first, w1 = wins[li].second;
+                    if (w1 <= w0) continue;
                     const auto& tgt = line_targets[li];
                     if (tgt.empty()) continue;
-                    int Tw = f1 - f0, L = (int)tgt.size();
-                    if (Tw < L) continue;
+                    int L = (int)tgt.size();
+                    int s0 = std::max(0, (int)(w0 * 16000.0));
+                    int s1 = std::min((int)v16.size(), (int)(w1 * 16000.0));
+                    if (s1 <= s0) continue;
+                    // Per-window zero-mean unit-variance chunk (the reference
+                    // runs inference over the window slice only).
+                    std::vector<float> chunk(v16.begin() + s0, v16.begin() + s1);
+                    {
+                        double mean = 0;
+                        for (float x : chunk) mean += x;
+                        mean /= chunk.size();
+                        double var = 0;
+                        for (float x : chunk) {
+                            double d = x - mean;
+                            var += d * d;
+                        }
+                        float istd = (float)(1.0 / (sqrt(var / chunk.size()) + 1e-7));
+                        for (float& x : chunk) x = (float)((x - mean) * istd);
+                    }
+                    std::vector<int64_t> shp = {1, (int64_t)chunk.size()};
+                    std::vector<Ort::Value> ins;
+                    ins.push_back(Ort::Value::CreateTensor<float>(
+                        mem, chunk.data(), chunk.size(), shp.data(), 2));
+                    std::vector<float> mask;
+                    if (need_mask) {
+                        mask.assign(chunk.size(), 1.f);
+                        ins.push_back(Ort::Value::CreateTensor<float>(
+                            mem, mask.data(), mask.size(), shp.data(), 2));
+                    }
+                    std::vector<Ort::Value> wouts =
+                        sess.Run(Ort::RunOptions{nullptr}, in_names,
+                                 ins.data(), need_mask ? 2u : 1u, out_names, 1);
+                    auto sh = wouts[0].GetTensorTypeAndShapeInfo().GetShape();
+                    int Tw = (int)sh[1], V = (int)sh[2];
+                    if (Tw < L || V <= 0) continue;
+                    const float* wlog = wouts[0].GetTensorData<float>();
+                    // Reference: sec_per_frame = window_sec / emission frames.
+                    double spf = (w1 - w0) / Tw;
                     // Log-softmax rows.
                     std::vector<float> lp((size_t)Tw * V);
                     for (int t = 0; t < Tw; t++) {
-                        const float* row = logits + (size_t)(f0 + t) * V;
+                        const float* row = wlog + (size_t)t * V;
                         float mx = row[0];
                         for (int i = 1; i < V; i++) mx = std::max(mx, row[i]);
                         double s = 0;
@@ -673,7 +574,9 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                             cell(t + 1, j) = std::max(stay, adv);
                         }
                     }
-                    // Backtrack.
+                    // Backtrack from the argmax end (best cell(t, L)).
+                    // Path entries record EMIT vs blank-stay: merge_tokens
+                    // drops blanks, so only adv frames form spans and conf.
                     int t_start = 0;
                     float best = cell(0, L);
                     for (int t = 1; t <= Tw; t++)
@@ -684,6 +587,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                     struct PP {
                         int tok, fr;
                         float p;
+                        bool adv;
                     };
                     std::vector<PP> path;
                     int j = L;
@@ -693,20 +597,20 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                             cell(t - 1, j - 1) + lp[(size_t)(t - 1) * V + tgt[j - 1]];
                         bool adv = changed > stayed;
                         float pr = exp(lp[(size_t)(t - 1) * V + (adv ? tgt[j - 1] : vocab.blank)]);
-                        path.push_back({j - 1, t - 1, pr});
+                        path.push_back({j - 1, t - 1, pr, adv});
                         if (adv && --j == 0) break;
                     }
                     if (j != 0) continue;
                     std::reverse(path.begin(), path.end());
-                    // Merge repeats → char spans (frame indices, window-relative).
-                    std::vector<int> cs(Tw * 0 + L, 0), ce((size_t)L, 0);
+                    // Merge → per-token spans from EMITTED frames only.
+                    std::vector<int> cs((size_t)L, 0), ce((size_t)L, 0);
                     std::vector<float> csc((size_t)L, 0.f);
                     {
-                        size_t pi = 0;
                         std::vector<int> cnt((size_t)L, 0);
                         std::vector<int> fmin((size_t)L, Tw), fmax((size_t)L, -1);
                         std::vector<double> psum((size_t)L, 0.0);
                         for (auto& p : path) {
+                            if (!p.adv) continue;
                             int tk = p.tok;
                             if (tk < 0 || tk >= L) continue;
                             cnt[tk]++;
@@ -719,13 +623,13 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                             ce[c] = fmax[c] + 1;
                             csc[c] = cnt[c] ? (float)(psum[c] / cnt[c]) : 0.f;
                         }
-                        (void)pi;
                     }
-                    // Words → times. Char index k walks the target.
+                    // Words → times. Char index walks the letter target
+                    // (no separators). Reference low-conf rule: end stays,
+                    // start pulls in. No whisper blend.
                     int ci = 0;
                     for (size_t wi = 0; wi < ltoks[li].size(); wi++) {
                         std::string nw = norm_word(ltoks[li][wi]);
-                        if (wi) ci++;  // separator
                         int c0 = ci, c1 = ci + (int)nw.size();
                         ci = c1;
                         if (c0 >= c1 || c1 > L) continue;
@@ -739,10 +643,10 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                             cn++;
                         }
                         float conf = (float)(ps / cn);
-                        float t0 = w0 + (fmin)* (float)sec_per_frame;
-                        float t1 = w0 + (fmax)* (float)sec_per_frame;
+                        double t0 = w0 + fmin * spf;
+                        double t1 = w0 + fmax * spf;
                         if (conf < 0.5f)
-                            t0 = std::max(t0, t1 - (0.07f * (float)nw.size() + 0.05f));
+                            t0 = std::max(t0, t1 - (0.07 * (double)nw.size() + 0.05));
                         AnalysisWord w;
                         w.w = ltoks[li][wi];
                         w.line = (int)li;
@@ -763,9 +667,6 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                 aligned = false;
             }
         }
-        fprintf(stderr, "[align] %s (model=%s vocab_ok=%d)\n",
-                aligned ? "ok" : ("FALLBACK: " + align_err).c_str(), model_path.c_str(),
-                (int)vocab.ok);
         if (!aligned) {
             // Even-split fallback keeps the schema valid when the model is
             // missing or alignment fails outright.
@@ -773,7 +674,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
             for (size_t li = 0; li < opt.lyrics.size(); li++) {
                 std::string cur;
                 std::vector<std::string> ws;
-                for (char c : opt.lyrics[li]) {
+                for (char c : opt.lyrics[li].text) {
                     if (c == ' ' || c == '\t') {
                         if (!cur.empty()) {
                             ws.push_back(cur);
@@ -788,15 +689,14 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                     w.w = ws[wi];
                     w.line = (int)li;
                     w.i = (int)wi;
-                    w.t0 = (float)(dur * (li + (double)wi / ws.size()) / opt.lyrics.size());
-                    w.t1 = (float)(dur * (li + (double)(wi + 1) / ws.size()) / opt.lyrics.size());
+                    w.t0 = dur * (li + (double)wi / ws.size()) / opt.lyrics.size();
+                    w.t1 = dur * (li + (double)(wi + 1) / ws.size()) / opt.lyrics.size();
                     w.conf = 0.f;
                     out.words.push_back(w);
                 }
             }
         }
     }
-
     // ── Cache + publish ──────────────────────────────────────────────────────
     report(progress, 0.95f, "Writing cache…");
     {

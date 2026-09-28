@@ -1830,7 +1830,7 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
     if (need_leak) {
         GLuint p = g_prog.leak;
         glUseProgram(p);
-        glUniform1f(uni_loc(p, "u_intensity"), cfx.leak_intensity);
+        glUniform1f(uni_loc(p, "u_intensity"), cfx.leak_intensity * cfx.leak_env);
         glUniform1f(uni_loc(p, "u_speed"),     cfx.leak_speed);
         glUniform1f(uni_loc(p, "u_time"),      t);
         run1(p);

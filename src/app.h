@@ -630,6 +630,7 @@ struct CreativeFXAccum {
     bool  leak_on        = false;
     float leak_intensity = 0.f;
     float leak_speed     = 1.f;
+    float leak_env       = 1.f;  // env.mix at the playhead (0..1); LightLeak scales by it
 
     bool  vhs_on         = false;
     float vhs_noise      = 0.f;

@@ -1,9 +1,19 @@
 # Audio analysis v2
 
-One analysis per audio file, cached as `<audio stem>_analysis.json` next to the audio (or in the
-project cache dir when that is not writable). C++ type: `AudioAnalysis` (`src/audio_analysis.h`);
-live copy: `AppState::audio_analysis`. Consumers: script clips (`pms.audio`), codegen FX beat
-modulation, MCP `get_audio_analysis`, the style expander.
+One analysis per audio file, cached in the media cache dir (`cache_path(source, "_analysis.json")`,
+keyed by file size + mtime + lyrics hash so a changed file or changed lyrics re-analyse — never
+next to the user's audio file). C++ type: `AudioAnalysis` (`src/audio_analysis.h`); live copy:
+`AppState::audio_analysis`. Consumers: script clips (`pms.audio`), codegen FX beat modulation
+(`beat_pulse_at`, with a +12 ms visual lead), LightLeak (`env.mix` at the playhead), MCP
+`get_audio_analysis`, the style expander (real `downbeats`; first-bar flag only when no analysis
+exists).
+
+Run it headless: IPC `analyze_audio {path, lyrics?: (string | {text, t0, t1})[], separate?: bool, stems_dir?}` runs (`lines` is accepted as an alias of `lyrics`)
+v2 in the background with progress (`get_audio_analysis` → `{status: running, progress, stage}`),
+publishes the immutable result to `AppState::audio_analysis` on the UI thread, and commits the
+legacy beats/bpm fields to project state (`get_beats` keeps working). `get_audio_analysis` returns
+`{status, analysis}` with the v2 JSON below. Event times are `double` (float32 song-time values
+flipped frame-boundary events by one frame after the clip offset).
 
 All times are **source-file seconds**. Script clips see timeline seconds (runtime maps through the
 audio clip playing the file: `timeline = source − in_point + clip.start`).
@@ -45,7 +55,7 @@ loader accepts it.
 
 | Field | Requirement |
 |---|---|
-| stems | 4-stem separation (htdemucs, ONNX, STFT/iSTFT in C++). Without the model: `drums/bass/other` empty and hits fall back to band flux on the instrumental (`original − vocals`). |
+| stems | 4-stem separation, C++ htdemucs (`separate_stems4`, ONNX, STFT/iSTFT in C++) by default; `stems_dir` reuses precomputed `{drums,bass,other,vocals}.wav` (a reuse feature, not the acceptance path). Without stems: hits fall back to band flux / onset strength on the instrumental (`original − vocals`) or the mix; the downbeat phase uses the same fallback and matches the stems path. |
 | beats, bpm | Beat tracking on the **mix** (never the vocal stem). |
 | downbeats | Bar phase ∈ {0..3} maximising Σ over beats of (bass-stem onset strength at the beat / max) + (1 − cosine similarity of beat-synchronous chroma of bass+other between consecutive beats). Downbeats = beats at that phase. |
 | hits.kick/snare/hat | Half-wave-rectified spectral flux (dB) of the drums stem restricted to the band; peak picking with local max ±3 frames, local mean ±12 frames, delta = 0.5 × quantile(norm, q) with q = 0.90/0.90/0.80, minimum spacing 120/120/70 ms (10 ms hop). |
@@ -53,9 +63,9 @@ loader accepts it.
 | strength `s` | `peak / p90(all picked peak heights of that kind)`, clipped to 1. Never divide by the global max. |
 | env | RMS per video frame (frame length 2048), divided by its 98th percentile, clipped to 1. |
 | spectrum | Mel power spectrum, 32 bands 30 Hz–16 kHz, n_fft 4096, hop = sr/fps, dB relative to max, mapped (dB+70)/70 → 0..99. |
-| words | Forced alignment (wav2vec2 CTC) of the given lyric lines inside per-line windows. Words with mean confidence < 0.5 get `t0 = max(t0, t1 − (0.07·chars + 0.05))`: a low-confidence path parks on the word across breaths/backing vocals and drags its start early; its end stays reliable. |
-
-## Parity acceptance (reference song: "Seen and Not Seen", 1:28–2:03)
+| words | Forced alignment (wav2vec2 CTC, float model preferred — `tools/export_wav2vec2_onnx.py`; vocal audio decoded directly at 16 kHz) of each lyric line inside its window, exactly like the reference (`pipeline/audio.py` align_words): per-window inference with per-window normalisation, trellis over the line\u2019s LETTERS (no separators), `merge_tokens` semantics (blank-stayed frames never form spans or confidence), word spans from first/last char, conf = mean span score, and the low-confidence rule `t0 = max(t0, t1 \u2212 (0.07\u00b7n_letters + 0.05))` with the end kept. Windows: `{text, t0, t1}` lines (source seconds, via `analyze_audio` `lines`) align reference-grade and skip the whisper pass; plain-text lines use the Whisper coarse pass (`src/audio_whisper_coarse.cpp`: in-process large-v3-turbo decode, order-constrained fuzzy match, segment-start windows with split points). |\n\n## Parity acceptance (reference song: "Seen and Not Seen", 1:28–2:03)
 
 Against the reference `timeline.json`: beats ±20 ms; same downbeat phase; per kind ≥ 85 % of
-reference hits with `s ≥ 0.5` matched within 30 ms; ≥ 90 % of word starts within 80 ms.
+reference hits with `s ≥ 0.5` matched within 30 ms; ≥ 90 % of word starts within 80 ms — all on
+the C++ `separate_stems4` path (`tools/analysis_parity.py --separate`). The no-stems fallback row
+must report the same downbeat phase; hit coverage per kind is reported.
