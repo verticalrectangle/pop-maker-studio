@@ -965,7 +965,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
         char tcmd[1024];
         snprintf(tcmd, sizeof(tcmd),
                  "ffprobe -v error -select_streams v:0 -show_entries "
-                 "frame=pkt_pts_time -of csv=p=0 -- '%s' 2>/dev/null",
+                 "frame=pts_time -of csv=p=0 -- '%s' 2>/dev/null",
                  video_path.c_str());
         FILE* tp = popen(tcmd, "r");
         if (tp) {
@@ -1086,19 +1086,13 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
             records.push_back(rx2 * 2.f);
             records.push_back(ry2 * 2.f);
         }
+        // Blink signals come from THIS frame's detection, not the smoothed track:
+        // the landmark EMA that steadies the mesh also flattens a 2–3 frame blink
+        // (eyeOpen 0.21 → 0.14 smoothed vs 0.21 → 0.11 raw on the reference clip).
+        const FaceObs& eye_src = ok ? obs : smooth;
         for (int k = 0; k < FT_NBLEND; ++k)
-            records.push_back(smooth.has_blend ? smooth.blend[k] : 0.f);
-        // Geometric eye openness recomputed on the recorded RAW coords
-        // (what downstream blink consumers see).
-        {
-            const size_t base = records.size() - FT_NBLEND - (size_t)FT_NPTS * 2;
-            float xy[FT_NPTS * 2];
-            for (int k = 0; k < FT_NPTS; ++k) {
-                xy[2 * k]     = records[base + k * 2];
-                xy[2 * k + 1] = records[base + k * 2 + 1];
-            }
-            records.push_back(face_eye_open_ratio(xy));
-        }
+            records.push_back(eye_src.has_blend ? eye_src.blend[k] : 0.f);
+        records.push_back(face_eye_open_ratio(&eye_src.pts[0][0]));
         records.push_back(src_t);
         ++n;
         if (progress && total_est > 0 && (n & 7) == 0)
@@ -1110,7 +1104,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     std::string tmp = out_path + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
-    uint32_t magic = 0x46534D50, version = 11;  // v11: VFR passthrough decode
+    uint32_t magic = 0x46534D50, version = 12;  // v12: real pts times, per-frame (unsmoothed) eye signals
     int32_t  rq = rot_q, rw = W, rh = H;
     float    fps = (float)info.fps;
     uint32_t count = (uint32_t)n;

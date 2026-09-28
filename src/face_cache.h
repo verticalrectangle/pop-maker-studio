@@ -1,8 +1,9 @@
 #pragma once
-// Face landmark caches for recorded takes. A .face sidecar next to the take
-// holds per-frame landmarks (built by face_track_build_cache on a background
-// thread); playback and export read them by frame index. Tiny data (~850
-// B/frame) — whole files load into an in-memory registry on first use.
+// Face landmark caches for recorded takes and any other video. A .face file in the
+// media cache (cache_path(source, ".face")) holds per-frame landmarks, per-frame
+// eye openness + blendshapes, and real source pts (built by face_track_build_cache
+// on a background thread); playback, export and script clips read them by frame.
+// Tiny data (~850 B/frame) — whole files load into an in-memory registry on first use.
 #include "face_track.h"
 #include <functional>
 #include <string>

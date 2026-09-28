@@ -50,27 +50,23 @@ struct FaceObs {
 
 bool face_track_available();  // models found (models/face/*.onnx)
 
-// Unified blink signal for an observation: max(blendshape blink,
-// 1 − eyeOpen/openBaseline). `open_baseline` <= 0 (uncalibrated) falls back
-// to the blendshape term alone. Use wherever eyeBlinkL/R drive blink
-// fades/lash compression.
+// Unified blink signal for an observation (face_metrics.h). `open_baseline` <= 0
+// (uncalibrated) leaves only the blendshape evidence. Use wherever eyeBlinkL/R drive
+// blink fades/lash compression.
 inline float face_blink_of(const FaceObs& o, float open_baseline = 0.f) {
     const float bb = o.has_blend
         ? 0.5f * (o.blend[FB_EYE_BLINK_L] + o.blend[FB_EYE_BLINK_R])
         : 0.f;
-    const float base = (open_baseline > 1e-6f) ? open_baseline
-                       : (o.eye_open > 1e-6f ? o.eye_open : 0.f);
-    return face_blink_signal(bb, o.eye_open, base);
+    return face_blink_signal(bb, o.eye_open, open_baseline);
 }
 
-// Per-eye blink pair (for the u_blink / makeup blink-fade uniforms).
+// Per-eye blink pair (for the u_blink / makeup blink-fade uniforms): the shared
+// geometric term (eyeOpen averages both eyes) against each eye's own blendshape.
 inline void face_blink_lr(const FaceObs& o, float open_baseline,
                           float& l, float& r) {
-    const float geom = (open_baseline > 1e-6f && o.eye_open > 0.f)
-        ? (1.f - o.eye_open / open_baseline) : 0.f;
-    const float g = geom < 0.f ? 0.f : (geom > 1.f ? 1.f : geom);
-    const float bl = o.has_blend ? o.blend[FB_EYE_BLINK_L] : 0.f;
-    const float br = o.has_blend ? o.blend[FB_EYE_BLINK_R] : 0.f;
+    const float g = face_blink_geometric(o.eye_open, open_baseline);
+    const float bl = o.has_blend ? face_blink_blendshape(o.blend[FB_EYE_BLINK_L]) : 0.f;
+    const float br = o.has_blend ? face_blink_blendshape(o.blend[FB_EYE_BLINK_R]) : 0.f;
     l = bl > g ? bl : g;
     r = br > g ? br : g;
 }
