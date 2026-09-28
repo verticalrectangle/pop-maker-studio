@@ -11,7 +11,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 66u;
+static const uint32_t VERSION = 67u;  // v67: render platform preset (export)
 extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v66: shape colour keyframes + kaleidoscope mirror fold
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
@@ -744,6 +744,7 @@ bool project_save(const AppState& state, const std::string& path) {
     w.pod(state.render_settings.crf); w.pod(state.render_settings.audio_bitrate);
     w.str(state.render_settings.preset); w.pod((uint8_t)state.render_settings.high_profile);
     w.pod((uint8_t)state.render_settings.use_vaapi);
+    w.pod((uint8_t)state.render_settings.platform);  // v67
 
     // UI
     w.pod(state.panel_tab);
@@ -862,7 +863,6 @@ static bool project_load_pass(AppState& state, const std::string& path, int fx_o
     // Subtitle
     state.subtitle_mode = (SubtitleMode)r.pod<uint8_t>();
     state.subtitle_n    = r.pod<int>();
-
     // Render settings
     state.render_settings.crf          = r.pod<int>();
     state.render_settings.audio_bitrate= r.pod<int>();
@@ -870,6 +870,8 @@ static bool project_load_pass(AppState& state, const std::string& path, int fx_o
     state.render_settings.high_profile = (bool)r.pod<uint8_t>();
     if (version >= 29u)
         state.render_settings.use_vaapi = (bool)r.pod<uint8_t>();
+    if (version >= 67u)
+        state.render_settings.platform = (RenderPlatform)r.pod<uint8_t>();
 
     // UI
     state.panel_tab = r.pod<int>();

@@ -243,6 +243,27 @@ The export renderer is the preview renderer pointed at a framebuffer. Same code 
 
 Resolution: 1080×1920 (vertical), 1920×1080 (horizontal), 1080×1080 (square).
 
+Colour: the pipe carries full-range RGBA (GL readback). Both encoders convert
+with the BT.709 matrix to limited-range YUV (`scale=...:out_color_matrix=bt709:out_range=tv`,
+`format=yuv420p`/`nv12`) and tag the stream (`-colorspace/-color_primaries/-color_trc bt709`,
+`-color_range tv`, plus an `h264_metadata` bsf so the VUI carries all three) — ffmpeg's
+untagged default decodes as BT.601 (washed out). Profile is always High; the level is
+never pinned (1080p60 needs 4.2) — the encoder picks the lowest valid one. GIF path unchanged.
+
+Platform presets (`RenderSettings::platform`, `platform_preset()` in render.cpp): validated
+CRF / `-maxrate`/`-bufsize` caps / High profile / AAC 48 kHz stereo recipes per upload target
+(specs consulted Sep 2026 — X ≤25 Mbps/AAC 320k; TikTok 12 Mbps/192k; Reels 10 Mbps/256k;
+Shorts/YouTube 8 Mbps ≤30 fps, 12 Mbps ≥40 fps/192k; Custom = manual CRF). Audio always
+AAC 48 kHz stereo with `+faststart`. Canvas mismatches warn (`render_platform_check`) but export.
+
+Multi-format: one request can render several canvases sequentially (`formats=["9:16","16:9"]` →
+`<name>_9x16.mp4`, `<name>_16x9.mp4`); the queue (`export_queue` in engine_runtime.cpp)
+switches canvas + suffixed output per pass and restores the original canvas after. Script clips
+reflow from the canvas size each pass; ordinary clips keep canvas-fraction positions.
+
+The old headless ffmpeg-filtergraph renderer (`render_start`/`build_args`/`write_filter_script`)
+is deleted — the GL pipe is the only export path.
+
 `render_snapshot_gl` uses the same pipeline to render a single PNG frame — snapshots are pixel-identical to export frames by construction.
 
 ---
