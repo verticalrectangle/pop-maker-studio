@@ -32,55 +32,35 @@ struct TypoFXDesc {
     float  beat_intensity = 0.f;
 };
 
-// Read the preset's "fx" array from its shipped JS module config. Returns
-// false only when the module can't be read (unknown preset is reported by the
-// caller); a missing/empty fx array yields zero entries.
-static bool typo_fx_for_preset(const std::string& preset, std::vector<TypoFXDesc>& out) {
-    out.clear();
-    std::string resolved = script_resolve_spec("pms:typography/" + preset, "", "");
-    if (resolved.empty()) return false;
-    std::ifstream f(resolved, std::ios::binary);
-    if (!f) return false;
-    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    size_t k = src.find("\"fx\"");
-    if (k == std::string::npos) return true;
-    k = src.find('[', k);
-    if (k == std::string::npos) return true;
-    int depth = 0;
-    size_t e = k;
-    for (; e < src.size(); ++e) {
-        if (src[e] == '[') ++depth;
-        else if (src[e] == ']') { if (--depth == 0) break; }
-    }
-    std::string arr = src.substr(k, e - k + 1);
-    size_t p = 0;
-    while ((p = arr.find("\"type\"", p)) != std::string::npos) {
-        size_t c = arr.find(':', p);
-        size_t q1 = arr.find('"', c);
-        if (q1 == std::string::npos) break;
-        size_t q2 = arr.find('"', q1 + 1);
-        if (q2 == std::string::npos) break;
-        std::string type = arr.substr(q1 + 1, q2 - q1 - 1);
-        // The beat value belongs to this object only (bounded by the next
-        // "type" so a missing beat can't steal the next object's).
-        size_t nt = arr.find("\"type\"", q2 + 1);
-        float beat = 0.f;
-        size_t b = arr.find("\"beat\"", q2);
-        if (b != std::string::npos && (nt == std::string::npos || b < nt)) {
-            size_t bc = arr.find(':', b);
-            if (bc != std::string::npos) beat = (float)atof(arr.c_str() + bc + 1);
+// The preset's "fx" array, read from its shipped JS module: every module
+// declares its config as one JSON literal line, `const config = {...};`.
+// Entries of other types are skipped (the native generator laid only these).
+static std::vector<TypoFXDesc> typo_fx_for_module(const std::string& module_path) {
+    std::vector<TypoFXDesc> out;
+    std::ifstream f(module_path);
+    static const std::string kDecl = "const config = ";
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.compare(0, kDecl.size(), kDecl) != 0) continue;
+        size_t end = line.rfind('}');
+        if (end == std::string::npos || end < kDecl.size()) break;
+        auto cfg = nlohmann::json::parse(line.substr(kDecl.size(), end - kDecl.size() + 1),
+                                         nullptr, false);
+        if (!cfg.is_object() || !cfg.contains("fx") || !cfg["fx"].is_array()) break;
+        for (auto& e : cfg["fx"]) {
+            std::string type = e.value("type", "");
+            TypoFXDesc d;
+            if (type == "VHS") d.type = FXType::VHS;
+            else if (type == "FilmGrain") d.type = FXType::FilmGrain;
+            else if (type == "Scanlines") d.type = FXType::Scanlines;
+            else if (type == "ChromaticAberration") d.type = FXType::ChromaticAberration;
+            else continue;
+            d.beat_intensity = e.value("beat", 0.f);
+            out.push_back(d);
         }
-        TypoFXDesc d;
-        if (type == "VHS") d.type = FXType::VHS;
-        else if (type == "FilmGrain") d.type = FXType::FilmGrain;
-        else if (type == "Scanlines") d.type = FXType::Scanlines;
-        else if (type == "ChromaticAberration") d.type = FXType::ChromaticAberration;
-        else { p = q2 + 1; continue; }  // unknown entry: skip, don't fail
-        d.beat_intensity = beat;
-        out.push_back(d);
-        p = q2 + 1;
+        break;
     }
-    return true;
+    return out;
 }
 
 // Lay (or clear) the preset's global FX bricks on a managed LyricsFX track
@@ -232,8 +212,7 @@ bool lay_typography_script(AppState& state, const std::string& preset,
             track.clips[i].script_path == "pms:typography/" + preset) ci = i;
     state.selected_track = typo_ti;
     state.selected_clip = ci;
-    std::vector<TypoFXDesc> fx;
-    typo_fx_for_preset(preset, fx);
+    std::vector<TypoFXDesc> fx = typo_fx_for_module(resolved);
     lay_typo_fx_clips(state, fx, typo_ti, t1);
     script_clip_invalidate(script_clip_key(typo_ti, ci));
     app_focus_typography_panel();
