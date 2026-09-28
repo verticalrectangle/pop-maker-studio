@@ -162,9 +162,10 @@ def main():
         patch_paths[name] = pp
 
     # start our own headless instance
+    # Own session: terminating only xvfb-run left the app itself running.
     app = subprocess.Popen(
         ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24", args.exe],
-        env={**os.environ, "PMS_SOCK": sock},
+        env={**os.environ, "PMS_SOCK": sock}, start_new_session=True,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(100):
@@ -325,7 +326,8 @@ def main():
         return 0
     finally:
         if not args.keep:
-            app.terminate()
+            os.killpg(app.pid, 15)
+            app.wait(10)
 
 
 if __name__ == "__main__":
