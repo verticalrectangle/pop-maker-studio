@@ -3,6 +3,8 @@
             cfx.pixelate_on = true;
             cfx.pixelate_amount = 1.0f;
             cfx.pixelate_size = 12.0f;
+            cfx.pixelate_sampling = 0.0f;
+            cfx.pixelate_palette_levels = 0.0f;
             break;
         case FXType::FilmGrain:
             cfx.film_grain_on = true;
@@ -520,6 +522,8 @@
             cfx.pixel_mosaic_amount = 1.0f;
             cfx.pixel_mosaic_block_size = 16.0f;
             cfx.pixel_mosaic_color_steps = 6.0f;
+            cfx.pixel_mosaic_sampling = 0.0f;
+            cfx.pixel_mosaic_palette_levels = 0.0f;
             break;
         case FXType::ThermalMap:
             cfx.thermal_map_on = true;

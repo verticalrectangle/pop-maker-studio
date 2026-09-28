@@ -3,6 +3,14 @@
         c.fx_pixelate_amount = r.pod<float>();
         c.fx_pixelate_size = r.pod<float>();
         c.fx_pixelate_size_beat = r.pod<float>();
+        if (g_fx_read_version >= 69u) {
+            c.fx_pixelate_sampling = r.pod<float>();
+            c.fx_pixelate_sampling_beat = r.pod<float>();
+        }
+        if (g_fx_read_version >= 69u) {
+            c.fx_pixelate_palette_levels = r.pod<float>();
+            c.fx_pixelate_palette_levels_beat = r.pod<float>();
+        }
         c.fx_film_grain_amount = r.pod<float>();
         c.fx_film_grain_intensity = r.pod<float>();
         c.fx_film_grain_intensity_beat = r.pod<float>();
@@ -474,6 +482,14 @@
         c.fx_pixel_mosaic_block_size_beat = r.pod<float>();
         c.fx_pixel_mosaic_color_steps = r.pod<float>();
         c.fx_pixel_mosaic_color_steps_beat = r.pod<float>();
+        if (g_fx_read_version >= 69u) {
+            c.fx_pixel_mosaic_sampling = r.pod<float>();
+            c.fx_pixel_mosaic_sampling_beat = r.pod<float>();
+        }
+        if (g_fx_read_version >= 69u) {
+            c.fx_pixel_mosaic_palette_levels = r.pod<float>();
+            c.fx_pixel_mosaic_palette_levels_beat = r.pod<float>();
+        }
         c.fx_thermal_map_amount = r.pod<float>();
         c.fx_thermal_map_cold_hue = r.pod<float>();
         c.fx_thermal_map_cold_hue_beat = r.pod<float>();

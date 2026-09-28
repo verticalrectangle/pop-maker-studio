@@ -9,6 +9,8 @@
             glUniform1f(uni_loc(p, "u_time"),  t);
             glUniform1f(uni_loc(p, "u_strength"), cfx.pixelate_amount);
             glUniform1f(uni_loc(p, "u_size"), cfx.pixelate_size);
+            glUniform1f(uni_loc(p, "u_sampling"), cfx.pixelate_sampling);
+            glUniform1f(uni_loc(p, "u_palette_levels"), cfx.pixelate_palette_levels);
             run1(p);
             if (cfx.pixelate_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.pixelate_amount, g_pp.fbo[pslot], w, h);
@@ -1776,6 +1778,8 @@
             glUniform1f(uni_loc(p, "u_strength"), cfx.pixel_mosaic_amount);
             glUniform1f(uni_loc(p, "u_block_size"), cfx.pixel_mosaic_block_size);
             glUniform1f(uni_loc(p, "u_color_steps"), cfx.pixel_mosaic_color_steps);
+            glUniform1f(uni_loc(p, "u_sampling"), cfx.pixel_mosaic_sampling);
+            glUniform1f(uni_loc(p, "u_palette_levels"), cfx.pixel_mosaic_palette_levels);
             run1(p);
             if (cfx.pixel_mosaic_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.pixel_mosaic_amount, g_pp.fbo[pslot], w, h);

@@ -2,6 +2,8 @@
     bool  pixelate_on = false;
     float pixelate_amount = 0.0f;
     float pixelate_size = 1.0f;
+    float pixelate_sampling = 0.0f;
+    float pixelate_palette_levels = 0.0f;
     bool  film_grain_on = false;
     float film_grain_amount = 0.0f;
     float film_grain_intensity = 0.0f;
@@ -357,6 +359,8 @@
     float pixel_mosaic_amount = 0.0f;
     float pixel_mosaic_block_size = 2.0f;
     float pixel_mosaic_color_steps = 2.0f;
+    float pixel_mosaic_sampling = 0.0f;
+    float pixel_mosaic_palette_levels = 0.0f;
     bool  thermal_map_on = false;
     float thermal_map_amount = 0.0f;
     float thermal_map_cold_hue = 0.0f;

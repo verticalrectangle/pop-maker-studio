@@ -3,7 +3,7 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
     (void)clip;
     switch (afx.type) {
         case FXType::Pixelate: {
-            if ((int)afx.params.size() < 1) afx.params.resize(1, 0.f);
+            if ((int)afx.params.size() < 3) afx.params.resize(3, 0.f);
             ui_label("Amount");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##afx_pixelate_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
@@ -13,6 +13,16 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##afx_pixelate_size", &afx.params[0], 1.0f, 64.0f, "%.0f px");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Block Size");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Sampling");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_pixelate_sampling", &afx.params[1], 0.0f, 2.0f, "%.0f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Sampling");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Palette Levels");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_pixelate_palette_levels", &afx.params[2], 0.0f, 8.0f, "%.0f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixelate: Palette Levels");
             break;
         }
         case FXType::FilmGrain: {
@@ -1611,7 +1621,7 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             break;
         }
         case FXType::PixelMosaic: {
-            if ((int)afx.params.size() < 2) afx.params.resize(2, 0.f);
+            if ((int)afx.params.size() < 4) afx.params.resize(4, 0.f);
             ui_label("Amount");
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##afx_pixel_mosaic_amount", &afx.amount, 0.0f, 1.0f, "%.2f");
@@ -1626,6 +1636,16 @@ static void fx_attached_inspector(AttachedFX& afx, float sw, AppState& state, Cl
             ImGui::SetNextItemWidth(sw);
             ImGui::SliderFloat("##afx_pixel_mosaic_color_steps", &afx.params[1], 2.0f, 16.0f, "%.0f");
             if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Color Steps");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Sampling");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_pixel_mosaic_sampling", &afx.params[2], 0.0f, 2.0f, "%.0f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Sampling");
+            ImGui::Dummy({0.f, 4.f});
+            ui_label("Palette Levels");
+            ImGui::SetNextItemWidth(sw);
+            ImGui::SliderFloat("##afx_pixel_mosaic_palette_levels", &afx.params[3], 0.0f, 8.0f, "%.0f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) history_push(state, "Pixel Mosaic: Palette Levels");
             break;
         }
         case FXType::ThermalMap: {

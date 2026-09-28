@@ -2,6 +2,10 @@
     w.pod(c.fx_pixelate_amount);
     w.pod(c.fx_pixelate_size);
     w.pod(c.fx_pixelate_size_beat);
+    w.pod(c.fx_pixelate_sampling);
+    w.pod(c.fx_pixelate_sampling_beat);
+    w.pod(c.fx_pixelate_palette_levels);
+    w.pod(c.fx_pixelate_palette_levels_beat);
     w.pod(c.fx_film_grain_amount);
     w.pod(c.fx_film_grain_intensity);
     w.pod(c.fx_film_grain_intensity_beat);
@@ -469,6 +473,10 @@
     w.pod(c.fx_pixel_mosaic_block_size_beat);
     w.pod(c.fx_pixel_mosaic_color_steps);
     w.pod(c.fx_pixel_mosaic_color_steps_beat);
+    w.pod(c.fx_pixel_mosaic_sampling);
+    w.pod(c.fx_pixel_mosaic_sampling_beat);
+    w.pod(c.fx_pixel_mosaic_palette_levels);
+    w.pod(c.fx_pixel_mosaic_palette_levels_beat);
     w.pod(c.fx_thermal_map_amount);
     w.pod(c.fx_thermal_map_cold_hue);
     w.pod(c.fx_thermal_map_cold_hue_beat);

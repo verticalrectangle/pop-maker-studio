@@ -207,6 +207,10 @@ def main():
 
     # ── fx_project_read.h ─────────────────────────────────────────────────────
     # Each effect is gated by its own since_version (defaults to project_version).
+    # Individual params added later carry their own since_version: those fields
+    # are read only when the file is new enough, otherwise the Clip default
+    # (the registry default, via the member initializer) is kept. This keeps
+    # old .pms files byte-aligned without a format bump per param.
     # Gated on g_fx_read_version (not the clip's `version`) so project_load can
     # decrement it by 1 to skip an effect introduced at exactly the file's
     # version without a format bump — recovering files saved just before it.
@@ -222,9 +226,17 @@ def main():
             cur_pv = pv
         lines.append(f'        c.fx_{eid}_amount = r.pod<float>();')
         for p in e["params"]:
-            lines.append(f'        c.fx_{eid}_{p["name"]} = r.pod<float>();')
-            if e.get("kind") != "transform":
-                lines.append(f'        c.fx_{eid}_{p["name"]}_beat = r.pod<float>();')
+            ppv = p.get("since_version", pv)
+            if ppv == pv:
+                lines.append(f'        c.fx_{eid}_{p["name"]} = r.pod<float>();')
+                if e.get("kind") != "transform":
+                    lines.append(f'        c.fx_{eid}_{p["name"]}_beat = r.pod<float>();')
+            else:
+                lines.append(f'        if (g_fx_read_version >= {ppv}u) {{')
+                lines.append(f'            c.fx_{eid}_{p["name"]} = r.pod<float>();')
+                if e.get("kind") != "transform":
+                    lines.append(f'            c.fx_{eid}_{p["name"]}_beat = r.pod<float>();')
+                lines.append(f'        }}')
     if cur_pv is not None:
         lines.append('    }')
     write(os.path.join(GEN_DIR, "fx_project_read.h"), "\n".join(lines) + "\n")

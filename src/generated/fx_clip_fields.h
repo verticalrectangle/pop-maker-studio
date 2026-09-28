@@ -2,6 +2,10 @@
     float fx_pixelate_amount = 1.0f;
     float fx_pixelate_size = 12.0f;
     float fx_pixelate_size_beat = 0.0f;
+    float fx_pixelate_sampling = 0.0f;
+    float fx_pixelate_sampling_beat = 0.0f;
+    float fx_pixelate_palette_levels = 0.0f;
+    float fx_pixelate_palette_levels_beat = 0.0f;
     float fx_film_grain_amount = 1.0f;
     float fx_film_grain_intensity = 0.4f;
     float fx_film_grain_intensity_beat = 0.0f;
@@ -469,6 +473,10 @@
     float fx_pixel_mosaic_block_size_beat = 0.0f;
     float fx_pixel_mosaic_color_steps = 6.0f;
     float fx_pixel_mosaic_color_steps_beat = 0.0f;
+    float fx_pixel_mosaic_sampling = 0.0f;
+    float fx_pixel_mosaic_sampling_beat = 0.0f;
+    float fx_pixel_mosaic_palette_levels = 0.0f;
+    float fx_pixel_mosaic_palette_levels_beat = 0.0f;
     float fx_thermal_map_amount = 1.0f;
     float fx_thermal_map_cold_hue = 0.65f;
     float fx_thermal_map_cold_hue_beat = 0.0f;

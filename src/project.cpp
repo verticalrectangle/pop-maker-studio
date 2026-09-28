@@ -11,8 +11,8 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 67u;  // v67: render platform preset (export)
-extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)  // v66: shape colour keyframes + kaleidoscope mirror fold
+static const uint32_t VERSION = 69u;  // v69: pixelate sampling + palette_levels (vision); v67: render platform preset (export)
+extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
 // Normally the file's format version; project_load decrements it by 1 on a retry
