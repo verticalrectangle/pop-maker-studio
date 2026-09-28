@@ -124,7 +124,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "set_camera_monitor", "detect_screen_activity", "get_activity_status",
         "set_virtual_mic",
     ],
-    "playback": ["play", "pause", "seek"],
+    "playback": ["play", "pause", "seek", "get_perf_stats", "bench_scrub", "bench_play"],
     "export": ["trigger_export", "get_export_status", "cancel_export"],
     "project": ["new_project", "load_project", "save_project", "collect_project"],
     "system": ["begin_batch", "end_batch", "undo", "redo"],
@@ -1356,6 +1356,50 @@ async def list_tools() -> list[Tool]:
             name="pause",
             description="Pause playback.",
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="get_perf_stats",
+            description=(
+                "Preview-stage timing readout: per-stage last/EMA/max ms "
+                "(prefetch, decode, upload, clip_fx, composite, text, shapes, swap) "
+                "plus UI frame-time p50/p95/p99/max, playhead and playing flag. "
+                "Read-only — no batch needed. Use when diagnosing scrub/playback cost."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="bench_scrub",
+            description=(
+                "Drive seek_to from the main loop and report UI frame-time "
+                "percentiles plus seek-to-present latency (correct_frame_ms). "
+                "Params: pattern (random|sweep|jitter), seconds (0..120), "
+                "rate_hz (0..120). "
+                "Blocks until the bench finishes. Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "seconds": {"type": "number"},
+                    "rate_hz": {"type": "number"},
+                },
+            },
+        ),
+        Tool(
+            name="bench_play",
+            description=(
+                "Play the timeline for N seconds and report UI frame-time "
+                "percentiles plus dropped-frame estimate. "
+                "Params: seconds (0..120). Blocks until the bench finishes. "
+                "Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "seconds": {"type": "number"},
+                },
+                "required": ["seconds"],
+            },
         ),
         Tool(
             name="save_project",
