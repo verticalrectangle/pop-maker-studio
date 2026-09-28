@@ -134,6 +134,8 @@ set(PMS_ENGINE_SOURCES
     src/proxy.cpp
     src/waveform.cpp
     src/beat_detect.cpp
+    src/audio_dsp.cpp
+    src/audio_analysis_run.cpp
     src/audio_analysis.cpp
     src/separate4.cpp
     src/blender_export.cpp
@@ -632,6 +634,32 @@ else()
 endif()
 target_link_libraries(forced_align_probe PRIVATE onnxruntime dl pthread)
 target_compile_options(forced_align_probe PRIVATE -Wall -Wextra -Wno-unused-parameter -O2)
+
+# ── analysis-parity: offline driver for audio_analysis_run (th/audio acceptance)
+add_executable(analysis-parity
+    tools/analysis_parity.cpp
+    src/audio_analysis_run.cpp
+    src/audio_analysis.cpp
+    src/audio_dsp.cpp
+    src/paths.cpp
+    src/separate4.cpp
+)
+target_include_directories(analysis-parity PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/vendor
+)
+if(DEFINED ONNXRUNTIME_ROOT)
+    target_include_directories(analysis-parity PRIVATE ${ONNXRUNTIME_ROOT}/include)
+    target_link_directories(analysis-parity PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+else()
+    target_include_directories(analysis-parity PRIVATE /usr/include/onnxruntime)
+endif()
+target_link_libraries(analysis-parity PRIVATE
+    onnxruntime fftw3f
+    ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES} ${SWRESAMPLE_LIBRARIES}
+    dl pthread
+)
+target_compile_options(analysis-parity PRIVATE -Wall -Wextra -Wno-unused-parameter -O2)
 
 # ── bg_remove_probe: standalone harness for brick-only background removal ─────
 # Decodes the cached bg_masks.mjpeg + matching proxy.mjpeg and replays the
