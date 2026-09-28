@@ -14,3 +14,11 @@ bool separate4_available();
 bool separate_stems4(const std::string& audio_path, const std::string& out_dir,
                      std::array<std::string, 4>& out_paths,
                      const std::function<void(float)>& progress, std::string* err);
+
+// Separate only [t0, t1) (source seconds) into out_dir/{drums,bass,other,vocals}.wav.
+// Decodes the span (sample-accurate slice of the whole-file decode) and runs the
+// same overlap-add; the wav lengths cover the span, with times relative to the
+// SPAN START (callers add t0 back for source seconds). Blocking; worker thread.
+bool separate_stems4_span(const std::string& audio_path, double t0, double t1,
+                          const std::string& out_dir, std::array<std::string, 4>& out_paths,
+                          const std::function<void(float)>& progress, std::string* err);

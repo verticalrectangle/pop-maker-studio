@@ -30,7 +30,8 @@ def load_lines():
     return list(g["LINES"])
 
 
-def run_analysis(binary, clip, stems, out_json, lyrics, separate=False, windows=None):
+def run_analysis(binary, clip, stems, out_json, lyrics, separate=False, windows=None,
+                 span=None):
     # lyrics sidecar the C++ driver reads (<out>.lyrics.json): plain strings,
     # or {"text","t0","t1"} objects with a coarse window in source seconds.
     # windows: optional parallel list of [t0,t1] (or None) per line; when every
@@ -46,6 +47,8 @@ def run_analysis(binary, clip, stems, out_json, lyrics, separate=False, windows=
         cmd += ["--separate"]
     elif stems:
         cmd += ["--stems-dir", str(stems)]
+    if span:
+        cmd += ["--range", f"{span[0]},{span[1]}"]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
     sys.stdout.write(proc.stdout[-2000:] if len(proc.stdout) > 2000 else proc.stdout)
     if proc.returncode != 0:
@@ -53,6 +56,23 @@ def run_analysis(binary, clip, stems, out_json, lyrics, separate=False, windows=
         raise SystemExit(f"analysis tool failed ({proc.returncode})")
     # lyrics are passed via a sidecar: the tool reads <out>.lyrics.json
     return json.loads(Path(out_json).read_text())
+
+
+def shift_ref(ref, dt):
+    """Return a copy of the reference with beats/downbeats/hits/words shifted by dt."""
+    import copy
+    if not dt:
+        return ref
+    ref = copy.deepcopy(ref)
+    ref["beats"] = [t + dt for t in ref["beats"]]
+    ref["downbeats"] = [t + dt for t in ref["downbeats"]]
+    for lst in ref["hits"].values():
+        for h in lst:
+            h["t"] += dt
+    for w in ref["words"]:
+        w["t0"] += dt
+        w["t1"] += dt
+    return ref
 
 
 def metrics(got, ref):
@@ -71,7 +91,10 @@ def metrics(got, ref):
             "worst_ms": round(worst * 1000, 1),
             "pass": worst <= 0.020,
         }
-    # downbeat phase: index of first downbeat within beats
+    # downbeat phase: song-relative beat index of the first downbeat.
+    # Ranged analyses start mid-song, so the span grid's index 0 is NOT the
+    # song's beat 0 — compare (first_downbeat - first_beat) / beat_period
+    # mod 4 instead of the raw span-local index.
     def phase(beats, downs):
         if not downs or not beats:
             return None
@@ -80,7 +103,18 @@ def metrics(got, ref):
         except ValueError:
             near = min(beats, key=lambda b: abs(b - downs[0]))
             return beats.index(near) % 4
-    gp, rp = phase(gb, got.get("downbeats", [])), phase(rb, ref.get("downbeats", []))
+    def song_phase(beats, downs):
+        # Song-relative downbeat phase: which song beat (±period/4) the first
+        # downbeat sits on, measured from the reference grid origin. Identical
+        # grids give identical phases regardless of span start.
+        if not downs or len(beats) < 2 or not rb:
+            return phase(beats, downs)
+        period = beats[1] - beats[0]
+        if period <= 0:
+            return phase(beats, downs)
+        d0 = min(downs, key=lambda d: abs(d - beats[0]))
+        return round((d0 - rb[0]) / period) % 4
+    gp, rp = song_phase(gb, got.get("downbeats", [])), song_phase(rb, ref.get("downbeats", []))
     out["downbeat"] = {"got": gp, "ref": rp, "pass": gp == rp}
     hits = {}
     allpass = True
@@ -130,6 +164,14 @@ def main():
                     help="JSON list parallel to the lyric lines: [t0,t1] source-second "
                          "coarse window per line (or null); enables the reference "
                          "windowed path instead of the whisper coarse pass")
+    ap.add_argument("--range", default="",
+                    help="source-second span t0,t1: decode/separate/analyse/normalise "
+                         "only that range (times stay absolute, like the reference "
+                         "80-130 s segment)")
+    ap.add_argument("--ref-shift", type=float, default=0.0,
+                    help="seconds to add to reference times before comparing "
+                         "(88 for the full song: timeline.json is clip-relative, "
+                         "the ranged analysis reports source seconds)")
     args = ap.parse_args()
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -141,9 +183,14 @@ def main():
     (outdir / "lines.json").write_text(json.dumps(lines))
     ref = json.loads(Path(args.ref).read_text())
 
+    span = None
+    if args.range:
+        span = [float(x) for x in args.range.split(",")]
+        assert len(span) == 2 and span[1] > span[0] and span[0] >= 0, "--range t0,t1"
     wins = json.loads(Path(args.windows).read_text()) if args.windows else None
     if wins is not None and len(wins) != len(lines):
         raise SystemExit(f"--windows has {len(wins)} entries for {len(lines)} lines")
+    ref = shift_ref(ref, args.ref_shift)
     results = {}
     sep = bool(args.separate)
     # Acceptance: --separate runs the C++ separate_stems4 path; --stems DIR
@@ -156,7 +203,7 @@ def main():
                            None if tag == "fallback" else stems,
                            out_json, lines,
                            separate=(sep and tag == "stems"),
-                           windows=wins)
+                           windows=wins, span=span)
         m = metrics(got, ref)
         results[tag] = m
         print(f"=== [{tag}] beats worst {m['beats'].get('worst_ms')}ms "

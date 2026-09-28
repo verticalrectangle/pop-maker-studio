@@ -8,7 +8,7 @@ next to the user's audio file). C++ type: `AudioAnalysis` (`src/audio_analysis.h
 `get_audio_analysis`, the style expander (real `downbeats`; first-bar flag only when no analysis
 exists).
 
-Run it headless: IPC `analyze_audio {path, lyrics?: (string | {text, t0, t1})[], separate?: bool, stems_dir?}` runs
+Run it headless: IPC `analyze_audio {path, lyrics?: (string | {text, t0, t1})[], range?: [t0, t1], separate?: bool, stems_dir?}` runs
 v2 in the background with progress (`get_audio_analysis` → `{status: running, progress, stage}`),
 publishes the immutable result to `AppState::audio_analysis` on the UI thread, and commits the
 legacy beats/bpm fields to project state (`get_beats` keeps working). `get_audio_analysis` returns
@@ -17,6 +17,12 @@ flipped frame-boundary events by one frame after the clip offset).
 
 All times are **source-file seconds**. Script clips see timeline seconds (runtime maps through the
 audio clip playing the file: `timeline = source − in_point + clip.start`).
+
+`range: [t0, t1]` (source seconds) restricts decode, separation, analysis and normalisation to that
+span — like the reference, which analysed the 80–130 s segment of the song (SEG_START=80). Event
+times stay absolute (beats/hits/words carry source seconds; `duration` is the span end); `env` and
+`spectrum` stay span-local (frame 0 = span start), exactly like analysing a clipped file. The range
+is part of the cache key. Without `range` the whole file is analysed.
 
 ## JSON schema
 

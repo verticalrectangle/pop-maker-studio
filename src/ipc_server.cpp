@@ -1721,6 +1721,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         auto a = std::make_shared<AudioAnalysis>();
         std::string lerr;
         if (!audio_analysis_load_json(path, *a, &lerr)) { err = lerr; return {}; }
+        state.audio_request.active = true;
+        state.audio_request.from_json = true;
+        state.audio_request.json_path = path;
+        state.audio_request.audio_path.clear();
+        state.audio_request.lyrics.clear();
+        state.audio_request.has_range = false;
+        state.audio_request.separate = true;
+        state.audio_request.stems_dir.clear();
         state.audio_analysis = std::move(a);
         const AudioAnalysis& la = *state.audio_analysis;
         return {{"beats", la.beats.size()}, {"downbeats", la.downbeats.size()},
@@ -1904,6 +1912,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         AudioAnalysisOptions opt;
         opt.separate_stems = params.value("separate", true);
         opt.stems_dir = params.value("stems_dir", "");
+        if (params.contains("range") && params["range"].is_array() && params["range"].size() == 2) {
+            double rt0 = params["range"][0].get<double>(), rt1 = params["range"][1].get<double>();
+            if (rt1 > rt0 && rt0 >= 0.0) {
+                opt.has_range = true;
+                opt.range_t0 = rt0;
+                opt.range_t1 = rt1;
+            }
+        }
         if (params.contains("lyrics") && params["lyrics"].is_array())
             for (auto& l : params["lyrics"]) {
                 LyricLine ll;
@@ -1922,6 +1938,17 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 }
                 if (!ll.text.empty()) opt.lyrics.push_back(std::move(ll));
             }
+        // Record the request for .pms v72 persistence (republished on load).
+        state.audio_request.active = true;
+        state.audio_request.from_json = false;
+        state.audio_request.audio_path = apath;
+        state.audio_request.json_path.clear();
+        state.audio_request.lyrics = opt.lyrics;
+        state.audio_request.has_range = opt.has_range;
+        state.audio_request.range_t0 = opt.range_t0;
+        state.audio_request.range_t1 = opt.range_t1;
+        state.audio_request.separate = opt.separate_stems;
+        state.audio_request.stems_dir = opt.stems_dir;
         // Cache key: file path + size + mtime + lyrics hash (text + windows)
         // + stems flag, so a changed file or changed lyrics re-analyse. The
         // JSON lives in the media cache dir — never next to the user's file.
@@ -1945,6 +1972,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 hash_str(std::to_string(l.w0));
                 hash_str(std::to_string(l.w1));
             }
+        }
+        if (opt.has_range) {
+            hash_str("range" + std::to_string(opt.range_t0) + "-" + std::to_string(opt.range_t1));
         }
         char key[128];
         snprintf(key, sizeof(key), "%llu_%lld_%zx_%d", (unsigned long long)fsize,
@@ -5017,6 +5047,116 @@ void ipc_server_start() {
     set_nonblock(g_srv_fd);
 
     fprintf(stdout, "[ipc] listening on %s\n", g_sock_path.c_str());
+}
+
+// Republish the saved (.pms v72) analysis request on project load: cached
+// analysis publishes synchronously (first frame renders with it); a cache
+// miss starts the background analysis with progress like analyze_audio.
+void audio_analysis_republish(AppState& state) {
+    const auto rq = state.audio_request;
+    if (!rq.active) return;
+    if (s_audio_analysis.running.load()) return;
+    if (rq.from_json) {
+        if (rq.json_path.empty() || !std::filesystem::exists(rq.json_path)) return;
+        auto a = std::make_shared<AudioAnalysis>();
+        std::string lerr;
+        if (!audio_analysis_load_json(rq.json_path, *a, &lerr)) return;
+        state.audio_analysis = std::move(a);
+        state.beats.assign(state.audio_analysis->beats.begin(),
+                           state.audio_analysis->beats.end());
+        state.beat_bpm = state.audio_analysis->bpm;
+        return;
+    }
+    if (rq.audio_path.empty() || !std::filesystem::exists(rq.audio_path)) return;
+    AudioAnalysisOptions opt;
+    opt.lyrics = rq.lyrics;
+    opt.has_range = rq.has_range;
+    opt.range_t0 = rq.range_t0;
+    opt.range_t1 = rq.range_t1;
+    opt.separate_stems = rq.separate;
+    opt.stems_dir = rq.stems_dir;
+    // Same cache key as analyze_audio.
+    std::error_code ec;
+    uint64_t fsize = 0;
+    long long fmtime = 0;
+    {
+        auto st = std::filesystem::last_write_time(rq.audio_path, ec);
+        if (!ec) fmtime = (long long)st.time_since_epoch().count();
+        ec.clear();
+        fsize = (uint64_t)std::filesystem::file_size(rq.audio_path, ec);
+    }
+    size_t lh = 1469598103934665603ull;
+    auto hash_str = [&](const std::string& s) {
+        for (unsigned char c : s) { lh ^= c; lh *= 1099511628211ull; }
+    };
+    for (auto& l : opt.lyrics) {
+        hash_str(l.text);
+        if (l.has_window) {
+            hash_str(std::to_string(l.w0));
+            hash_str(std::to_string(l.w1));
+        }
+    }
+    if (opt.has_range) {
+        hash_str("range" + std::to_string(opt.range_t0) + "-" + std::to_string(opt.range_t1));
+    }
+    char key[128];
+    snprintf(key, sizeof(key), "%llu_%lld_%zx_%d", (unsigned long long)fsize,
+             fmtime, lh, opt.separate_stems ? 1 : 0);
+    std::string cache = cache_path(rq.audio_path + '\n' + key, "_analysis.json");
+    {
+        AudioAnalysis cached;
+        std::string lerr;
+        if (audio_analysis_load_json(cache, cached, &lerr) &&
+            cached.source == std::filesystem::absolute(rq.audio_path).string()) {
+            auto a = std::make_shared<AudioAnalysis>(std::move(cached));
+            state.audio_analysis = a;
+            state.beats.assign(a->beats.begin(), a->beats.end());
+            state.beat_bpm = a->bpm;
+            return;
+        }
+    }
+    std::string apath = rq.audio_path;
+    s_audio_analysis.running.store(true);
+    s_audio_analysis.done.store(false);
+    s_audio_analysis.progress.store(0.f);
+    {
+        std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+        s_audio_analysis.stage.clear();
+        s_audio_analysis.ok = false;
+        s_audio_analysis.error.clear();
+        s_audio_analysis.cache_path = cache;
+        s_audio_analysis.source = apath;
+    }
+    std::thread([apath, opt, cache]() {
+        AudioAnalysis a;
+        std::string aerr;
+        bool ok = audio_analysis_run(
+            apath, opt, a,
+            [](float p, const char* s) {
+                s_audio_analysis.progress.store(p);
+                std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+                s_audio_analysis.stage = s ? s : "";
+            },
+            &aerr);
+        {
+            std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+            if (ok) {
+                audio_analysis_save_json(a, cache, nullptr);
+                s_audio_analysis.result = std::move(a);
+                s_audio_analysis.ok = true;
+            } else {
+                s_audio_analysis.error = aerr;
+                s_audio_analysis.ok = false;
+            }
+        }
+        if (ok) {
+            std::lock_guard<std::mutex> lk(s_aa_pub_mu);
+            std::lock_guard<std::mutex> lk2(s_audio_analysis.mu);
+            s_aa_pub = std::make_shared<const AudioAnalysis>(s_audio_analysis.result);
+        }
+        s_audio_analysis.done.store(true);
+        s_audio_analysis.running.store(false);
+    }).detach();
 }
 
 void ipc_server_poll(AppState& state) {

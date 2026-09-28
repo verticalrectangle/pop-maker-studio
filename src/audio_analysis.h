@@ -65,6 +65,9 @@ struct AudioAnalysisOptions {
                                          // {text,t0,t1} lines align exactly like the reference
     std::string stems_dir;               // reuse precomputed stems (<dir>/{drums,bass,other,vocals}.wav);
                                          // when all four exist, separation is skipped
+    bool has_range = false;              // analyse only [range_t0, range_t1) (source seconds);
+                                         // decode/separate/analyse/normalise that span; times stay absolute
+    double range_t0 = 0.0, range_t1 = 0.0;
 };
 
 // Blocking full analysis; run on a worker thread. progress(0..1, stage label).
