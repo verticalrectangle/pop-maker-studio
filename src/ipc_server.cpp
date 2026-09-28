@@ -6,6 +6,7 @@
 #include "recorder.h"
 #include "video_recorder.h"
 #include "face_track.h"
+#include "face_cache.h"
 #include "face_filters.h"
 #include "agent_harness.h"
 #include "render.h"
@@ -2206,6 +2207,54 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "dump_face_input") {
         bool ok = face_track_dump_last("/tmp/face_input.ppm");
         json r; r["ok"] = ok;
+        return r;
+    }
+
+    // Blink acceptance probe: per-frame table for a video take from the face
+    // cache (built synchronously here): eyeOpen (geometric ratio), blendshape
+    // blink (mean eyeBlinkL/R), unified blink = max(blend, 1-eyeOpen/baseline)
+    // with the running high-percentile baseline. Returns
+    // {frames: [{i, eye_open, blend_blink, blink, src_time}], n}. Blocking
+    // (cache build + full track); call from the MCP layer, never the UI thread.
+    if (method == "get_face_blink") {
+        std::string path = params.value("path", "");
+        int rot_q = params.value("rot_q", 0);
+        if (path.empty()) { err = "path required"; return {}; }
+        rot_q = ((rot_q % 4) + 4) % 4;
+        if (!face_track_available()) {
+            err = "face models not found (models/face/*.onnx)"; return {};
+        }
+        auto prog = [&](float q) {
+            if (client_fd >= 0) send_progress(client_fd, req_id, q * 0.9f, "tracking");
+        };
+        if (!face_cache_ensure_sync(path, rot_q, prog)) {
+            err = "face cache build failed for: " + path; return {};
+        }
+        int n = face_cache_frame_count(path, rot_q);
+        if (n <= 0) { err = "face cache empty for: " + path; return {}; }
+        FaceOpenBaseline base;
+        json frames = json::array();
+        for (int fi = 0; fi < n; ++fi) {
+            FaceObs o;
+            double st = 0.0;
+            json f; f["i"] = fi;
+            if (!face_cache_frame(path, rot_q, fi, o, &st)) {
+                f["eye_open"] = 0.0; f["blend_blink"] = 0.0; f["blink"] = 0.0;
+                f["src_time"] = 0.0; f["face"] = false;
+                frames.push_back(std::move(f));
+                continue;
+            }
+            const float bb = o.has_blend
+                ? 0.5f * (o.blend[FB_EYE_BLINK_L] + o.blend[FB_EYE_BLINK_R]) : 0.f;
+            base.update(o.eye_open);
+            f["eye_open"] = o.eye_open;
+            f["blend_blink"] = bb;
+            f["blink"] = face_blink_signal(bb, o.eye_open, base.baseline());
+            f["src_time"] = st;
+            f["face"] = true;
+            frames.push_back(std::move(f));
+        }
+        json r; r["frames"] = std::move(frames); r["n"] = n;
         return r;
     }
 

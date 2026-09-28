@@ -1,6 +1,7 @@
 #include "platform.h"
 #include "fx_shader.h"
 #include "bg_presets.h"
+#include "skin_mask_cache.h"
 
 #if PMS_HAS_GL
 #include "gl_compat.h"
@@ -698,6 +699,26 @@ static void out_ensure(int slot, int w, int h) {
     make_tex_fbo(s.tex, s.fbo, w, h);
     s.w = w; s.h = h;
     s.primed = false;  // fresh texture holds null (black) data — don't feed it back yet
+}
+
+// ML skin-mask hook for the YCbCr skin-window shaders (skin_smooth, glass_skin):
+// when an async face+body-skin mask is cached for this source frame, bind it
+// on unit 1 and flip u_use_skin_mask so the shader samples ML confidence
+// instead of its fixed Cb/Cr window. Missing uniform locations (old programs)
+// and absent masks both fall back to YCbCr — never block the UI thread.
+static void skin_mask_bind(GLuint prog, const std::string& src_key, int w, int h) {
+    GLint use_loc = uni_loc(prog, "u_use_skin_mask");
+    if (use_loc < 0) return;  // not a skin-gated shader
+    unsigned mask = src_key.empty() ? 0 : skin_mask_texture(src_key, w, h);
+    if (!mask) {
+        glUniform1f(use_loc, 0.f);
+        return;
+    }
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, mask);
+    glUniform1i(uni_loc(prog, "u_skin_mask"), 1);
+    glUniform1f(use_loc, 1.f);
+    glActiveTexture(GL_TEXTURE0);
 }
 
 // Draw a fullscreen pass from src_tex into fbo.  The caller sets program uniforms first.
@@ -1670,7 +1691,21 @@ static FrameRing& frame_ring_ensure(int slot, int w, int h) {
     }
     return r;
 }
-
+// Current chain's ML skin-mask source (set by clip render paths, read by the
+// generated skin-gated passes). Pumped once per fx_apply so worker-completed
+// masks land without stalling the chain.
+static std::string g_skin_key;
+void fx_set_skin_source(const std::string& key, const uint8_t* rgb,
+                        int sw, int sh, int fw, int fh) {
+    g_skin_key = key;
+    if (!key.empty() && rgb && sw > 0 && sh > 0) {
+        // Display size: fx_apply's w/h isn't known at set time, so callers
+        // pass it explicitly (canvas half-res readback vs full frame).
+        // Defaults to source size (export path: same-size decode).
+        skin_mask_request(key, rgb, sw, sh, fw > 0 ? fw : sw, fh > 0 ? fh : sh);
+    }
+}
+const std::string& fx_skin_src_key() { return g_skin_key; }
 uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t)
 {
@@ -1695,8 +1730,11 @@ uintptr_t fx_apply(uintptr_t src_tex_in, int slot, int w, int h,
         return src_tex_in;
 
     if (w <= 0 || h <= 0) return src_tex_in;
-
-    // Save GL state BEFORE pp_ensure/out_ensure touch FBO bindings
+    // Land worker-completed skin masks before the chain runs (one upload max
+    // per chain keeps scrubbing bounded); the generated skin-gated passes
+    // bind via skin_mask_bind and fall back to YCbCr on a miss.
+    skin_mask_pump(1);
+     // Save GL state BEFORE pp_ensure/out_ensure touch FBO bindings
     GLint prev_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
     GLint prev_vp[4];

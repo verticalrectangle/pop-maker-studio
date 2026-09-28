@@ -1,6 +1,7 @@
 #pragma once
 #include "app.h"
 #include <cstdint>
+#include <string>
 
 static const int MAX_BG_SLOTS = 8;
 
@@ -114,9 +115,15 @@ struct FaceSpriteQuad {
 uintptr_t face_sprites_apply(uintptr_t src_tex, int slot, int w, int h,
                              const FaceSpriteQuad* quads, int n);
 
+// ML skin-mask source for the current fx_apply chain (skin_smooth/glass_skin).
+// Set by the clip render paths before fx_apply when the source frame's pixels
+// are on hand; empty = no mask (YCbCr fallback). Read by the generated
+// skin-gated passes via fx_skin_src_key(). GL thread only.
+void fx_set_skin_source(const std::string& key, const uint8_t* rgb,
+                        int sw, int sh, int fw = 0, int fh = 0);
+const std::string& fx_skin_src_key();
 uintptr_t fx_apply(uintptr_t src_tex, int slot, int w, int h,
                    const EffectAccum& ea, const CreativeFXAccum& cfx, float t);
-
 // Render a generated effect (FXType >= ChromaKey) on src_tex using default params.
 // Uses an internal preview slot — safe to call outside the normal video pipeline.
 // Returns a stable GL texture ID valid until the next call.

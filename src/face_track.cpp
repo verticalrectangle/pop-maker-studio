@@ -964,7 +964,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     {
         char tcmd[1024];
         snprintf(tcmd, sizeof(tcmd),
-                 "ffprobe -v error -select_streams v -show_entries "
+                 "ffprobe -v error -select_streams v:0 -show_entries "
                  "frame=pkt_pts_time -of csv=p=0 -- '%s' 2>/dev/null",
                  video_path.c_str());
         FILE* tp = popen(tcmd, "r");
@@ -978,9 +978,13 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
             pclose(tp);
         }
     }
+    // -fps_mode passthrough: the MOV is VFR (avg 19.2 fps over a 25.25 fps
+    // time base); without it ffmpeg DUPs 12 frames to the container rate, so
+    // the cache would hold 51 frames for 39 real ones and per-frame blink
+    // tables would misalign with every other frame-indexed consumer.
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-             "ffmpeg -v error -i '%s' -vf 'scale=%d:%d%s' "
+             "ffmpeg -v error -i '%s' -vf 'scale=%d:%d%s' -fps_mode passthrough "
              "-f rawvideo -pix_fmt rgb24 - 2>/dev/null",
              video_path.c_str(), hw2, hh2, xpose);
     FILE* p = popen(cmd, "r");

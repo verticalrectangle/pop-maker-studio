@@ -165,6 +165,7 @@ INTERNAL_IPC: set[str] = {
     "debug_fx_tone", "dump_face_input",                 # debug-only
     "get_snapshot_status", "get_bg_remove_status",      # pollers folded into blocking tools
     "get_beats", "get_fx_segments", "get_live_peaks",   # internal/UI-only readouts
+    "get_face_blink",   # blink-acceptance probe (read-only face-cache table)
 }
 
 
