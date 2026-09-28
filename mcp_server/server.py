@@ -681,9 +681,11 @@ async def list_tools() -> list[Tool]:
             name="get_media_info",
             description=(
                 "Probe a media file and return its codec/format metadata: duration (seconds), "
-                "width, height, fps, has_video, has_audio, video_codec, audio_codec, "
-                "sample_rate, channels. Use this to diagnose audio/video stream issues "
-                "before adding a clip. Read-only — no batch needed."
+                "width, height (coded, before rotation), rotation (display rotation in degrees "
+                "clockwise: 0/90/180/270 — swap width/height for 90/270), fps, has_video, "
+                "has_audio, video_codec, audio_codec, sample_rate, channels, live_photo (true "
+                "for an iPhone Live Photo companion movie). Use this to diagnose audio/video "
+                "stream issues before adding a clip. Read-only — no batch needed."
             ),
             inputSchema={
                 "type": "object",

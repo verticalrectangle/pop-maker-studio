@@ -2382,6 +2382,29 @@ float video_probe_duration(const std::string& path) {
     return dur;
 }
 
+// Container rotation in degrees clockwise (0/90/180/270): phone videos store raw
+// landscape pixels plus a display matrix (or a legacy "rotate" tag).
+static int stream_rotation(const AVStream* st) {
+#if LIBAVUTIL_VERSION_MAJOR >= 57
+    for (int i = 0; i < st->codecpar->nb_coded_side_data; ++i) {
+        const AVPacketSideData& sd = st->codecpar->coded_side_data[i];
+#else
+    for (int i = 0; i < st->nb_side_data; ++i) {
+        const AVPacketSideData& sd = st->side_data[i];
+#endif
+        if (sd.type == AV_PKT_DATA_DISPLAYMATRIX && sd.size >= 9 * (int)sizeof(int32_t)) {
+            double angle = -av_display_rotation_get((const int32_t*)sd.data);
+            int rot = ((int)round(angle) % 360 + 360) % 360;
+            if (rot == 90 || rot == 180 || rot == 270) return rot;
+        }
+    }
+    if (const AVDictionaryEntry* e = av_dict_get(st->metadata, "rotate", nullptr, 0)) {
+        int rot = ((atoi(e->value) % 360) + 360) % 360;
+        if (rot == 90 || rot == 180 || rot == 270) return rot;
+    }
+    return 0;
+}
+
 MediaFileInfo video_probe_file(const std::string& path) {
     MediaFileInfo info;
     AVFormatContext* fc = nullptr;
@@ -2405,6 +2428,7 @@ MediaFileInfo video_probe_file(const std::string& path) {
             info.has_video   = true;
             info.width       = cp->width;
             info.height      = cp->height;
+            info.rotation    = stream_rotation(st);
             if (st->avg_frame_rate.den > 0)
                 info.fps = av_q2d(st->avg_frame_rate);
             const AVCodecDescriptor* desc = avcodec_descriptor_get(cp->codec_id);
@@ -2417,6 +2441,9 @@ MediaFileInfo video_probe_file(const std::string& path) {
             if (desc) info.audio_codec = desc->name;
         }
     }
+    // iPhone Live Photo companion movies carry com.apple.quicktime.live-photo.* keys.
+    info.live_photo = av_dict_get(fc->metadata, "com.apple.quicktime.live-photo", nullptr,
+                                  AV_DICT_IGNORE_SUFFIX) != nullptr;
     avformat_close_input(&fc);
     return info;
 }
@@ -2745,27 +2772,7 @@ bool video_open_export(int slot, const std::string& path) {
     ex.info.fps      = av_q2d(st->avg_frame_rate);
 
     // Detect container rotation (phone portrait videos store raw as landscape + rotate tag).
-    ex.rotation = 0;
-#if LIBAVUTIL_VERSION_MAJOR >= 57
-    for (int i = 0; i < st->codecpar->nb_coded_side_data; ++i) {
-        const AVPacketSideData& sd = st->codecpar->coded_side_data[i];
-#else
-    for (int i = 0; i < st->nb_side_data; ++i) {
-        const AVPacketSideData& sd = st->side_data[i];
-#endif
-        if (sd.type == AV_PKT_DATA_DISPLAYMATRIX && sd.size >= 9 * (int)sizeof(int32_t)) {
-            double angle = -av_display_rotation_get((const int32_t*)sd.data);
-            int rot = ((int)round(angle) % 360 + 360) % 360;
-            if (rot == 90 || rot == 180 || rot == 270) { ex.rotation = rot; break; }
-        }
-    }
-    if (ex.rotation == 0) {
-        AVDictionaryEntry* e = av_dict_get(st->metadata, "rotate", nullptr, 0);
-        if (e) {
-            int rot = ((atoi(e->value) % 360) + 360) % 360;
-            if (rot == 90 || rot == 180 || rot == 270) ex.rotation = rot;
-        }
-    }
+    ex.rotation = stream_rotation(st);
 
     ex.sws = sws_getContext(
         ex.info.width, ex.info.height, ex.codec_ctx->pix_fmt,

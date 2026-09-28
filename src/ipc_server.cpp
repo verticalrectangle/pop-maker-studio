@@ -1973,6 +1973,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         r["audio_codec"] = mi.audio_codec;
         r["sample_rate"] = mi.sample_rate;
         r["channels"]    = mi.channels;
+        r["rotation"]    = mi.rotation;
+        r["live_photo"]  = mi.live_photo;
         return r;
     }
 

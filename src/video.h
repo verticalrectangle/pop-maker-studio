@@ -200,6 +200,8 @@ struct MediaFileInfo {
     std::string audio_codec;
     int    sample_rate = 0;
     int    channels    = 0;
+    int    rotation    = 0;      // display rotation, degrees clockwise (0/90/180/270)
+    bool   live_photo  = false;  // iPhone Live Photo companion movie
     std::string error;
 };
 MediaFileInfo video_probe_file(const std::string& path);
