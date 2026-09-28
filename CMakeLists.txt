@@ -653,3 +653,27 @@ target_link_libraries(vc_cli PRIVATE
 target_compile_options(vc_cli PRIVATE
     -Wall -Wextra -Wno-unused-parameter -O2
 )
+
+# ── separate4_cli: standalone 4-stem separator (htdemucs pipeline) ────────────
+# Runs separate_stems4 against the real htdemucs.onnx on a cached excerpt —
+# verifies STFT/overlap-add/iSTFT end to end without the app or audio analysis.
+# See tools/separate4_parity.py (PyTorch apply_model reference comparison).
+add_executable(separate4_cli
+    tools/separate4_cli.cpp
+    src/separate4.cpp
+    src/paths.cpp
+)
+target_include_directories(separate4_cli PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/vendor
+)
+if(DEFINED ONNXRUNTIME_ROOT)
+    target_include_directories(separate4_cli PRIVATE ${ONNXRUNTIME_ROOT}/include)
+    target_link_directories(separate4_cli PRIVATE ${ONNXRUNTIME_ROOT}/lib)
+else()
+    target_include_directories(separate4_cli PRIVATE /usr/include/onnxruntime)
+endif()
+target_link_libraries(separate4_cli PRIVATE onnxruntime fftw3f dl pthread)
+target_compile_options(separate4_cli PRIVATE
+    -Wall -Wextra -Wno-unused-parameter -O2
+)

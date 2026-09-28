@@ -204,7 +204,6 @@ The price was doing the conversion ourselves — a pickle VM, a wire-level ONNX 
 
 That's the why.
 
----
 
 ## Appendix A — benchmark methodology
 
@@ -232,3 +231,16 @@ The commits where this got real:
 - `4d50c4c` — FAISS index retrieval with no faiss dependency
 - `d564234` — standard RVC ONNX signature; ecosystem interop; sr probing
 - `b8ef6f0` — auto-octave transpose via `emb_pitch` fine-tune-diff register detection
+
+---
+
+## Appendix C — same playbook, second model: htdemucs 4-stem separation
+
+The voice-conversion story above is about *hand-building* ONNX graphs in C++ because no exporter existed. htdemucs (`src/separate4.cpp`, `tools/export_htdemucs_onnx.py`) is the same ONNX thesis with the opposite tactic: here a stock `torch.onnx.export` suffices, because the awkward half of the model — STFT/iSTFT, reflect padding, triangle overlap-add — is factored *out* of the graph into C++/FFTW (the sevagh/demucs.onnx split), leaving a pure real-valued conv-transformer core (`mix [1,2,343980]` + complex-as-channels spec `[1,4,2048,336]` → `zout` spectrogram + `xt` time branch). Export once with the project's Python venv; ship one 174 MB `htdemucs.onnx` alongside the 22.6 MB ORT `.so`; run CPU-only with zero Python at runtime.
+
+Two numerical traps, both found by differential SNR against PyTorch rather than by ear:
+
+- **The `_ispec` strip has two offsets, not one.** torch's `istft(center=True)` trims `n_fft/2` samples per side, and demucs then strips a further `kSpecPad = 1536` `_spec`-pad samples per side — the segment waveform starts at OLA index `n_fft/2 + kSpecPad` (3584), with istft length `hl*ceil(length/hl) + 2*pad` (347136), not `length + 2*pad`. Reading at base `n_fft/2` costs ~80 dB of SNR; the single biggest jump in the parity curve came from this one index.
+- **Normalisation lives in two places, and only one of them is `apply_model`.** The model's own freq/time-branch mean/std are per-segment and inside the exported graph, but `python -m demucs` *also* wraps the whole call in `Separator.separate_tensor`'s mono-mix mean/std (`(wav-mean)/std` in, `out*std+mean` out; `demucs/api.py`). Raw `apply_model()` skips it. C++ matches the CLI — what users actually get — and `tools/separate4_parity.py` compares through the same `Separator` path (the two paths differ from each other by only ~55–60 dB SNR, so mixing them up looks like a real bug).
+
+Result: **≥ 71 dB per-stem SNR** vs the PyTorch `Separator` on both reference excerpts (clip 0–30 s, song 0:30–1:00), at ~27 s per minute of audio CPU-only. Same moral as the RVC work: "it runs and produces stems" and "it produces *the right* stems" were separated by one index and one normalisation — found by diffing, not by listening.
