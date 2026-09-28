@@ -176,6 +176,17 @@ HuBERT feature extraction uses a shared `hubert.onnx` model exported once by the
 
 ---
 
+## Script clips
+
+A Script clip (`ClipType::Script`, contract in `docs/SCRIPT_API.md`) is a layer whose pixels come from a JS module, drawn every frame through an HTML Canvas 2D context. It is how agents author anything the fixed clip types cannot express; the Talking Heads rebuild (`~/Projects/seen-and-not-seen-pms/scene`) is two of them.
+
+- **Runtime** (`script_runtime.*`): one QuickJS-ng `JSRuntime` per clip, ES modules resolved relative to the importing file plus `pms:` built-ins (`assets/scripts/std/*.js`), every loaded file mtime-watched for hot reload, purity guards (`Math.random`, `Date.now`, timers throw). `pms.audio`/`pms.words`/`pms.json` are frozen and identity-stable until their source changes, so scripts can memoise on identity.
+- **Canvas 2D** (`script_context2d.*`): Skia m151 (prebuilt static, `cmake/Skia.cmake`; system FreeType/HarfBuzz). Path points are transformed when added (device space) and mapped back into the current transform at fill/stroke/clip time, so gradients and stroke widths follow the transform in effect when painting — the spec's semantics. Text is shaped with HarfBuzz (SkShaper), subpixel positioned with linear metrics — widths match Chrome/skia-canvas to the hundredth of a pixel. The prototype chain ends in a guard object (exotic get/set hooks) so any member outside the contract throws instead of silently doing nothing.
+- **GPU surface** (`script_gpu.*`): Skia's Ganesh GL backend runs on the app's own GL context. `begin()` snapshots the GL state (`gl_state_guard.h`: bindings, samplers, blend, pixel store, …) and resets Skia's cached state; `end()` flushes Skia, runs the clip's post shader (premultiplied in/out) and an unpremultiply pass into the layer texture, then restores the snapshot. The layer texture is straight alpha with row 0 = top — the same convention as decoded video — so every compositor treats it like a video layer.
+- **Compositing** (`script_clip.*`): one entry per clip key `"track:clip"`. The preview renders at the preview's size with the script still drawing in project pixels (the canvas is pre-scaled), `render_still` and export at full size (export waits for face tracks the script asked for; a script error aborts the export). A frame is re-rendered only when its frame index, sizes, params, audio analysis or watched files change. `f.t` is `frame / fps` in double — scripts see the frame grid, never the raw playhead.
+
+---
+
 ## Text rendering (`src/text_renderer.h/cpp`)
 
 All Text, Lyrics, and Subtitle clip rendering goes through `render_text_block(TextRenderCtx, lines)`. Both the canvas preview (`src/ui/canvas.cpp`) and the export overlay renderer (`src/overlay_renderer.cpp`) call this single function, guaranteeing pixel-exact correspondence between preview and export.
@@ -300,6 +311,12 @@ src/
   video.h / video.cpp    Three-tier preview (Native libav, MJPEG proxy, Still), GL upload
   proxy.h / proxy.cpp    Parallel MJPEG proxy generation (worker pool, ffmpeg + hwaccel)
   fx_shader.h/.cpp       GPU FX: GLSL shaders, fx_apply, scene compositor
+  script_runtime.h/.cpp  Script clips: QuickJS host, module loader, pms bindings, hot reload
+  script_context2d.h/.cpp  Canvas 2D on Skia (paths, gradients, text shaping, images, guard)
+  script_gpu.h/.cpp      Skia Ganesh surface on the app GL context, post/unpremultiply passes
+  script_clip.h/.cpp     Per-clip entries, frame cache, error card, compositor entry point
+  script_face.h/.cpp     FaceTrack dump (pms.face / get_media_face) from the face cache
+  gl_state_guard.h       GL state snapshot/restore around foreign renderers (Skia)
   overlay_renderer.h/.cpp  ImDrawList text/subtitle rendering (preview + export)
   text_renderer.h/.cpp   Shared text layer renderer (glow/bg/shadow/stroke/karaoke)
   render.h / render.cpp  GL export pipeline, ffmpeg pipe, snapshot
@@ -373,4 +390,6 @@ mcp_server/
 - **CTC alignment runs per Whisper segment, not over the full audio.** The (T+1)×(L+1) trellis is tiny (T = frames in one segment, L = chars in that segment's text). Whisper timestamps are the fallback if any segment fails.
 - **IPC mutations land on the main thread.** `ipc_server_poll` runs in the main loop. There is no concurrency between MCP edits and UI interactions — they interleave frame by frame.
 - **Single mutations auto-batch.** `begin_batch`/`end_batch` is only required when grouping multiple mutations as one undo step. Standalone `add_clip` becomes one undo step automatically (labelled with the method name).
+- **Skia shares the app's GL context.** Everything Skia does happens between `ScriptSurface::begin` and `end`, inside a `GLStateGuard`; anything added to the app's GL state assumptions (a new sampler binding convention, pixel-store default, …) must be covered by the guard.
+- **Container cropping is real.** MOV clean-aperture side data (iPhone Live Photos: 1920x1440 coded, 1744x1308 shown) is applied by ffmpeg's CLI (proxies, intermediates, face tracking) and by the libav export decoder; `video_probe_file` reports the cropped size. The face cache tracks rotation-tagged media in display orientation (v13).
 - **`set_clip_fx` dispatches via generated code.** `fx_clip_set_dispatch.h` is a codegen output. If you add a new effect to the registry, re-run `codegen_effects.py` or `set_clip_fx` won't recognize the new effect id.
