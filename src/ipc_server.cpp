@@ -1922,25 +1922,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 }
                 if (!ll.text.empty()) opt.lyrics.push_back(std::move(ll));
             }
-        // Also accept the reference-pipeline name "lines" for the same array.
-        if (params.contains("lines") && params["lines"].is_array())
-            for (auto& l : params["lines"]) {
-                LyricLine ll;
-                if (l.is_string()) {
-                    ll.text = l.get<std::string>();
-                } else if (l.is_object()) {
-                    ll.text = l.value("text", "");
-                    if (l.contains("t0") && l.contains("t1")) {
-                        double t0 = l.value("t0", 0.0), t1 = l.value("t1", 0.0);
-                        if (t1 > t0) {
-                            ll.has_window = true;
-                            ll.w0 = t0;
-                            ll.w1 = t1;
-                        }
-                    }
-                }
-                if (!ll.text.empty()) opt.lyrics.push_back(std::move(ll));
-            }
         // Cache key: file path + size + mtime + lyrics hash (text + windows)
         // + stems flag, so a changed file or changed lyrics re-analyse. The
         // JSON lives in the media cache dir — never next to the user's file.

@@ -8,7 +8,7 @@ next to the user's audio file). C++ type: `AudioAnalysis` (`src/audio_analysis.h
 `get_audio_analysis`, the style expander (real `downbeats`; first-bar flag only when no analysis
 exists).
 
-Run it headless: IPC `analyze_audio {path, lyrics?: (string | {text, t0, t1})[], separate?: bool, stems_dir?}` runs (`lines` is accepted as an alias of `lyrics`)
+Run it headless: IPC `analyze_audio {path, lyrics?: (string | {text, t0, t1})[], separate?: bool, stems_dir?}` runs
 v2 in the background with progress (`get_audio_analysis` → `{status: running, progress, stage}`),
 publishes the immutable result to `AppState::audio_analysis` on the UI thread, and commits the
 legacy beats/bpm fields to project state (`get_beats` keeps working). `get_audio_analysis` returns
@@ -63,7 +63,7 @@ loader accepts it.
 | strength `s` | `peak / p90(all picked peak heights of that kind)`, clipped to 1. Never divide by the global max. |
 | env | RMS per video frame (frame length 2048), divided by its 98th percentile, clipped to 1. |
 | spectrum | Mel power spectrum, 32 bands 30 Hz–16 kHz, n_fft 4096, hop = sr/fps, dB relative to max, mapped (dB+70)/70 → 0..99. |
-| words | Forced alignment (wav2vec2 CTC, float model preferred — `tools/export_wav2vec2_onnx.py`; vocal audio decoded directly at 16 kHz) of each lyric line inside its window, exactly like the reference (`pipeline/audio.py` align_words): per-window inference with per-window normalisation, trellis over the line\u2019s LETTERS (no separators), `merge_tokens` semantics (blank-stayed frames never form spans or confidence), word spans from first/last char, conf = mean span score, and the low-confidence rule `t0 = max(t0, t1 \u2212 (0.07\u00b7n_letters + 0.05))` with the end kept. Windows: `{text, t0, t1}` lines (source seconds, via `analyze_audio` `lines`) align reference-grade and skip the whisper pass; plain-text lines use the Whisper coarse pass (`src/audio_whisper_coarse.cpp`: in-process large-v3-turbo decode, order-constrained fuzzy match, segment-start windows with split points). |\n\n## Parity acceptance (reference song: "Seen and Not Seen", 1:28–2:03)
+| words | Forced alignment (wav2vec2 CTC, float model preferred — `tools/export_wav2vec2_onnx.py`; vocal audio decoded directly at 16 kHz) of each lyric line inside its window, exactly like the reference (`pipeline/audio.py` align_words): per-window inference with per-window normalisation, trellis over the line\u2019s LETTERS (no separators), `merge_tokens` semantics (blank-stayed frames never form spans or confidence), word spans from first/last char, conf = mean span score, and the low-confidence rule `t0 = max(t0, t1 \u2212 (0.07\u00b7n_letters + 0.05))` with the end kept. Windows: `{text, t0, t1}` lines (source seconds, via `analyze_audio` `lyrics`) align reference-grade and skip the whisper pass; plain-text lines use the Whisper coarse pass (`src/audio_whisper_coarse.cpp`: in-process large-v3-turbo decode, order-constrained fuzzy match, segment-start windows with split points). |\n\n## Parity acceptance (reference song: "Seen and Not Seen", 1:28–2:03)
 
 Against the reference `timeline.json`: beats ±20 ms; same downbeat phase; per kind ≥ 85 % of
 reference hits with `s ≥ 0.5` matched within 30 ms; ≥ 90 % of word starts within 80 ms — all on
