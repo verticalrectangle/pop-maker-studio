@@ -125,6 +125,25 @@ pre-existing (seek-table build) and unrelated to this branch.
 bench-only): idle reads p50 ≈ 251 ms at 4 presents/s under throttle, as
 expected.
 
+## Script clips (Talking Heads scene: picture + overlay Script clips, 1080×1920)
+
+Release build, headless Xvfb (Mesa llvmpipe — CPU-side numbers are what the
+budget in docs/SCRIPT_API.md §9 constrains; GPU raster on real hardware adds no
+main-thread time). Project built by `th_build` over IPC (two Script clips, FLAC
+audio clip with in_point 88 s, analysis loaded).
+
+| measure | picture.js | overlay.js |
+|---|---|---|
+| `render_ms` (JS + Skia recording), 30 stills across 0–35 s, p50 / p95 / max | 1.48 / 2.59 / 3.19 ms | 1.69 / 4.66 / 5.05 ms |
+| `flush_ms` (Skia flush + post + unpremultiply submit), p50 | 0.31 ms | 0.55 ms |
+
+`bench_scrub` sweep @60 Hz with both clips re-rendering every frame: UI
+p50 16.7 / p95 17.4 / p99 17.7 ms (vsync floor); `get_perf_stats` `script`
+stage EMA 1.5–1.65 ms per clip call. Debug builds run the same scene at
+~3.4 / 5.4 ms per clip (QuickJS unoptimised). First use of an image decodes
+it on the main thread (tens of ms per 1308×1744 JPEG): scenes decode their
+images at module top level (see picture.js), moving that cost to load time.
+
 ## Visual regression
 
 - Canvas snapshots (source=canvas, 293×522) at 5/15/30/45/55 s, pre-change
