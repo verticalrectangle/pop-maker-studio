@@ -48,7 +48,7 @@ Source checkpoint: the `htdemucs` bag of the demucs 4.1.0 Python package
 (MIT licence), single model signature 955717e8, downloaded from
 https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th
 via torch.hub (cached at ~/.cache/torch/hub/checkpoints/).
-Size: ~175 MB (float32 ONNX, 4 sources x hybrid conv-transformer).
+Size: ~174 MB (float32 ONNX, 4 sources x hybrid conv-transformer).
 Licence: MIT (Meta Demucs package, LICENSE file in the demucs repo).
 """
 import argparse

@@ -39,7 +39,7 @@ Used for word-level transcription with DTW token timestamps via whisper.cpp. No 
 | | |
 |---|---|---|
 | **File** | `htdemucs.onnx` |
-| **Size** | ~167 MB |
+| **Size** | ~174 MB |
 | **Path** | `models/` next to the binary (hard-linked from the shared-models store) |
 | **Source** | Meta Demucs `htdemucs` checkpoint (demucs 4.1.0 `htdemucs` bag, single model signature `955717e8`), via torch.hub: `https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th` |
 | **Conversion** | `~/Projects/seen-and-not-seen/.venv/bin/python tools/export_htdemucs_onnx.py --out /home/alexis/dev/pms-wt/shared-models/htdemucs.onnx` (HTDemucs core as a real-valued ONNX graph — spectrogram front/back end in C++/FFTW; the committed file was built this way) |
@@ -141,7 +141,7 @@ The detector runs sparse (re-detect on loss or every ~2 s), the landmark net den
 |---|---|---|---|
 | Whisper ggml-large-v3-turbo-q5_0 | ~584 MB | Yes (Setup screen) | Transcription |
 | Kim_Vocal_2 MDX-Net | ~64 MB | Yes (on first use) | Vocal separation |
-| htdemucs | ~167 MB | **No — manual** | 4-stem music separation |
+| htdemucs | ~174 MB | **No — manual** | 4-stem music separation |
 | u2net_human_seg | ~176 MB | Yes (Setup screen) | Background removal |
 | HuBERT | ~190 MB | **No — manual** | Voice conversion |
 | Piper voices | ~30–60 MB each | Yes (on first use) | TTS |

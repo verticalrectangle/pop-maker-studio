@@ -236,7 +236,7 @@ The commits where this got real:
 
 ## Appendix C — same playbook, second model: htdemucs 4-stem separation
 
-The voice-conversion story above is about *hand-building* ONNX graphs in C++ because no exporter existed. htdemucs (`src/separate4.cpp`, `tools/export_htdemucs_onnx.py`) is the same ONNX thesis with the opposite tactic: here a stock `torch.onnx.export` suffices, because the awkward half of the model — STFT/iSTFT, reflect padding, triangle overlap-add — is factored *out* of the graph into C++/FFTW (the sevagh/demucs.onnx split), leaving a pure real-valued conv-transformer core (`mix [1,2,343980]` + complex-as-channels spec `[1,4,2048,336]` → `zout` spectrogram + `xt` time branch). Export once with the project's Python venv; ship one 167 MB `htdemucs.onnx` alongside the 22.6 MB ORT `.so`; run CPU-only with zero Python at runtime.
+The voice-conversion story above is about *hand-building* ONNX graphs in C++ because no exporter existed. htdemucs (`src/separate4.cpp`, `tools/export_htdemucs_onnx.py`) is the same ONNX thesis with the opposite tactic: here a stock `torch.onnx.export` suffices, because the awkward half of the model — STFT/iSTFT, reflect padding, triangle overlap-add — is factored *out* of the graph into C++/FFTW (the sevagh/demucs.onnx split), leaving a pure real-valued conv-transformer core (`mix [1,2,343980]` + complex-as-channels spec `[1,4,2048,336]` → `zout` spectrogram + `xt` time branch). Export once with the project's Python venv; ship one 174 MB `htdemucs.onnx` alongside the 22.6 MB ORT `.so`; run CPU-only with zero Python at runtime.
 
 Two numerical traps, both found by differential SNR against PyTorch rather than by ear:
 
