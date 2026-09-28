@@ -57,6 +57,11 @@ bool lay_typography_script(AppState& state, const std::string& preset,
     t0 = snap_to_frame(t0, state.fps);
     t1 = snap_end_to_frame(t1, state.fps);
     if (!(t1 > t0)) t1 = t0 + 1.f / std::max(1, state.fps);
+    // One frame of headroom before the first word: frame-quantised renders
+    // (f.t = frame/fps) and raw-t clip activity otherwise disagree exactly on
+    // the boundary, blanking enter frames. Mirrors the native generator,
+    // whose latency shift + snapping also started clips ~a frame early.
+    t0 = std::max(0.f, t0 - 1.f / std::max(1, state.fps));
 
     // The typography layer lives on a dedicated track (kind Lyrics so the
     // timeline treats it as the lyrics lane). Reuse it across preset swaps;
