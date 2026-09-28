@@ -12,6 +12,7 @@
 // (false / empty), exactly like separate4_available() == false on th/demucs:
 // skin-gated shaders fall back to their fixed YCbCr windows.
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
