@@ -15,16 +15,21 @@ using json = nlohmann::json;
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <clip.wav> <out.json> [--stems-dir DIR]\n", argv[0]);
+        fprintf(stderr, "usage: %s <clip.wav> <out.json> [--stems-dir DIR] [--separate]\n", argv[0]);
         return 2;
     }
     std::string clip = argv[1], outp = argv[2], stems;
-    for (int i = 3; i + 1 < argc; i++)
-        if (std::string(argv[i]) == "--stems-dir") stems = argv[++i];
+    bool separate = false;
+    for (int i = 3; i < argc; i++) {
+        if (std::string(argv[i]) == "--stems-dir" && i + 1 < argc) stems = argv[++i];
+        else if (std::string(argv[i]) == "--separate") separate = true;
+    }
 
     AudioAnalysisOptions opt;
-    opt.separate_stems = stems.empty();  // injected stems skip separation entirely
-    opt.stems_dir = stems;
+    // Injected stems skip separation entirely (a reuse feature); --separate
+    // forces the real C++ htdemucs path even when a stems dir exists.
+    opt.separate_stems = separate || stems.empty();
+    opt.stems_dir = separate ? std::string() : stems;
     std::string lpath = outp + ".lyrics.json";
     {
         std::ifstream f(lpath);

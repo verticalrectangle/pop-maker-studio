@@ -25,16 +25,18 @@ CLIP_DEFAULT = Path("/home/alexis/Projects/seen-and-not-seen/public/audio/clip.w
 
 def load_lines():
     src = TH_AUDIO.read_text()
-    g = {}
+    g = {"__file__": str(TH_AUDIO)}
     exec(compile(src, str(TH_AUDIO), "exec"), g)
     return list(g["LINES"])
 
 
-def run_analysis(binary, clip, stems, out_json, lyrics):
+def run_analysis(binary, clip, stems, out_json, lyrics, separate=False):
     # lyrics sidecar the C++ driver reads (<out>.lyrics.json)
     Path(out_json + ".lyrics.json").write_text(json.dumps(lyrics))
     cmd = [str(binary), str(clip), str(out_json)]
-    if stems:
+    if separate:
+        cmd += ["--separate"]
+    elif stems:
         cmd += ["--stems-dir", str(stems)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
     sys.stdout.write(proc.stdout[-2000:] if len(proc.stdout) > 2000 else proc.stdout)
@@ -107,7 +109,12 @@ def main():
     ap.add_argument("--binary", default="build/analysis-parity")
     ap.add_argument("--clip", default=str(CLIP_DEFAULT))
     ap.add_argument("--ref", default=str(REF_DEFAULT))
-    ap.add_argument("--stems", default="")
+    ap.add_argument("--stems", default="",
+                    help="dir with precomputed {drums,bass,other,vocals}.wav; "
+                         "when omitted the C++ htdemucs separation runs in-process")
+    ap.add_argument("--separate", action="store_true",
+                    help="run the C++ separate_stems4 separation in-process "
+                         "(acceptance path) instead of --stems-dir injection")
     ap.add_argument("--out", default="/tmp/audio-work/parity")
     ap.add_argument("--lyrics", default="",
                     help="path to a JSON list of lyric lines (default: pipeline LINES)")
@@ -123,12 +130,17 @@ def main():
     ref = json.loads(Path(args.ref).read_text())
 
     results = {}
-    for tag, stems in (("stems", args.stems or None), ("fallback", None)):
-        out_json = outdir / f"analysis_{tag}.json"
+    sep = bool(args.separate)
+    # Acceptance: --separate runs the C++ separate_stems4 path; --stems DIR
+    # only injects precomputed stems (a reuse feature, not the acceptance
+    # path). With --separate the fallback row still runs without stems.
+    for tag, stems in (("stems", None if sep else (args.stems or None)), ("fallback", None)):
+        out_json = str(outdir / f"analysis_{tag}.json")
         print(f"=== [{tag}] running analysis ===", flush=True)
         got = run_analysis(args.binary, args.clip,
                            None if tag == "fallback" else stems,
-                           out_json, lines)
+                           out_json, lines,
+                           separate=(sep and tag == "stems"))
         m = metrics(got, ref)
         results[tag] = m
         print(f"=== [{tag}] beats worst {m['beats'].get('worst_ms')}ms "
