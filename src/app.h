@@ -1036,6 +1036,19 @@ struct AppState {
 
     // user-created effect presets (persisted to ~/.config/pop-maker-studio/presets.json)
     std::vector<EffectPreset> user_presets;
+    // ── th/perf bench + scrub runtime (never serialized) ────────────────────
+    bool  bench_running  = false;  // bench_scrub/bench_play driving seeks/playback
+    int   bench_frames   = 0;      // UI frames consumed by the running bench
+    int   bench_target   = 0;      // stop after this many UI frames (0 = idle)
+    double bench_t0      = 0.0;    // steady-clock start (s) of the running bench
+    double bench_play_t0 = 0.0;    // playhead at bench_play start
+    float pending_seek   = -1.f;   // coalesced seek: at most one applied per UI frame
+    bool  scrub_active   = false;  // playhead being dragged (ruler/timeline/bench)
+    bool  scrub_changed  = false;  // a coalesced seek landed this frame (dirty frame)
+    float last_shown_playhead = -1.f; // playhead last presented (correct-frame tracking)
+    double last_shown_t  = 0.0;    // steady-clock time (s) of last presented frame
+    double last_seek_t   = 0.0;    // steady-clock time (s) of last applied seek
+    float last_seek_to   = 0.f;    // most recent seek target (correct-frame tracking)
 
     std::vector<std::pair<int,int>> subtitle_clip_indices() const;
 };

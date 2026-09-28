@@ -58,17 +58,19 @@ bool          video_is_open    (int track_id = 0);
 PreviewSource video_source     (int track_id);
 VideoInfo     video_info       (int track_id = 0);
 uintptr_t     video_get_texture(int track_id, double playhead);
-
+// th/perf-decode drag-quality mode: while set, proxy decodes skip CPU pixel
+// FX (datamosh/glitch/VHS/grade) for cheap scrub previews; cleared on drag
+// end, after which get_texture refines to full quality. Canvas owns the flag.
+void          video_set_scrubbing(bool on);
 // Parallel pre-decode for multiple tracks. Each pair is (track_id, playhead).
-// Runs libav decode + CPU FX in worker threads, then performs the GL uploads
-// serially on the calling (main) thread. Subsequent video_get_texture() calls
-// for the same (track, playhead) return the pre-decoded texture without
-// redoing work. Safe to call with 0 or 1 entries (it falls through to direct
-// decode in that case).
+// Submit-only: dispatches async worker decodes (latest-request-wins per slot)
+// and returns immediately — NEVER blocks the calling (main) thread.
+// Subsequent video_get_texture() calls for the same (track, playhead) upload
+// the completed frame without redoing work. Safe to call with 0 entries.
 //
 // max_frames caps the per-slot prefetch window. 0 = use the default ring size,
 // which is what active clips want. Boundary-warm neighbors use a small cap
-// (e.g. 3) so they don't drag main-thread wait_idle alongside the active clip.
+// (e.g. 3) so they don't crowd out the active clip's requests.
 struct VideoPrefetchReq { int track_id; double playhead; int max_frames = 0; };
 void video_prefetch_frames(const VideoPrefetchReq* reqs, int n);
 

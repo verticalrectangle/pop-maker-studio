@@ -160,6 +160,7 @@ set(PMS_ENGINE_SOURCES
     src/overlay_renderer.cpp
     src/text_renderer.cpp
     src/shape.cpp
+    src/perf.cpp
 )
 
 

@@ -1753,9 +1753,15 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
     scene_begin((int)w, (int)h);
 
     // Pre-walk: identify every video clip that will be decoded this frame
-    // (active clip per track + any transition partner) and dispatch a parallel
-    // JPEG decode batch. The draw loop below then hits a cached upload path.
+    // (active clip per track + any transition partner) and submit async
+    // decodes (latest-request-wins per slot, never blocks). The draw loop
+    // below then hits the upload path for completed frames.
     // Mirrors the active-clip selection logic farther down — keep in sync.
+    // th/perf-decode drag-quality: while the playhead is being dragged
+    // (scrub_active from bench/drag seeks) decode at reduced cost — the
+    // video layer skips CPU pixel FX; refine to full quality lands once the
+    // drag stops (get_texture re-requests full and re-decodes on miss).
+    video_set_scrubbing(state.scrub_active);
     {
         auto make_pfx = [&](const Clip* cl_ptr, int ti) {
             (void)cl_ptr;
@@ -3007,6 +3013,16 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
         }
     }
+    // ── th/perf-decode: presented-frame hook for bench time-to-correct-frame ──
+    // draw_preview composited this playhead's video textures into the scene
+    // above, so the frame queued for present corresponds to state.playhead.
+    // bench_tick() (ipc_server.cpp) compares last_shown_playhead against
+    // last_seek_to to close its seek-to-present latency samples. last_shown_t
+    // shares bench_tick's now_s() epoch (process-start steady_clock), NOT
+    // ImGui::GetTime() (NewFrame-gated) — latencies are real wall time.
+    // PerfFrame owns all other canvas/main timing.
+    state.last_shown_playhead = state.playhead;
+    state.last_shown_t = bench_now_s();
 }
 
 // ── Canvas-source snapshot capture ───────────────────────────────────────────

@@ -51,9 +51,14 @@ static double mono_now_seconds() {
     return std::chrono::duration<double>(clock::now() - start).count();
 }
 
+// th/perf-decode: counts proxy-ready transitions in-session. clip_video_src()
+// memoizes per (source, epoch) so a proxy finishing mid-session invalidates
+// the memoized "source" answer without polling stats every frame.
+static std::atomic<uint64_t> g_ready_epoch{1};
+uint64_t proxy_ready_epoch() { return g_ready_epoch.load(std::memory_order_relaxed); }
 static void mark_ready_cached(const std::string& path) {
     std::lock_guard<std::mutex> lk(g_ready_cache_mu);
-    g_ready_cache.insert(path);
+    if (g_ready_cache.insert(path).second) g_ready_epoch++;
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -324,6 +329,41 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
     out.interm_idx_path = proxy_interm_idx_path(video_path);
     out.still_path      = proxy_still_path(video_path);
 
+    // th/perf-decode: the .idx is loaded once per path and kept in memory
+    // (offsets + probe sidecar). clip_video_src() calls proxy_load() per
+    // visible clip per frame — fopen/fread/parse per call showed up as
+    // thousands of syscalls per second during scrub. The cache keys on the
+    // .idx file's size+mtime so a regenerated proxy invalidates it.
+    struct IdxEntry {
+        std::vector<uint64_t> offsets;
+        long long fsize = -1;
+        long long mtime = 0;
+    };
+    static std::mutex s_idx_mu;
+    static std::unordered_map<std::string, IdxEntry> s_idx_cache;
+    long long cur_size = -1, cur_mtime = 0;
+    {
+        std::error_code ec;
+        auto fsz = fs::file_size(out.interm_idx_path, ec);
+        if (!ec) cur_size = (long long)fsz;
+        auto fmt = fs::last_write_time(out.interm_idx_path, ec);
+        if (!ec) cur_mtime = (long long)fmt.time_since_epoch().count();
+    }
+    {
+        std::lock_guard<std::mutex> lk(s_idx_mu);
+        auto it = s_idx_cache.find(video_path);
+        if (it != s_idx_cache.end() && it->second.fsize == cur_size &&
+            it->second.mtime == cur_mtime && !it->second.offsets.empty()) {
+            out.offsets = it->second.offsets;  // copy (caller mutates ProxyInfo)
+            out.frame_count = (int)out.offsets.size();
+            // fall through to the probe sidecar below (also cached in memory
+            // further down would complicate the early return — the sidecar
+            // file read is one small fopen, kept as is)
+            goto probe_sidecar;
+        }
+    }
+
+    {
     FILE* idx = fopen(out.interm_idx_path.c_str(), "rb");
     if (!idx) return false;
     uint32_t count = 0;
@@ -334,8 +374,20 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
     size_t got = fread(out.offsets.data(), sizeof(uint64_t), count, idx);
     fclose(idx);
     if (got != count) return false;
+    {
+        std::lock_guard<std::mutex> lk(s_idx_mu);
+        IdxEntry e;
+        e.offsets = out.offsets;
+        e.fsize = cur_size;
+        e.mtime = cur_mtime;
+        s_idx_cache[video_path] = std::move(e);
+    }
+    }
 
-    out.frame_count = (int)count;
+    out.frame_count = (int)out.offsets.size();
+probe_sidecar:;
+;
+    // note: probe sidecar below fills fps/dims (cached on disk from prior runs)
 
     // Probe sidecar: fps + dims from a previous proxy_load, keyed to the
     // proxy's frame count. Without it, EVERY slot open forked two synchronous
@@ -343,19 +395,39 @@ bool proxy_load(const std::string& video_path, ProxyInfo& out) {
     // thread per source, which is what made opening a media-heavy project
     // freeze for seconds.
     std::string cache_path = out.interm_idx_path + ".probe";
+    struct ProbeEntry { long long count = -1; int64_t fn = 0, fd = 1; int w = 0, h = 0; };
+    static std::mutex s_probe_mu;
+    static std::unordered_map<std::string, ProbeEntry> s_probe_cache;
+    {
+        std::lock_guard<std::mutex> lk(s_probe_mu);
+        auto pit = s_probe_cache.find(video_path);
+        if (pit != s_probe_cache.end() && pit->second.count == (long long)out.offsets.size() &&
+            pit->second.fd > 0 && pit->second.w > 0 && pit->second.h > 0) {
+            out.fps_num = pit->second.fn;
+            out.fps_den = pit->second.fd;
+            out.fps     = (double)pit->second.fn / (double)pit->second.fd;
+            out.width   = pit->second.w;
+            out.height  = pit->second.h;
+            return true;
+        }
+    }
     {
         FILE* c = fopen(cache_path.c_str(), "r");
         if (c) {
             long long cc = 0, fn = 0, fd = 0;
             int cw = 0, ch = 0;
             if (fscanf(c, "%lld %lld %lld %d %d", &cc, &fn, &fd, &cw, &ch) == 5 &&
-                cc == (long long)count && fd > 0 && cw > 0 && ch > 0) {
+                cc == (long long)out.offsets.size() && fd > 0 && cw > 0 && ch > 0) {
                 out.fps_num = (int64_t)fn;
                 out.fps_den = (int64_t)fd;
                 out.fps     = (double)fn / (double)fd;
                 out.width   = cw;
                 out.height  = ch;
                 fclose(c);
+                std::lock_guard<std::mutex> lk(s_probe_mu);
+                ProbeEntry pe;
+                pe.count = cc; pe.fn = fn; pe.fd = fd; pe.w = cw; pe.h = ch;
+                s_probe_cache[video_path] = pe;
                 return true;
             }
             fclose(c);
