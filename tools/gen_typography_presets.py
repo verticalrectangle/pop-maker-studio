@@ -166,12 +166,43 @@ def emit(presets, check=False):
     return bad
 
 
+def esc(s):
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def emit_table(presets, check=False):
+    """C++ picker table (id/label/category/tagline) for the Typography panel."""
+    lines = ["#pragma once",
+             "// Auto-generated from src/typography_presets.h by",
+             "// tools/gen_typography_presets.py — do not edit.",
+             "struct TypoJsPreset { const char* id; const char* name;",
+             "                     const char* category; const char* tagline; };",
+             "static const TypoJsPreset kTypoJsPresets[] = {"]
+    for d in presets:
+        lines.append('    {"%s", "%s", "%s", "%s"},' %
+                     (esc(d["id"]), esc(d["label"]), esc(d["category"]),
+                      esc(d["tagline"])))
+    lines.append("};")
+    lines.append("static const int kNTypoJsPresets = %d;" % len(presets))
+    body = "\n".join(lines) + "\n"
+    out = os.path.join(REPO, "src", "generated", "typography_js_presets.h")
+    if check:
+        if not os.path.exists(out) or open(out).read() != body:
+            print("STALE: " + out)
+            return 1
+        return 0
+    with open(out, "w") as fh:
+        fh.write(body)
+    return 0
+
+
 def main():
     check = "--check" in sys.argv
     src = open(HDR).read()
     presets = parse_presets(src)
     assert len(presets) == 76, "expected 76 presets, got %d" % len(presets)
     bad = emit(presets, check)
+    bad += emit_table(presets, check)
     if check:
         sys.exit(1 if bad else 0)
     print("wrote %d preset modules to %s" % (len(presets), OUT_DIR))

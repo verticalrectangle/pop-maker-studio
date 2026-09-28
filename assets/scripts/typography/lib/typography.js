@@ -607,9 +607,10 @@ export function renderPreset(f, cfg) {
   };
   const famKey = (family || '').toLowerCase();
   // Geometry (wrap, line height, slots) lives in native px; only the Skia
-  // font size is scaled to match the ImGui bake.
+  // font size is scaled to match the ImGui bake. No family = Inter Black
+  // (the native default face): its bake ratio is 1.21.
   const requested = fsz;
-  const baked = famKey in BAKED_SCALE ? BAKED_SCALE[famKey] : 1.0;
+  const baked = famKey ? (famKey in BAKED_SCALE ? BAKED_SCALE[famKey] : 1.0) : 1.21;
   fsz = fsz / baked;
   const topOff = (famKey in PEN_SHIFT_RATE ? PEN_SHIFT_RATE[famKey] : 0.15) * requested;
   const lineH0 = requested * LINE_H;
