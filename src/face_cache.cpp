@@ -15,8 +15,11 @@
 
 namespace {
 
-// Per-frame record: score + FT_NPTS*2 raw coords + FT_NBLEND blendshapes.
-static constexpr size_t FC_REC = 1 + (size_t)FT_NPTS * 2 + FT_NBLEND;
+// Per-frame record: score + FT_NPTS*2 raw coords + FT_NBLEND blendshapes +
+// eyeOpen (geometric ratio) + source presentation time (seconds into the
+// take, from the container's per-frame pts — VFR sources report real times).
+static constexpr size_t FC_REC = 1 + (size_t)FT_NPTS * 2 + FT_NBLEND + 2;
+static constexpr uint32_t FC_VERSION = 11;  // v11: VFR passthrough decode (39 real frames, no ffmpeg dups)
 
 struct CacheData {
     int   rot_q = 0;
@@ -53,8 +56,8 @@ std::shared_ptr<CacheData> load_file(const std::string& take_path, int rot_q) {
                fread(&rq, 4, 1, f) == 1 && fread(&fps, 4, 1, f) == 1 &&
                fread(&rw, 4, 1, f) == 1 && fread(&rh, 4, 1, f) == 1 &&
                fread(&count, 4, 1, f) == 1;
-    // v9 = CoreML EP + sync live mode; older caches are rebuilt.
-    if (!hdr || magic != 0x46534D50 || version != 9 || rq != rot_q ||
+    // v11 = VFR passthrough decode; v10 sidecars (51 dup frames) are rebuilt.
+    if (!hdr || magic != 0x46534D50 || version != FC_VERSION || rq != rot_q ||
         count == 0 || count > 1000000 || fps <= 0.f) {
         fclose(f);
         return nullptr;
@@ -159,9 +162,19 @@ bool face_cache_obs(const std::string& take_path, int rot_q,
             return false;
         d = it->second.data;
     }
-    int fi = (int)(src_t * d->fps + 0.5);
-    if (fi < 0) fi = 0;
-    if (fi >= d->count) fi = d->count - 1;
+    // Frames carry their own source presentation times (VFR-safe): pick the
+    // frame whose time is nearest to src_t.
+    int fi = 0;
+    {
+        const size_t stride = FC_REC;
+        float best = 1e30f;
+        for (int i = 0; i < d->count; ++i) {
+            const float t = d->rec[(size_t)i * stride + FC_REC - 1];
+            const float dt = t - (float)src_t;
+            const float adt = dt < 0.f ? -dt : dt;
+            if (adt < best) { best = adt; fi = i; }
+        }
+    }
     const float* r = &d->rec[(size_t)fi * FC_REC];
     if (r[0] <= 0.f) return false;       // no face on this frame
     out.valid = true;
@@ -177,6 +190,48 @@ bool face_cache_obs(const std::string& take_path, int rot_q,
         out.blend[k] = bl[k];
         if (bl[k] != 0.f) out.has_blend = true;
     }
+    out.eye_open = bl[FT_NBLEND];
+    return true;
+}
+
+int face_cache_frame_count(const std::string& take_path, int rot_q) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    auto it = g_entries.find(take_path);
+    if (it == g_entries.end() || it->second.status != FaceCacheStatus::Ready ||
+        !it->second.data || it->second.data->rot_q != rot_q)
+        return 0;
+    return it->second.data->count;
+}
+
+bool face_cache_frame(const std::string& take_path, int rot_q, int fi,
+                      FaceObs& out, double* src_time) {
+    std::shared_ptr<CacheData> d;
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        auto it = g_entries.find(take_path);
+        if (it == g_entries.end() || it->second.status != FaceCacheStatus::Ready ||
+            !it->second.data || it->second.data->rot_q != rot_q)
+            return false;
+        d = it->second.data;
+    }
+    if (fi < 0 || fi >= d->count) return false;
+    const float* r = &d->rec[(size_t)fi * FC_REC];
+    if (r[0] <= 0.f) return false;       // no face on this frame
+    out.valid = true;
+    out.score = r[0];
+    out.w = d->raw_w; out.h = d->raw_h;
+    for (int k = 0; k < FT_NPTS; ++k) {
+        out.pts[k][0] = r[1 + k*2];
+        out.pts[k][1] = r[2 + k*2];
+    }
+    const float* bl = r + 1 + FT_NPTS * 2;
+    out.has_blend = false;
+    for (int k = 0; k < FT_NBLEND; ++k) {
+        out.blend[k] = bl[k];
+        if (bl[k] != 0.f) out.has_blend = true;
+    }
+    out.eye_open = bl[FT_NBLEND];
+    if (src_time) *src_time = (double)r[FC_REC - 1];
     return true;
 }
 

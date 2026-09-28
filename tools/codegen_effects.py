@@ -162,6 +162,9 @@ def main():
     # Pipeline: save pre_tex, run effect, then blend if amount < 1.
     # Power curve applied per-param when setting uniforms.
     # Transform effects have no shader — skip them entirely here.
+    # Skin-gated shaders (skin_smooth, glass_skin) take an optional ML mask
+    # via skin_mask_bind (no-op for every other program: unknown uniform).
+    SKIN_GATED = {"skin_smooth", "glass_skin"}
     lines = []
     for e in shader_effects:
         eid = e["id"]
@@ -178,6 +181,8 @@ def main():
         for p in e["params"]:
             if p.get("hidden"): continue
             lines.extend(uniform_set_lines(p, eid))
+        if eid in SKIN_GATED:
+            lines.append(f'            skin_mask_bind(p, fx_skin_src_key(), w, h);')
         lines.append(f'            run1(p);')
         lines.append(f'            if (cfx.{eid}_amount < 0.999f) {{')
         lines.append(f'                draw_blend_pass(pre_tex, cur, cfx.{eid}_amount, g_pp.fbo[pslot], w, h);')

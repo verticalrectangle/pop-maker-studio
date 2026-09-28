@@ -11,6 +11,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
@@ -306,6 +307,17 @@ static bool landmarks_from_box(const uint8_t* rgb, int w, int h,
         out.has_blend = true;
     } catch (...) { out.has_blend = false; }   // mesh still usable without
 
+    // Geometric eye openness for this frame (stable behind glasses —
+    // drives the unified blink signal in face_metrics.h).
+    {
+        float xy[FT_NPTS * 2];
+        for (int k = 0; k < FT_NPTS; ++k) {
+            xy[2 * k]     = out.pts[k][0];
+            xy[2 * k + 1] = out.pts[k][1];
+        }
+        out.eye_open = face_eye_open_ratio(xy);
+    }
+
     out.score = conf;
     out.valid = true;
     return true;
@@ -476,6 +488,7 @@ struct FaceTrack {
     int        since_detect = 0;
     int        misses = 0;
     double     t_frame = 0;               // steady seconds of last update
+    FaceOpenBaseline open_base;           // running open-eye baseline
 };
 static FaceTrack g_tracks[FT_MAX_FACES];
 
@@ -630,9 +643,21 @@ static bool track_step(FaceTrack& t, const std::vector<uint8_t>& frame,
         }
         t.smooth.has_blend = true;
     }
+    // Geometric eye openness rides the SMOOTHED mesh (what consumers see).
+    // Blendshapes lag a fast blink through their own EMA, so copy the fresh
+    // per-frame value and let the baseline track the smoothed geometry.
     t.smooth.score = obs.score;
     t.smooth.valid = true;
     t.smooth.w = obs.w; t.smooth.h = obs.h;
+    {
+        float xy[FT_NPTS * 2];
+        for (int k = 0; k < FT_NPTS; ++k) {
+            xy[2 * k]     = t.smooth.pts[k][0];
+            xy[2 * k + 1] = t.smooth.pts[k][1];
+        }
+        t.smooth.eye_open = face_eye_open_ratio(xy);
+    }
+    t.open_base.update(t.smooth.eye_open);
     t.t_frame = now;
     t.misses = 0;
     return true;
@@ -660,6 +685,7 @@ static bool track_seed(FaceTrack& t, const std::vector<uint8_t>& frame,
     t.smooth = obs;
     t.smooth.score = df.score;
     store_box_geom(t.smooth, box, t.boxg);
+    t.open_base.update(t.smooth.eye_open);
     t.t_frame = now;
     t.active = true;
     return true;
@@ -725,6 +751,7 @@ static void worker_main() {
                     local[0] = FaceTrack{};
                     local[0].smooth = obs;
                     store_box_geom(obs, det_box, local[0].boxg);
+                    local[0].open_base.update(obs.eye_open);
                     local[0].t_frame = now;
                     local[0].active = true;
                     active = 1;
@@ -931,9 +958,33 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     const char* xpose = rot_q == 1 ? ",transpose=1"
                       : rot_q == 3 ? ",transpose=2"
                       : rot_q == 2 ? ",hflip,vflip" : "";
+    // Per-frame source presentation times (VFR-safe cache lookups): decode
+    // once for pixels, probe once for the container's per-frame pts.
+    std::vector<double> frame_times;
+    {
+        char tcmd[1024];
+        snprintf(tcmd, sizeof(tcmd),
+                 "ffprobe -v error -select_streams v:0 -show_entries "
+                 "frame=pkt_pts_time -of csv=p=0 -- '%s' 2>/dev/null",
+                 video_path.c_str());
+        FILE* tp = popen(tcmd, "r");
+        if (tp) {
+            char line[64];
+            while (fgets(line, sizeof(line), tp)) {
+                char* ep = nullptr;
+                double t = strtod(line, &ep);
+                if (ep != line) frame_times.push_back(t);
+            }
+            pclose(tp);
+        }
+    }
+    // -fps_mode passthrough: the MOV is VFR (avg 19.2 fps over a 25.25 fps
+    // time base); without it ffmpeg DUPs 12 frames to the container rate, so
+    // the cache would hold 51 frames for 39 real ones and per-frame blink
+    // tables would misalign with every other frame-indexed consumer.
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-             "ffmpeg -v error -i '%s' -vf 'scale=%d:%d%s' "
+             "ffmpeg -v error -i '%s' -vf 'scale=%d:%d%s' -fps_mode passthrough "
              "-f rawvideo -pix_fmt rgb24 - 2>/dev/null",
              video_path.c_str(), hw2, hh2, xpose);
     FILE* p = popen(cmd, "r");
@@ -942,8 +993,8 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     const int total_est = (int)(info.duration * info.fps + 0.5);
     const size_t frame_bytes = (size_t)hw2 * hh2 * 3;   // pre-transpose == post (same pixel count)
     std::vector<uint8_t> frame(frame_bytes);
-    // per frame: score + FT_NPTS*2 (raw full-res) + FT_NBLEND
-    const size_t REC = 1 + (size_t)FT_NPTS * 2 + FT_NBLEND;
+    // per frame: score + FT_NPTS*2 (raw full-res) + FT_NBLEND + eyeOpen + src_t
+    const size_t REC = 1 + (size_t)FT_NPTS * 2 + FT_NBLEND + 2;
     std::vector<float> records;
     records.reserve((size_t)(total_est > 0 ? total_est : 256) * REC);
 
@@ -1015,9 +1066,13 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
             smooth.score = obs.score;
         }
         // Record in RAW full-res coords (same remap as the live mirror).
+        const float src_t = (n < (int)frame_times.size())
+            ? (float)frame_times[n]
+            : (info.fps > 0 ? (float)n / (float)info.fps : 0.f);
         records.push_back(smooth.valid ? smooth.score : 0.f);
         if (!smooth.valid) {
-            records.insert(records.end(), REC - 1, 0.f);
+            records.insert(records.end(), REC - 2, 0.f);
+            records.push_back(src_t);
             ++n;
             continue;
         }
@@ -1033,6 +1088,18 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
         }
         for (int k = 0; k < FT_NBLEND; ++k)
             records.push_back(smooth.has_blend ? smooth.blend[k] : 0.f);
+        // Geometric eye openness recomputed on the recorded RAW coords
+        // (what downstream blink consumers see).
+        {
+            const size_t base = records.size() - FT_NBLEND - (size_t)FT_NPTS * 2;
+            float xy[FT_NPTS * 2];
+            for (int k = 0; k < FT_NPTS; ++k) {
+                xy[2 * k]     = records[base + k * 2];
+                xy[2 * k + 1] = records[base + k * 2 + 1];
+            }
+            records.push_back(face_eye_open_ratio(xy));
+        }
+        records.push_back(src_t);
         ++n;
         if (progress && total_est > 0 && (n & 7) == 0)
             progress((float)n / (float)total_est);
@@ -1043,7 +1110,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     std::string tmp = out_path + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
-    uint32_t magic = 0x46534D50, version = 9;   // v9: CoreML EP + sync live mode
+    uint32_t magic = 0x46534D50, version = 11;  // v11: VFR passthrough decode
     int32_t  rq = rot_q, rw = W, rh = H;
     float    fps = (float)info.fps;
     uint32_t count = (uint32_t)n;

@@ -2281,6 +2281,7 @@
             glUniform1f(uni_loc(p, "u_strength"), cfx.skin_smooth_amount);
             glUniform1f(uni_loc(p, "u_radius"), cfx.skin_smooth_radius);
             glUniform1f(uni_loc(p, "u_tone"), cfx.skin_smooth_tone);
+            skin_mask_bind(p, fx_skin_src_key(), w, h);
             run1(p);
             if (cfx.skin_smooth_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.skin_smooth_amount, g_pp.fbo[pslot], w, h);
@@ -2408,6 +2409,7 @@
             glUniform1f(uni_loc(p, "u_strength"), cfx.glass_skin_amount);
             glUniform1f(uni_loc(p, "u_radius"), cfx.glass_skin_radius);
             glUniform1f(uni_loc(p, "u_gloss"), cfx.glass_skin_gloss);
+            skin_mask_bind(p, fx_skin_src_key(), w, h);
             run1(p);
             if (cfx.glass_skin_amount < 0.999f) {
                 draw_blend_pass(pre_tex, cur, cfx.glass_skin_amount, g_pp.fbo[pslot], w, h);

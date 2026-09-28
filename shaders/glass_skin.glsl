@@ -4,6 +4,8 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_tex_w;
 uniform float u_tex_h;
+uniform sampler2D u_skin_mask;  // ML face+body-skin confidence (optional)
+uniform float u_use_skin_mask;  // 1 = sample u_skin_mask, 0 = YCbCr fallback
 uniform float u_radius;   // smoothing radius px
 uniform float u_gloss;    // 0..1 wet-highlight sheen
 
@@ -11,7 +13,8 @@ uniform float u_gloss;    // 0..1 wet-highlight sheen
 // like Skin Smooth, plus a luminous "wet" sheen — skin speculars get
 // expanded so the surface reads dewy instead of matte.
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
-float skin_mask(vec3 c) {
+float skin_mask(vec3 c, float ml) {
+    if (u_use_skin_mask > 0.5) return ml;
     float cb = 0.5 - 0.168736 * c.r - 0.331264 * c.g + 0.5 * c.b;
     float cr = 0.5 + 0.5 * c.r - 0.418688 * c.g - 0.081312 * c.b;
     float mb = smoothstep(0.262, 0.342, cb) * (1.0 - smoothstep(0.458, 0.538, cb));
@@ -20,8 +23,9 @@ float skin_mask(vec3 c) {
 }
 void main() {
     vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    float ml_mask = (u_use_skin_mask > 0.5) ? texture(u_skin_mask, v_uv).r : 0.0;
     vec4 src = texture(u_tex, v_uv);
-    float mask = skin_mask(src.rgb);
+    float mask = skin_mask(src.rgb, ml_mask);
     vec3 c = src.rgb;
     if (mask > 0.01) {
         float lc = luma(c);

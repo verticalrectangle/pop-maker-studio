@@ -968,7 +968,11 @@ static bool is_still_ext(const std::string& path) {
 // still that loaded into a slot a later clip overwrote came out as that other
 // image (or black). A per-path texture is stable; repeated uses share it. Freed
 // in each render's teardown via clear_ex_still_tex().
-struct ExStillTex { GLuint tex = 0; int w = 0, h = 0; };
+struct ExStillTex {
+    GLuint tex = 0; int w = 0, h = 0;
+    std::vector<uint8_t> px;  // decoded RGBA (for the ML skin-mask fill)
+    int pw = 0, ph = 0;
+};
 static std::unordered_map<std::string, ExStillTex> g_ex_still_tex;
 static void clear_ex_still_tex() {
     for (auto& kv : g_ex_still_tex)
@@ -1009,6 +1013,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
 {
     if (!cl || cl->text.empty()) return false;
     float src_t = clip_src_time(*cl, at_time);
+    // Scratch for RGBA→RGB strip feeding the async ML skin-mask source.
+    static thread_local std::vector<uint8_t> s_skin_rgb;
 
     // One-shot per-clip diagnostic: prints once on the first frame for each
     // distinct (clip.start, clip.end, speed) tuple seen during the export so
@@ -1050,6 +1056,10 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
                 px = stbi_load(still.c_str(), &sw, &sh, &sc, 4);
             }
             if (!px) return false;
+            // Keep RGB pixels for the async ML skin-mask fill below (freed
+            // with the texture in clear_ex_still_tex()).
+            st.px.assign(px, px + (size_t)sw * sh * 4);
+            st.pw = sw; st.ph = sh;
             glGenTextures(1, &st.tex);
             glBindTexture(GL_TEXTURE_2D, st.tex);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -1068,8 +1078,27 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
             CreativeFXAccum glass_cfx = collect_glass_fx(state, at_time, ti);
             if (glass_cfx.any_gen_fx || glass_cfx.any_cfx ||
                 glass_ea.any_color || glass_ea.any_blur ||
-                glass_ea.any_vignette || glass_ea.any_text)
+                glass_ea.any_vignette || glass_ea.any_text) {
+                // Stills decode once per render; the mask cache keys stills by
+                // path (no time axis) and fills on first use from kept pixels.
+                if (!st.px.empty() && st.pw > 0 && st.ph > 0) {
+                    s_skin_rgb.resize((size_t)st.pw * st.ph * 3);
+                    const uint8_t* s4 = st.px.data();
+                    uint8_t* d3 = s_skin_rgb.data();
+                    for (size_t i = 0, n = (size_t)st.pw * st.ph; i < n; ++i) {
+                        d3[0] = s4[0]; d3[1] = s4[1]; d3[2] = s4[2];
+                        d3 += 3; s4 += 4;
+                    }
+                    char skbuf[512];
+                    snprintf(skbuf, sizeof(skbuf), "%s@still", cl->text.c_str());
+                    fx_set_skin_source(skbuf, s_skin_rgb.data(), st.pw, st.ph);
+                } else {
+                    fx_set_skin_source(std::string(), nullptr, 0, 0);
+                }
                 cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
+            } else {
+                fx_set_skin_source(std::string(), nullptr, 0, 0);
+            }
         }
 
         float px_ = cl->eval_prop("pos_x",    at_time);
@@ -1152,6 +1181,22 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
         }
     }
     int vid_w = vf->width, vid_h = vf->height;
+    // ML skin-mask source for this exact source frame (async/cached — the
+    // chain never blocks; YCbCr covers the miss). Key includes src_t so a
+    // scrub lands the right face. Decoded pixels are RGBA; the mask cache
+    // takes RGB, so strip alpha into the function scratch buffer.
+    {
+        char skbuf[512];
+        snprintf(skbuf, sizeof(skbuf), "%s@vf:%.3f", cl->text.c_str(), (double)src_t);
+        s_skin_rgb.resize((size_t)vf->width * vf->height * 3);
+        const uint8_t* s4 = vf->data;
+        uint8_t* d3 = s_skin_rgb.data();
+        for (size_t i = 0, n = (size_t)vf->width * vf->height; i < n; ++i) {
+            d3[0] = s4[0]; d3[1] = s4[1]; d3[2] = s4[2];
+            d3 += 3; s4 += 4;
+        }
+        fx_set_skin_source(skbuf, s_skin_rgb.data(), vf->width, vf->height);
+    }
     video_free_frame(vf);
 
     // Pre-composite: glass FX/adjustments on the same track as this video clip.
@@ -1162,6 +1207,8 @@ static bool gl_render_vid_clip(ImDrawList& dl, const Clip* cl, float at_time,
             glass_ea.any_color || glass_ea.any_blur ||
             glass_ea.any_vignette || glass_ea.any_text)
             cur_tex = fx_apply(cur_tex, fx_slot, vid_w, vid_h, glass_ea, glass_cfx, at_time);
+        else
+            fx_set_skin_source(std::string(), nullptr, 0, 0);
     }
 
     // Glass BodyFX: standalone bricks and MultiFX sub-effects on this track.

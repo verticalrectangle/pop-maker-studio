@@ -4,6 +4,8 @@ out vec4 frag;
 uniform sampler2D u_tex;
 uniform float u_tex_w;
 uniform float u_tex_h;
+uniform sampler2D u_skin_mask;  // ML face+body-skin confidence (optional)
+uniform float u_use_skin_mask;  // 1 = sample u_skin_mask, 0 = YCbCr fallback
 uniform float u_radius;   // smoothing radius in px
 uniform float u_tone;     // skin-mask permissiveness 0..1
 
@@ -14,7 +16,8 @@ uniform float u_tone;     // skin-mask permissiveness 0..1
 
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
-float skin_mask(vec3 c) {
+float skin_mask(vec3 c, float ml) {
+    if (u_use_skin_mask > 0.5) return ml;
     float cb = 0.5 - 0.168736 * c.r - 0.331264 * c.g + 0.5 * c.b;
     float cr = 0.5 + 0.5 * c.r - 0.418688 * c.g - 0.081312 * c.b;
     // Classic skin window (Cb 77–127, Cr 133–173 in 8-bit), widened by tone.
@@ -28,8 +31,9 @@ float skin_mask(vec3 c) {
 
 void main() {
     vec2 px = vec2(1.0 / u_tex_w, 1.0 / u_tex_h);
+    float ml_mask = (u_use_skin_mask > 0.5) ? texture(u_skin_mask, v_uv).r : 0.0;
     vec4 center = texture(u_tex, v_uv);
-    float mask = skin_mask(center.rgb);
+    float mask = skin_mask(center.rgb, ml_mask);
     if (mask < 0.01) { frag = center; return; }
 
     float lc = luma(center.rgb);

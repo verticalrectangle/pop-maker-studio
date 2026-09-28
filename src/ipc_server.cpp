@@ -7,6 +7,7 @@
 #include "recorder.h"
 #include "video_recorder.h"
 #include "face_track.h"
+#include "face_cache.h"
 #include "face_filters.h"
 #include "agent_harness.h"
 #include "render.h"
@@ -22,6 +23,7 @@
 #include "vision_caption.h"
 #include "video.h"
 #include "proxy.h"
+#include "skin_segment.h"
 #include "transcribe.h"
 #include "generated/fx_clip_set_dispatch.h"
 #include "generated/fx_type_list.h"
@@ -2402,6 +2404,54 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return r;
     }
 
+    // Blink acceptance probe: per-frame table for a video take from the face
+    // cache (built synchronously here): eyeOpen (geometric ratio), blendshape
+    // blink (mean eyeBlinkL/R), unified blink = max(blend, 1-eyeOpen/baseline)
+    // with the running high-percentile baseline. Returns
+    // {frames: [{i, eye_open, blend_blink, blink, src_time}], n}. Blocking
+    // (cache build + full track); call from the MCP layer, never the UI thread.
+    if (method == "get_face_blink") {
+        std::string path = params.value("path", "");
+        int rot_q = params.value("rot_q", 0);
+        if (path.empty()) { err = "path required"; return {}; }
+        rot_q = ((rot_q % 4) + 4) % 4;
+        if (!face_track_available()) {
+            err = "face models not found (models/face/*.onnx)"; return {};
+        }
+        auto prog = [&](float q) {
+            if (client_fd >= 0) send_progress(client_fd, req_id, q * 0.9f, "tracking");
+        };
+        if (!face_cache_ensure_sync(path, rot_q, prog)) {
+            err = "face cache build failed for: " + path; return {};
+        }
+        int n = face_cache_frame_count(path, rot_q);
+        if (n <= 0) { err = "face cache empty for: " + path; return {}; }
+        FaceOpenBaseline base;
+        json frames = json::array();
+        for (int fi = 0; fi < n; ++fi) {
+            FaceObs o;
+            double st = 0.0;
+            json f; f["i"] = fi;
+            if (!face_cache_frame(path, rot_q, fi, o, &st)) {
+                f["eye_open"] = 0.0; f["blend_blink"] = 0.0; f["blink"] = 0.0;
+                f["src_time"] = 0.0; f["face"] = false;
+                frames.push_back(std::move(f));
+                continue;
+            }
+            const float bb = o.has_blend
+                ? 0.5f * (o.blend[FB_EYE_BLINK_L] + o.blend[FB_EYE_BLINK_R]) : 0.f;
+            base.update(o.eye_open);
+            f["eye_open"] = o.eye_open;
+            f["blend_blink"] = bb;
+            f["blink"] = face_blink_signal(bb, o.eye_open, base.baseline());
+            f["src_time"] = st;
+            f["face"] = true;
+            frames.push_back(std::move(f));
+        }
+        json r; r["frames"] = std::move(frames); r["n"] = n;
+        return r;
+    }
+
     if (method == "get_face_track") {
         FaceObs obs;
         bool ok = face_track_latest(obs);
@@ -2419,13 +2469,19 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             r["frame"] = {obs.w, obs.h};
             r["nose"]  = {obs.pts[1][0], obs.pts[1][1]};      // mesh nose tip
             r["chin"]  = {obs.pts[152][0], obs.pts[152][1]};  // mesh chin
+            r["eye_open"] = obs.eye_open;  // geometric ratio (stable behind glasses)
+            // Unified blink: max(blendshape, geometric). eye_blink stays the
+            // raw blendshape mean for diagnostics; consumers use eye_blink_u.
+            const float bb = obs.has_blend
+                ? 0.5f * (obs.blend[FB_EYE_BLINK_L] + obs.blend[FB_EYE_BLINK_R])
+                : 0.f;
             if (obs.has_blend) {
                 r["jaw_open"]  = obs.blend[FB_JAW_OPEN];
                 r["smile"]     = (obs.blend[FB_MOUTH_SMILE_L] +
                                   obs.blend[FB_MOUTH_SMILE_R]) * 0.5f;
-                r["eye_blink"] = (obs.blend[FB_EYE_BLINK_L] +
-                                  obs.blend[FB_EYE_BLINK_R]) * 0.5f;
+                r["eye_blink"] = bb;
             }
+            r["eye_blink_u"] = face_blink_of(obs);
             r["eyeA"]  = {obs.pts[468][0], obs.pts[468][1]};   // iris centers
             r["eyeB"]  = {obs.pts[473][0], obs.pts[473][1]};
             if (params.value("full", false)) {
@@ -2665,6 +2721,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         j["valid"]          = n > 0;
         j["score"]          = n > 0 ? faces[0].score : 0.f;
         j["has_blend"]      = n > 0 && faces[0].has_blend;
+        j["eye_open"]       = n > 0 ? faces[0].eye_open : 0.f;
+        j["eye_blink_u"]    = n > 0 ? face_blink_of(faces[0]) : 0.f;
         j["frame_w"]        = n > 0 ? faces[0].w : 0;
         j["frame_h"]        = n > 0 ? faces[0].h : 0;
         // Latency budget, observable on device (µs → ms).
@@ -3054,6 +3112,58 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
             json r; r["stills"] = stills;
             send_ok_id(client_fd, req_id, r);
+            agent_done();
+            fd_mark_free(client_fd);
+        }).detach();
+        json sentinel; sentinel["__async"] = true; return sentinel;
+    }
+
+    // ── Skin segmentation: selfie_multiclass_256x256 per-class confidence ───
+    // segment_image {path, out_dir}: writes out_dir/{background,hair,
+    // body_skin,face_skin,clothes,others}.png — single-channel 8-bit PNGs
+    // where the value is the softmax confidence (0..255) of that class, NOT
+    // a hard argmax mask — at the source image's display resolution. Returns
+    // {width, height, classes: {name: path}}. Async with progress (ORT run +
+    // per-class upsample/write); the MCP `segment_image` tool documents the
+    // same contract. Read-only w.r.t. project state: placed before the
+    // auto-batch line so it never opens an undo step.
+    if (method == "segment_image") {
+        std::string path = params.value("path", "");
+        std::string out_dir = params.value("out_dir", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        if (out_dir.empty()) { err = "out_dir required"; return {}; }
+        if (!skin_segment_available()) {
+            err = "skin model not found (models/selfie_multiclass_256x256.onnx)"; return {};
+        }
+        if (client_fd < 0) {
+            std::array<std::string, SKIN_NCLASSES> outs;
+            int sw = 0, sh = 0;
+            std::string serr;
+            if (!skin_segment_image(path, out_dir, outs, sw, sh, nullptr, &serr)) {
+                err = serr; return {};
+            }
+            json r, classes = json::object();
+            for (int k = 0; k < SKIN_NCLASSES; ++k)
+                classes[SKIN_CLASS_NAMES[k]] = outs[(size_t)k];
+            r["width"] = sw; r["height"] = sh; r["classes"] = std::move(classes);
+            return r;
+        }
+        fd_mark_busy(client_fd);
+        std::thread([path, out_dir, client_fd, req_id]() {
+            std::array<std::string, SKIN_NCLASSES> outs;
+            int sw = 0, sh = 0;
+            std::string serr;
+            auto prog = [&](float p) { send_progress(client_fd, req_id, p, ""); };
+            bool ok = skin_segment_image(path, out_dir, outs, sw, sh, prog, &serr);
+            if (!ok) {
+                send_err_id(client_fd, req_id, serr);
+            } else {
+                json r, classes = json::object();
+                for (int k = 0; k < SKIN_NCLASSES; ++k)
+                    classes[SKIN_CLASS_NAMES[k]] = outs[(size_t)k];
+                r["width"] = sw; r["height"] = sh; r["classes"] = std::move(classes);
+                send_ok_id(client_fd, req_id, r);
+            }
             agent_done();
             fd_mark_free(client_fd);
         }).detach();

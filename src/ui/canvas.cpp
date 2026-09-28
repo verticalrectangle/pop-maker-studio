@@ -11,6 +11,7 @@
 #include "proxy.h"
 #include "history.h"
 #include "fx_shader.h"
+#include "../skin_mask_cache.h"
 #include "bg_presets.h"
 #include "theme.h"
 #include "../ipc_server.h"
@@ -2023,6 +2024,11 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                 if (!tex) return;
 
                 // Glass FX: applied pre-composite to this clip only.
+                // ML skin-mask source for this source frame: half-res texture
+                // readback into a scratch buffer (async fill, cached per
+                // path+src_t; YCbCr covers the miss — the UI never blocks).
+                // Key matches the export path (path@vf:<src_t>) so preview
+                // fills are reused at export.
                 if (slot >= 0) {
                     EffectAccum     glass_ea  = collect_glass_effects(state, at_time, ti);
                     CreativeFXAccum glass_cfx = collect_glass_fx     (state, at_time, ti);
@@ -2030,6 +2036,52 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                         glass_ea.any_color || glass_ea.any_blur ||
                         glass_ea.any_vignette || glass_ea.any_text) {
                         VideoInfo vi_g = video_info(slot);
+                        fx_set_skin_source(std::string(), nullptr, 0, 0);
+                        if (cl_ptr && !cl_ptr->text.empty() &&
+                            (glass_cfx.skin_smooth_on || glass_cfx.glass_skin_on) &&
+                            vi_g.width > 0 && vi_g.height > 0) {
+                            char skbuf[512];
+                            snprintf(skbuf, sizeof(skbuf), "%s@vf:%.3f",
+                                     cl_ptr->text.c_str(), (double)src_t);
+                            if (skin_mask_texture(skbuf, vi_g.width, vi_g.height)) {
+                                // Hot cache: point the chain at it, no readback.
+                                fx_set_skin_source(skbuf, nullptr, 0, 0);
+                            } else {
+                            static thread_local std::vector<uint8_t> s_rgb;
+                            static std::vector<uint8_t> s_full;
+                            int hw2 = vi_g.width / 2, hh2 = vi_g.height / 2;
+                            if (hw2 >= 64 && hh2 >= 64) {
+                                s_rgb.resize((size_t)hw2 * hh2 * 3);
+                                GLint prb = 0, pdb = 0;
+                                glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prb);
+                                glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &pdb);
+                                static GLuint s_dl_fbo = 0;
+                                if (!s_dl_fbo) glGenFramebuffers(1, &s_dl_fbo);
+                                glBindFramebuffer(GL_READ_FRAMEBUFFER, s_dl_fbo);
+                                glFramebufferTexture2D(GL_READ_FRAMEBUFFER,
+                                    GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                    (GLuint)tex, 0);
+                                s_full.resize((size_t)vi_g.width * vi_g.height * 3);
+                                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                                glReadPixels(0, 0, vi_g.width, vi_g.height,
+                                             GL_RGB, GL_UNSIGNED_BYTE, s_full.data());
+                                glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prb);
+                                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)pdb);
+                                for (int y = 0; y < hh2; ++y) {
+                                    const uint8_t* sr =
+                                        &s_full[(size_t)(y * 2) * vi_g.width * 3];
+                                    uint8_t* dr = &s_rgb[(size_t)y * hw2 * 3];
+                                    for (int x = 0; x < hw2; ++x) {
+                                        dr[x*3+0] = sr[x*2*3+0];
+                                        dr[x*3+1] = sr[x*2*3+1];
+                                        dr[x*3+2] = sr[x*2*3+2];
+                                    }
+                                }
+                                fx_set_skin_source(skbuf, s_rgb.data(), hw2, hh2,
+                                                   vi_g.width, vi_g.height);
+                            }
+                            }
+                        }
                         tex = fx_apply(tex, slot, vi_g.width, vi_g.height, glass_ea, glass_cfx, t_anim);
                     }
                 }

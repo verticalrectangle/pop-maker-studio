@@ -66,6 +66,23 @@ Used for per-frame alpha mask generation. Output is streamed as grayscale MJPEG 
 
 ---
 
+## selfie_multiclass_256x256 — Skin Segmentation
+
+| | |
+|---|---|
+| **File** | `selfie_multiclass_256x256.onnx` |
+| **Size** | ~16 MB (15.7 MiB on disk) |
+| **Path** | `models/` next to the binary (hard-linked from shared-models; `models/*.onnx` are git-excluded) |
+| **Source** | [storage.googleapis.com/mediapipe-models](https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite) (source `.tflite` SHA256 pinned as `TFLITE_SHA256` in the script) |
+| **Original model** | MediaPipe selfie_multiclass_256x256 Image Segmenter — 6 classes: background, hair, body-skin, face-skin, clothes, others |
+| **Conversion** | `python3 tools/convert_selfie_multiclass.py --out <dir>/selfie_multiclass_256x256.onnx` (tf2onnx, opset 16; the script verifies input `input_29` [1,256,256,3] RGB float32 in [0,1] and output `Identity` [1,256,256,6] per-class logits before writing) |
+| **License** | [Apache 2.0](https://github.com/google-ai-edge/mediapipe/blob/master/LICENSE) |
+| **When used** | Skin-gated beauty shaders (Skin Smooth, Glass Skin) via the async `src/skin_mask_cache.*` mask cache, and IPC `segment_image` — optional; shaders fall back to their fixed YCbCr window when the file is missing |
+
+Runtime contract (`src/skin_segment.h`): input `input_29` [1,256,256,3] RGB float32 in [0,1]; output `Identity` [1,256,256,6] per-class LOGITS in order background, hair, body-skin, face-skin, clothes, others (softmax over the last axis gives confidence). `skin_segment_image` writes per-class 8-bit confidence PNGs at display resolution — the same files IPC `segment_image` returns.
+
+---
+
 ## HuBERT — Voice Conversion Feature Extraction
 
 | | |
@@ -143,6 +160,7 @@ The detector runs sparse (re-detect on loss or every ~2 s), the landmark net den
 | Kim_Vocal_2 MDX-Net | ~64 MB | Yes (on first use) | Vocal separation |
 | htdemucs | ~174 MB | **No — manual** | 4-stem music separation |
 | u2net_human_seg | ~176 MB | Yes (Setup screen) | Background removal |
+| selfie_multiclass_256x256 | ~16 MB | **No — hard-link from shared-models** | Skin FX masks, segment_image (optional) |
 | HuBERT | ~190 MB | **No — manual** | Voice conversion |
 | Piper voices | ~30–60 MB each | Yes (on first use) | TTS |
 | RVC voice models | Varies | Via HF browser | Voice conversion |

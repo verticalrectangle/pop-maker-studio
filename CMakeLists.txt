@@ -161,6 +161,8 @@ set(PMS_ENGINE_SOURCES
     src/text_renderer.cpp
     src/shape.cpp
     src/perf.cpp
+    src/skin_segment.cpp
+    src/skin_mask_cache.cpp
 )
 
 

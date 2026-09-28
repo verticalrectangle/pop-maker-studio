@@ -91,6 +91,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "get_project", "get_clips", "get_all_clips", "get_media_info", "list_dir", "get_stills",
         "get_video_description", "describe_video", "get_canvas_geometry",
         "get_face_track", "verify_clips", "make_contact_sheet", "pexels_search",
+        "segment_image",
     ],
     "timeline": [
         "add_clip", "add_clip_sequence", "add_track", "delete_clip", "delete_clips_after",
@@ -164,6 +165,7 @@ INTERNAL_IPC: set[str] = {
     "debug_fx_tone", "dump_face_input",                 # debug-only
     "get_snapshot_status", "get_bg_remove_status",      # pollers folded into blocking tools
     "get_beats", "get_fx_segments", "get_live_peaks",   # internal/UI-only readouts
+    "get_face_blink",   # blink-acceptance probe (read-only face-cache table)
 }
 
 
@@ -757,6 +759,24 @@ async def list_tools() -> list[Tool]:
                                      "description": "Render a cropped FILE instead of setting clip crop props (destructive; default false)"},
                 },
                 "required": ["source_path"],
+            },
+        ),
+        Tool(
+            name="segment_image",
+            description=(
+                "Segment an image with MediaPipe selfie_multiclass_256x256 (face/hair/skin/clothes). "
+                "Writes out_dir/{background,hair,body_skin,face_skin,clothes,others}.png — "
+                "single-channel 8-bit PNGs where the value is the softmax CONFIDENCE (0..255) "
+                "of that class, not a hard argmax mask — at the source image's display resolution. "
+                "Returns {width, height, classes: {name: path}}. Read-only — no batch needed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the source image"},
+                    "out_dir": {"type": "string", "description": "Directory for the six mask PNGs (created if missing)"},
+                },
+                "required": ["path", "out_dir"],
             },
         ),
         Tool(

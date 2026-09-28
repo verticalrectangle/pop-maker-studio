@@ -70,6 +70,14 @@ static inline float bl(const FaceObs& o, int idx) {
     return o.has_blend ? o.blend[idx] : 0.f;
 }
 
+// Unified blink for lash compression / eye-enlarge deflation: the track's
+// open-eye baseline is unknown here, so normalise against the observation's
+// own eyeOpen when no explicit baseline is passed (face_blink_of falls back
+// to exactly that). Callers with a track baseline should pass it.
+static inline float blink_of(const FaceObs& o, float open_baseline = 0.f) {
+    return face_blink_of(o, open_baseline);
+}
+
 // One parametric beauty engine, five looks. Skin params feed the GPU beauty
 // pass (face_beauty_apply); shape scalars feed the same warp bumps the old
 // Pretty used. Values tuned against the picker preview face.
@@ -437,8 +445,10 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
         case FaceFilter::BigEyes: {
             // Expression-reactive: widen with eyeWide, deflate on blinks —
             // the cartoon eyes squash when you blink instead of bulging shut.
+            // Unified blink (blendshape max geometric) so it fires behind
+            // glasses where eyeBlink alone misreads.
             float wide  = (bl(obs, FB_EYE_WIDE_L) + bl(obs, FB_EYE_WIDE_R)) * 0.5f;
-            float blink = (bl(obs, FB_EYE_BLINK_L) + bl(obs, FB_EYE_BLINK_R)) * 0.5f;
+            float blink = blink_of(obs);
             float k = (1.f + 0.6f * wide) * (1.f - 0.75f * blink);
             bump(a.eyeA, eyeR * 1.25f, 0.42f * amt * k, 0, 0);
             bump(a.eyeB, eyeR * 1.25f, 0.42f * amt * k, 0, 0);
@@ -729,6 +739,11 @@ bool face_filter_build_plan_look(const BeautyLook& L, float amount,
         bp.eyeL_x = PX(a.eyeA[0]); bp.eyeL_y = PY(a.eyeA[1]);
         bp.eyeR_x = PX(a.eyeB[0]); bp.eyeR_y = PY(a.eyeB[1]);
         bp.eye_r  = a.eyeDist * 0.30f * sr_;
+        // Unified blink (blendshape max geometric eyeOpen): eye makeup fades
+        // and lashes compress during a blink instead of floating over the
+        // closed eye. Geometric term matters behind glasses, where the
+        // blendshape head misreads.
+        face_blink_lr(obs, 0.f, bp.blink_l, bp.blink_r);
         bp.brow_r = a.eyeDist * 0.28f * sr_;
         bp.mouth_x = PX(a.mouth[0]); bp.mouth_y = PY(a.mouth[1]);
         bp.mouth_r = a.mouthW * 0.62f * sr_;
