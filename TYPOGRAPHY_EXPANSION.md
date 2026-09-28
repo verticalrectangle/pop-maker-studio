@@ -4,6 +4,13 @@
 to bundle, and a catalogue of 100+ concrete styles inspired by real lyric
 videos and motion-typography.*
 
+> NOTE (v71 cutover): the native preset system this doc describes
+> (`g_typo_presets[]`, `generate_typography` Text bricks) is gone — presets are
+> now Script-clip JS modules (`assets/scripts/typography/<id>.js`, renderer
+> `assets/scripts/typography/lib/typography.js`). The style catalogue below
+> still reads as design inspiration, but authoring details (preset struct
+> fields, native animation list) refer to the removed system.
+
 ---
 
 ## 0. The honest framing

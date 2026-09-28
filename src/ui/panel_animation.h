@@ -13,5 +13,3 @@ void panel_text_library(AppState& state, float w);
 // Lyric brick library — drag/click a durable lyric brick onto a lyrics track.
 void panel_lyric_library(AppState& state, float w);
 
-// generate_typography — also called from pipeline completion and import_file
-void generate_typography(AppState& state);

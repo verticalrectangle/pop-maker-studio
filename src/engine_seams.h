@@ -103,13 +103,14 @@ std::vector<AudioFXSegment> collect_audio_fx_segments(const AppState& state,
                                                       int track_idx,
                                                       const Clip& audio_clip);
 
-// ── Typography (impl: ui/panel_animation.cpp) ────────────────────────────────
-void    generate_typography(AppState& state);          // impl: typography_core.cpp (engine)
-void    apply_typo_style(Clip& c, const struct TypographyPreset& pr,
-                         const AppState& state);        // impl: typography_core.cpp (engine)
+// ── Typography as Script clips (impl: typography_script.cpp — engine) ─────────
+bool lay_typography_script(AppState& state, const std::string& preset,
+                           const std::string& params_json, std::string& err);
+std::string active_typography_preset(const AppState& state);
+
 void    app_focus_typography_panel();                   // engine-owned; no-op unless the app registers
 void    set_focus_typography_hook(void (*fn)());        // app registers its panel flip here
-ImFont* typo_font_get(const char* id);           // impl: text_renderer.cpp (engine)
+ImFont* typo_font_get(const char* id);           // impl: ui/theme.cpp (app)
 void    typo_font_clear();                        // theme_apply() calls these
 void    typo_font_register(const char* name, ImFont* font);
 

@@ -3,10 +3,10 @@
 #include <cmath>
 
 
-// ── Typography font registry (hoisted from ui/theme.cpp) ─────────────────────
+// ── Manual-Text font registry ─────────────────────────────────────────────
 // The app's theme_apply() registers faces after building the atlas; the
-// engine (text renderer, overlay renderer, typography pipeline) resolves
-// faces by id. Storage engine-side so typo_font_get links into pms-engine.
+// engine (text renderer, overlay renderer) resolves manual Text-clip faces
+// by id. Storage engine-side so typo_font_get links into pms-engine.
 ImFont* g_font_black = nullptr;   // assigned by the app after atlas build
 ImFont* g_font_cjk   = nullptr;   // CJK-capable canvas face (app assigns after atlas build)
 namespace {

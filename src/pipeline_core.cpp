@@ -506,7 +506,7 @@ void apply_lyrics_edits(AppState& state, Clip& c) {
 }
 
 // Load word JSON and apply current grouping mode.
-// generate_typography is defined in panel_animation.cpp, declared in panel_animation.h
+// typography layers are Script clips — see typography_script.h
 
 // Removes all Lyrics clips with matching source_id from ALL tracks, then
 // places fresh grouped clips on the "Lyrics" track.
@@ -873,8 +873,10 @@ void import_file(AppState& state, const std::string& path) {
         // video / Extract-Lyrics pass re-runs on the vocal stem and supersedes
         // the cache (re-tagging it "vocals"). Legacy caches (no sidecar, "") keep
         // the old behavior so nothing regresses for pre-provenance projects.
-        if (transcript_source(words_candidate) != "raw")
-            generate_typography(state);
+        if (transcript_source(words_candidate) != "raw") {
+            std::string e;
+            lay_typography_script(state, "flash", {}, e);
+        }
     }
     {
         std::string ec = cache_path(path, "_envelope.json");

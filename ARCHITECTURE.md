@@ -287,7 +287,7 @@ Protocol: newline-delimited JSON. Request: `{"id": "...", "method": "...", "para
 
 **Commands** (read-only — no batch effect): `get_project`, `get_clips`, `get_all_clips`, `get_pipeline_status`, `get_export_status`, `get_bg_remove_status`, `get_audio_analysis`, `get_transcript`, `get_media_info`, `get_stills`, `seek`, `play`, `pause`, `validate_glsl`, `save_project`, plus search/probe tools (`find_and_add_clip`, `find_audio_cue`, `search_transcript`).
 
-**Commands** (mutation — auto-batched if standalone): `add_clip`, `add_clip_sequence`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_clip_props`, `set_text_style`, `add_track`, `rename_track`, `delete_clips_after`, `trim_all_to`, `add_effect_brick`, `add_body_fx_brick`, `add_multifx_brick`, `add_callout`, `add_chapter_marker`, `remove_chapter_marker`, `add_to_bin`, `remove_from_bin`, `trigger_pipeline`, `generate_typography`, `apply_multicam_cuts`, `cut_at_phrase`, `cut_filler_words`, `remove_silence`, `crop_media`, `extract_clip_segment`, `load_project`, `new_project`.
+**Commands** (mutation — auto-batched if standalone): `add_clip`, `add_clip_sequence`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_clip_props`, `set_text_style`, `add_track`, `rename_track`, `delete_clips_after`, `trim_all_to`, `add_effect_brick`, `add_body_fx_brick`, `add_multifx_brick`, `add_callout`, `set_typography_preset`, `add_chapter_marker`, `remove_chapter_marker`, `add_to_bin`, `remove_from_bin`, `trigger_pipeline`, `apply_multicam_cuts`, `cut_at_phrase`, `cut_filler_words`, `remove_silence`, `crop_media`, `extract_clip_segment`, `load_project`, `new_project`.
 
 The **Python MCP server** (`mcp_server/server.py`) bridges Claude to the IPC layer using the `mcp` SDK. It reads the lock file, connects to the socket, and registers ~70 tools — the full editing surface plus search, audio/video analysis, and bin management. Tool descriptions live in `server.py` and are the canonical reference; the generic dispatcher forwards anything not explicitly named to the IPC layer using the same method name.
 
@@ -395,7 +395,7 @@ src/
     timeline.cpp         Timeline, clip drag/resize, track management
     pipeline.cpp         ML pipeline UI, kick_pipeline()
     panel_clip.cpp       Clip inspector (properties, text style, karaoke, bg_remove)
-    panel_animation.cpp  Typography presets, generate_typography()
+    panel_animation.cpp  Typography picker (pms:typography/* Script-clip presets + params Tune)
     panel_fx.cpp         Effect inspector
     panel_media.cpp      Media browser (Bin + Videos / Images / Audio recents)
     panel_terminal.cpp   Terminal panel chrome, drop-injects path at prompt

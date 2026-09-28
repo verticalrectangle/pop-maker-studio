@@ -384,7 +384,7 @@ static void draw_line_list_editor(AppState& state, Clip& clip, float w,
     ImGui::Dummy({0.f, 4.f});
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     ImGui::TextWrapped(wanted == ClipType::Lyrics
-        ? "Grouping, style, color & karaoke for the whole lyric track are set in the Typography tab."
+        ? "Lyrics render through the typography layer (Typography tab) — it reads these same words."
         : "Font, color, position & alignment for the whole subtitle track are set in the Typography tab.");
     ImGui::PopStyleColor();
     ImGui::Dummy({0.f, 4.f});

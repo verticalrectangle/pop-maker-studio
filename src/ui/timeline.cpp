@@ -5226,7 +5226,12 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
 
             if (disabled) ImGui::BeginDisabled();
             if (ImGui::MenuItem("Make lyric video")) {
-                state.pipeline_on_done = generate_typography;
+                std::string cur = active_typography_preset(state);
+                if (cur.empty()) cur = "flash";
+                state.pipeline_on_done = [cur](AppState& st) {
+                    std::string e;
+                    lay_typography_script(st, cur, {}, e);
+                };
                 kick_pipeline(state, cc->text, PipelineMode::Both);
             }
             if (ImGui::MenuItem("Transcribe  (subtitles only)")) {

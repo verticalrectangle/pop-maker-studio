@@ -14,18 +14,12 @@
 
 ImFont* g_font_regular = nullptr;
 ImFont* g_font_bold    = nullptr;
-// g_font_black is DEFINED engine-side (text_renderer.cpp, with the font
-// registry); theme_apply() assigns it after building the atlas.
+// g_font_black/cjk + the typo_font_* registry are DEFINED engine-side
+// (text_renderer.cpp) so engine-smoke links; theme_apply() assigns them
+// after building the atlas.
 extern ImFont* g_font_black;
-// Same pattern: CJK-capable canvas face, defined engine-side in
-// text_renderer.cpp, assigned here after the atlas build.
 extern ImFont* g_font_cjk;
 ImFont* g_font_mono    = nullptr;
-
-// Registered display faces, parallel to g_embedded_fonts[]. Filled in theme_apply
-// once the atlas is built; looked up by sanitized family name via typo_font_get.
-// Typography font registry hoisted to the engine (src/text_renderer.cpp);
-// theme_apply() registers faces via typo_font_register().
 
 void theme_apply() {
     ImGuiIO& io = ImGui::GetIO();

@@ -24,6 +24,7 @@
 
 #include "quickjs.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -54,6 +55,30 @@ static std::string asset_root() {
     return dir;
 }
 
+// Resolve `pms:fonts/<rel>` to assets/fonts/<rel>: exact path first, then a
+// case-insensitive basename match under assets/fonts/display/ (preset font ids
+// are sanitized lowercase basenames, e.g. "anton" for Anton.ttf).
+static std::string script_resolve_font(const std::string& rel) {
+    std::string root = asset_root();
+    {
+        std::string exact = root + "/fonts/" + rel;
+        std::error_code ec;
+        if (fs::exists(exact, ec)) return fs::canonical(exact, ec).string();
+    }
+    std::string base = fs::path(rel).filename().string();
+    std::string low;
+    for (char c : base) low += (char)tolower((unsigned char)c);
+    std::string dir = root + "/fonts/display";
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::string fn = it->path().filename().string();
+        std::string flow;
+        for (char c : fn) flow += (char)tolower((unsigned char)c);
+        if (flow == low) return it->path().string();
+    }
+    return "";
+}
+
 std::string script_resolve_spec(const std::string& spec, const std::string& referrer,
                                 const std::string& entry_dir) {
     if (spec.rfind("pms:", 0) == 0) {
@@ -61,6 +86,7 @@ std::string script_resolve_spec(const std::string& spec, const std::string& refe
         std::string base = asset_root() + "/scripts/";
         if (tail.rfind("typography/", 0) == 0) return base + tail + ".js";
         if (tail == "rhythm" || tail == "text") return base + "std/" + tail + ".js";
+        if (tail.rfind("fonts/", 0) == 0) return script_resolve_font(tail.substr(6));
         return "";
     }
     fs::path ref(referrer.empty() ? entry_dir : fs::path(referrer).parent_path().string());
@@ -91,6 +117,29 @@ uint64_t script_audio_epoch(const AppState& state) {
     return (uint64_t)state.audio_analysis.get();
 }
 
+uint64_t script_words_epoch(const AppState& state) {
+    // FNV-1a over the transcript content + edits + source: any change forces
+    // a script re-render (the texture cache keys on audio ^ words epochs).
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&](uint64_t x) {
+        h ^= x;
+        h *= 1099511628211ull;
+    };
+    mix((uint64_t)state.words_cache.size());
+    for (auto& we : state.words_cache) {
+        for (char c : we.text) mix((uint64_t)(unsigned char)c);
+        mix((uint64_t)(we.start * 1000.0));
+        mix((uint64_t)(we.end * 1000.0));
+    }
+    mix((uint64_t)state.lyrics_edits.size());
+    for (auto& [k, v] : state.lyrics_edits) {
+        mix((uint64_t)(uint32_t)k);
+        for (char c : v) mix((uint64_t)(unsigned char)c);
+    }
+    for (char c : state.audio_path) mix((uint64_t)(unsigned char)c);
+    return h;
+}
+
 // ── Impl ─────────────────────────────────────────────────────────────────
 
 struct ScriptRuntime::Impl {
@@ -110,6 +159,17 @@ struct ScriptRuntime::Impl {
     JSValue memo_words = JS_UNDEFINED;
     JSValue memo_lines = JS_UNDEFINED;
     double last_audio_off = 0.0;
+    // Transcript fallback behind pms.words when pms.audio has no words:
+    // project transcript (AppState::words_cache, source seconds of
+    // state.audio_path) with lyrics_edits applied, mapped to timeline seconds
+    // through the timeline clip that plays that source (same mapping as
+    // pms.audio: offset = in_point - start of the first Audio/Video clip
+    // whose text/source_id equals the source). Memoised; rebuilt only when
+    // the words, edits or mapping change.
+    size_t memo_words_hash = 0;
+    std::string memo_words_src;
+    std::string memo_trans_key;
+    double memo_trans_off = 0.0;
     bool memo_valid = false;
     struct JsonEntry { uint64_t mtime = 0; JSValue value = JS_UNDEFINED; };
     std::unordered_map<std::string, JsonEntry> json_cache;
@@ -128,12 +188,30 @@ static ScriptRuntime::Impl* self_of(JSContext* ctx) {
 }
 
 static std::string js_exc_text(JSContext* ctx) {
+    // Only call when JS_HasException is true: JS_GetException with no pending
+    // exception returns undefined, and JS_GetPropertyStr on that segfaults
+    // inside QuickJS (find_own_property). Callers must gate on HasException;
+    // this double-checks for defence in depth.
+    if (!JS_HasException(ctx)) return "unknown error";
     JSValue e = JS_GetException(ctx);
+    if (JS_IsUndefined(e) || JS_IsNull(e) || JS_IsException(e)) {
+        if (!JS_IsException(e)) JS_FreeValue(ctx, e);
+        return "unknown error";
+    }
+    // Non-object throws (throw "x", throw 42) have no properties: stringify
+    // only, never touch .stack.
+    if (!JS_IsObject(e)) {
+        const char* s = JS_ToCString(ctx, e);
+        std::string out = s ? s : "unknown error";
+        if (s) JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, e);
+        return out;
+    }
     const char* s = JS_ToCString(ctx, e);
     std::string out = s ? s : "unknown error";
     if (s) JS_FreeCString(ctx, s);
     JSValue stack = JS_GetPropertyStr(ctx, e, "stack");
-    if (!JS_IsUndefined(stack) && !JS_IsException(stack)) {
+    if (JS_IsObject(stack) || JS_IsString(stack)) {
         const char* ss = JS_ToCString(ctx, stack);
         if (ss) { out += "\n"; out += ss; JS_FreeCString(ctx, ss); }
     }
@@ -217,7 +295,66 @@ static JSValue new_time_array(JSContext* ctx, const std::vector<double>& v, doub
     return arr;
 }
 
+// Transcript word list for pms.words fallback: AppState::words_cache (source
+// seconds of state.audio_path) with lyrics_edits applied. Edit keys are
+// int(word.start * fps) in source seconds, matching apply_lyrics_edits.
+static std::vector<WordEntry> transcript_words_for(const AppState& state) {
+    std::vector<WordEntry> out;
+    out.reserve(state.words_cache.size());
+    for (const WordEntry& we : state.words_cache) {
+        WordEntry e = we;
+        int frame = (int)(we.start * (float)state.fps);
+        auto it = state.lyrics_edits.find(frame);
+        if (it != state.lyrics_edits.end()) e.text = it->second;
+        out.push_back(std::move(e));
+    }
+    return out;
+}
+
+// Timeline offset for a transcript source: same mapping as pms.audio
+// (offset = in_point - start of the first Audio/Video clip whose
+// text/source_id equals the source).
+static double transcript_offset_for(const AppState& state, const std::string& src,
+                                    bool& found) {
+    found = false;
+    if (src.empty()) return 0.0;
+    for (auto& tr : state.tracks) {
+        for (auto& cl : tr.clips) {
+            if (cl.clip_type != ClipType::Audio && cl.clip_type != ClipType::Video)
+                continue;
+            if (cl.text == src || cl.source_id == src) {
+                found = true;
+                return (double)cl.in_point - (double)cl.start;
+            }
+        }
+    }
+    return 0.0;
+}
+
+static JSValue words_array_for(JSContext* ctx, const std::vector<WordEntry>& list,
+                               double off, int line) {
+    JSValue words = JS_NewArray(ctx);
+    uint32_t i = 0;
+    int li = line;
+    for (auto& wd : list) {
+        JSValue e = JS_NewObject(ctx);
+        JS_DefinePropertyValueStr(ctx, e, "w", JS_NewString(ctx, wd.text.c_str()), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, e, "line", JS_NewInt32(ctx, li), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, e, "i", JS_NewInt32(ctx, (int)i), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, e, "t0", JS_NewFloat64(ctx, (double)wd.start - off), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, e, "t1", JS_NewFloat64(ctx, (double)wd.end - off), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, e, "conf", JS_NewFloat64(ctx, 1.0), JS_PROP_C_W_E);
+        JS_DefinePropertyValueUint32(ctx, words, i++, e, JS_PROP_C_W_E);
+    }
+    JS_FreezeObject(ctx, words);
+    return words;
+}
+
 // (Re)build memoised audio/words/lines when epoch or offset key changed.
+// pms.words falls back to the project transcript when pms.audio has no words:
+// words_cache (source seconds) with lyrics_edits applied, mapped to timeline
+// seconds through the timeline clip that plays that source. Identity-stable:
+// rebuilt only when the words, edits or mapping change.
 static void ensure_audio_memo(ScriptRuntime::Impl* self) {
     JSContext* ctx = self->ctx;
     const AppState& state = *self->state;
@@ -232,7 +369,36 @@ static void ensure_audio_memo(ScriptRuntime::Impl* self) {
         key = kb;
         self->last_audio_off = found ? off : 0.0;
     }
-    if (self->memo_valid && epoch == self->memo_audio_epoch && key == self->memo_audio_key) return;
+    bool use_transcript = (!a || a->words.empty()) && !state.words_cache.empty() &&
+                          !state.audio_path.empty();
+    std::string tkey;
+    double toff = 0.0;
+    if (use_transcript) {
+        bool found = false;
+        toff = transcript_offset_for(state, state.audio_path, found);
+        char kb[128];
+        snprintf(kb, sizeof(kb), "%s@%.6f", state.audio_path.c_str(), toff);
+        tkey = kb;
+    }
+    uint64_t wn = state.words_cache.size();
+    // Identity of the transcript content: word texts + timings + edits.
+    // (Count/first/last alone misses an in-place word-text edit.)
+    size_t whash = wn + state.lyrics_edits.size() * 0x9e3779b1u;
+    for (auto& we : state.words_cache) {
+        for (char c : we.text) whash = whash * 1315423911u + (unsigned char)c;
+        whash ^= (size_t)(we.start * 1000.0) + 0x9e3779b9u + (whash << 6) + (whash >> 2);
+        whash ^= (size_t)(we.end * 1000.0) + 0x9e3779b9u + (whash << 6) + (whash >> 2);
+    }
+    for (auto& [k, v] : state.lyrics_edits) {
+        whash ^= (size_t)k + 0x9e3779b9u + (whash << 6) + (whash >> 2);
+        for (char c : v) whash = whash * 1315423911u + (unsigned char)c;
+    }
+    const std::string& wsrc = state.audio_path;
+    if (self->memo_valid && epoch == self->memo_audio_epoch && key == self->memo_audio_key &&
+        use_transcript == !self->memo_trans_key.empty() &&
+        (!use_transcript || (tkey == self->memo_trans_key && whash == self->memo_words_hash &&
+                             wsrc == self->memo_words_src)))
+        return;
     // Release old memoised values.
     for (JSValue* vp : {&self->memo_audio, &self->memo_words, &self->memo_lines}) {
         if (!JS_IsUndefined(*vp)) JS_FreeValue(ctx, *vp);
@@ -241,12 +407,24 @@ static void ensure_audio_memo(ScriptRuntime::Impl* self) {
     self->memo_valid = true;
     self->memo_audio_epoch = epoch;
     self->memo_audio_key = key;
+    self->memo_trans_key = use_transcript ? tkey : std::string();
+    self->memo_trans_off = toff;
+    self->memo_words_hash = whash;
+    self->memo_words_src = wsrc;
     if (!a) {
         self->memo_audio = JS_NULL;
-        self->memo_words = JS_NewArray(ctx);
-        self->memo_lines = JS_NewArray(ctx);
-        JS_FreezeObject(ctx, self->memo_words);
-        JS_FreezeObject(ctx, self->memo_lines);
+        if (use_transcript) {
+            auto tw = transcript_words_for(state);
+            self->memo_words = words_array_for(ctx, tw, toff, 0);
+            JSValue lines = JS_NewArray(ctx);
+            JS_FreezeObject(ctx, lines);
+            self->memo_lines = lines;
+        } else {
+            self->memo_words = JS_NewArray(ctx);
+            self->memo_lines = JS_NewArray(ctx);
+            JS_FreezeObject(ctx, self->memo_words);
+            JS_FreezeObject(ctx, self->memo_lines);
+        }
         return;
     }
     double off = self->last_audio_off;
@@ -325,7 +503,11 @@ static void ensure_audio_memo(ScriptRuntime::Impl* self) {
         JS_DefinePropertyValueUint32(ctx, lines, i++, JS_NewString(ctx, l.c_str()), JS_PROP_C_W_E); }
     JS_FreezeObject(ctx, lines);
     JSValue words = JS_NewArray(ctx);
-    { uint32_t i = 0; for (auto& wd : a->words) {
+    if (use_transcript) {
+        if (!JS_IsUndefined(words)) JS_FreeValue(ctx, words);
+        auto tw = transcript_words_for(state);
+        words = words_array_for(ctx, tw, toff, 0);
+    } else { uint32_t i = 0; for (auto& wd : a->words) {
         JSValue e = JS_NewObject(ctx);
         JS_DefinePropertyValueStr(ctx, e, "w", JS_NewString(ctx, wd.w.c_str()), JS_PROP_C_W_E);
         JS_DefinePropertyValueStr(ctx, e, "line", JS_NewInt32(ctx, wd.line), JS_PROP_C_W_E);
@@ -664,9 +846,14 @@ bool ScriptRuntime::build(const AppState& state, const Clip& clip, int width, in
     self->post_uniforms.clear();
     self->state = &state;
 
-    // Entry: absolute, or relative to the project file.
+    // Entry: a `pms:` specifier (portable: pms:typography/<id>, pms:rhythm,
+    // pms:text), an absolute path, or relative to the project file.
+    // `pms:` entries resolve via script_resolve_spec so projects stay
+    // portable across machines.
     std::string entry = clip.script_path;
-    if (!entry.empty() && entry[0] != '/') {
+    if (!entry.empty() && entry.rfind("pms:", 0) == 0)
+        entry = script_resolve_spec(entry, "", "");
+    else if (!entry.empty() && entry[0] != '/') {
         std::string base = fs::path(state.project_path).parent_path().string();
         if (!base.empty()) entry = (fs::path(base) / entry).string();
     }

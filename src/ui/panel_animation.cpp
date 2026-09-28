@@ -7,9 +7,9 @@
 #include "app.h"
 #include "audio.h"
 #include "history.h"
-#include "typography_presets.h"
-#include "text_renderer.h"
-#include "text_anim.h"
+#include "typography_script.h"
+#include "script_clip.h"
+#include "generated/typography_js_presets.h"
 #include "theme.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -25,77 +25,109 @@
 namespace fs = std::filesystem;
 extern ImFont* g_font_bold;
 extern ImFont* g_font_black;
+// ── Typography as Script clips ────────────────────────────────────────────────
+// A typography layer is ONE Script clip (`pms:typography/<id>`, params = Tune
+// overrides). The picker lists the 76 JS presets by category with live
+// thumbnails rendered through the Script clip pipeline; Tune edits the
+// selected layer's params JSON in place.
 
-// ── Typography generator + panel ──────────────────────────────────────────────
+#include "typography_script.h"
+#include "script_clip.h"
+#include "generated/typography_js_presets.h"
 
-// Tag used on source_id of auto-generated FX clips so generate can find/clear them.
-static constexpr const char* TYPO_FX_TAG = "__typo_fx__";
-
-
-
-// Live-update style on the typography target (no re-grouping). A selected
-// standalone Text/Subtitle brick restyles in place; otherwise the whole managed
-// Lyrics track for the source restyles together.
-static bool typo_selected_is_standalone(const AppState& state) {
-    if (state.selected_track < 0 || state.selected_track >= (int)state.tracks.size())
-        return false;
-    auto& clips = state.tracks[state.selected_track].clips;
-    if (state.selected_clip < 0 || state.selected_clip >= (int)clips.size())
-        return false;
-    // Only a one-off Text brick styles in isolation. Lyrics AND Subtitle clips
-    // are a managed group — they restyle together across the whole track.
-    return clips[state.selected_clip].clip_type == ClipType::Text;
-}
-
-// Restyle every clip of a given type+source in place — no clear, no regroup.
-// Shared by live Tune tweaks and held-grouping preset switches.
-static void typo_restyle_set(AppState& state, const TypographyPreset& pr,
-                             ClipType ct, const std::string& src) {
-    for (auto& t : state.tracks)
-        for (auto& c : t.clips)
-            if (c.clip_type == ct && c.source_id == src)
-                apply_typo_style(c, pr, state);
-}
-
-static void typo_restyle_live(AppState& state) {
-    const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
-    if (!pr) return;
-    if (typo_selected_is_standalone(state)) {
-        apply_typo_style(state.tracks[state.selected_track].clips[state.selected_clip],
-                         *pr, state);
-        return;
-    }
-    // Managed group: restyle every clip sharing the selected clip's type and
-    // source (lyrics or subtitles), so a tweak lands on the whole track at once.
-    // Fall back to the lyrics-for-the-current-audio set when there's no usable
-    // selection (e.g. called right after generation).
-    ClipType ct  = ClipType::Lyrics;
-    std::string src = state.audio_path;
+// The selected typography layer, if any (a Script clip with a pms:typography/
+// entry). Tune edits its params; the picker replaces its preset.
+static bool typo_selected_layer(AppState& state, int& out_ti, int& out_ci) {
     if (state.selected_track >= 0 && state.selected_track < (int)state.tracks.size()) {
         auto& clips = state.tracks[state.selected_track].clips;
         if (state.selected_clip >= 0 && state.selected_clip < (int)clips.size()) {
-            const Clip& sel = clips[state.selected_clip];
-            if (sel.clip_type == ClipType::Lyrics || sel.clip_type == ClipType::Subtitle) {
-                ct  = sel.clip_type;
-                src = sel.source_id;
+            const Clip& c = clips[state.selected_clip];
+            if (c.clip_type == ClipType::Script &&
+                c.script_path.rfind("pms:typography/", 0) == 0) {
+                out_ti = state.selected_track;
+                out_ci = state.selected_clip;
+                return true;
             }
         }
     }
-    typo_restyle_set(state, *pr, ct, src);
+    // Fall back to the first typography layer on the timeline.
+    for (int ti = 0; ti < (int)state.tracks.size(); ++ti)
+        for (int ci = 0; ci < (int)state.tracks[ti].clips.size(); ++ci) {
+            const Clip& c = state.tracks[ti].clips[ci];
+            if (c.clip_type == ClipType::Script &&
+                c.script_path.rfind("pms:typography/", 0) == 0) {
+                out_ti = ti;
+                out_ci = ci;
+                return true;
+            }
+        }
+    return false;
 }
 
-// Small "Hold" pin toggle drawn after a tweakable control's label. Filled when
-// the field is pinned — pinned tweaks survive switching to another preset.
-static void typo_hold_btn(AppState& state, TypoField f) {
-    ImGui::SameLine(0.f, 6.f);
-    bool held = state.typo.pinned(f);
-    ImGui::PushID((int)f);
-    if (ui_btn(held ? "Held" : "Hold", held, true))
-        state.typo.pin(f, !held);
-    ImGui::PopID();
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(held ? "Pinned — kept when you switch presets (click to unpin)"
-                               : "Pin so this setting survives switching presets");
+// Sample time for thumbnails: middle of the transcript words mapped to the
+// timeline (same mapping as lay_typography_script), else the playhead.
+static float typo_thumb_t(const AppState& state) {
+    if (!state.words_cache.empty() && !state.audio_path.empty()) {
+        double off = 0.0;
+        for (auto& tr : state.tracks) {
+            bool found = false;
+            for (auto& cl : tr.clips) {
+                if (cl.clip_type != ClipType::Audio && cl.clip_type != ClipType::Video)
+                    continue;
+                if (cl.text == state.audio_path || cl.source_id == state.audio_path) {
+                    off = (double)cl.in_point - (double)cl.start;
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
+        float t0 = 1e9f, t1 = -1e9f;
+        for (auto& we : state.words_cache) {
+            t0 = std::min(t0, (float)((double)we.start - off));
+            t1 = std::max(t1, (float)((double)we.end - off));
+        }
+        if (t1 > t0) return t0 + (t1 - t0) * 0.35f;
+    }
+    return state.playhead;
+}
+
+// Read a numeric param (or ts_* key) from the clip's params JSON.
+static float typo_param_num(const Clip& c, const char* key, float dflt) {
+    if (c.script_params.empty()) return dflt;
+    try {
+        auto j = nlohmann::json::parse(c.script_params);
+        if (j.contains(key) && j[key].is_number()) return j[key].get<float>();
+    } catch (...) {}
+    return dflt;
+}
+
+static void typo_param_set(Clip& c, const char* key, float v) {
+    nlohmann::json j = nlohmann::json::object();
+    if (!c.script_params.empty()) {
+        try { j = nlohmann::json::parse(c.script_params); } catch (...) {}
+    }
+    j[key] = v;
+    c.script_params = j.dump();
+}
+
+static void typo_param_set4(Clip& c, const char* key, const float v[4]) {
+    nlohmann::json j = nlohmann::json::object();
+    if (!c.script_params.empty()) {
+        try { j = nlohmann::json::parse(c.script_params); } catch (...) {}
+    }
+    j[key] = {v[0], v[1], v[2], v[3]};
+    c.script_params = j.dump();
+}
+
+static void typo_params_get4(const Clip& c, const char* key, float v[4], const float dflt[4]) {
+    for (int i = 0; i < 4; ++i) v[i] = dflt[i];
+    if (c.script_params.empty()) return;
+    try {
+        auto j = nlohmann::json::parse(c.script_params);
+        if (j.contains(key) && j[key].is_array() && j[key].size() == 4)
+            for (int i = 0; i < 4; ++i) v[i] = j[key][i].get<float>();
+    } catch (...) {}
 }
 
 // Category accent color
@@ -105,6 +137,11 @@ static ImU32 typo_category_dot(const char* cat) {
     if (strcmp(cat, "Editorial") == 0) return IM_COL32(255, 200,  50, 255);
     if (strcmp(cat, "Clean")     == 0) return IM_COL32( 80, 200, 255, 255);
     if (strcmp(cat, "Retro")     == 0) return IM_COL32(255, 140,  40, 255);
+    if (strcmp(cat, "Kinetic")   == 0) return IM_COL32(140, 255, 150, 255);
+    if (strcmp(cat, "Karaoke")   == 0) return IM_COL32(255, 220,  80, 255);
+    if (strcmp(cat, "Gradient")  == 0) return IM_COL32(255, 130, 255, 255);
+    if (strcmp(cat, "Script")    == 0) return IM_COL32(255, 170, 220, 255);
+    if (strcmp(cat, "Mono")      == 0) return IM_COL32(120, 255, 230, 255);
     return IM_COL32(180, 180, 180, 255);
 }
 
@@ -112,46 +149,33 @@ void panel_typography(AppState& state, float w) {
     float full_w = w - 16.f;
     ImGui::Dummy({0.f, 8.f});
 
-    // ── Resolve selected Lyrics/Text clip ─────────────────────────────────────
-    bool valid_sel = state.selected_track >= 0
-                     && state.selected_track < (int)state.tracks.size()
-                     && state.selected_clip  >= 0
-                     && state.selected_clip  < (int)state.tracks[state.selected_track].clips.size();
-    const Clip* sel_clip = valid_sel ? &state.tracks[state.selected_track].clips[state.selected_clip] : nullptr;
-    bool is_lyrics = sel_clip && (sel_clip->clip_type == ClipType::Lyrics
-                                  || sel_clip->clip_type == ClipType::Text
-                                  || sel_clip->clip_type == ClipType::Subtitle);
+    int lti = -1, lci = -1;
+    bool has_layer = typo_selected_layer(state, lti, lci);
+    std::string active = active_typography_preset(state);
+    const char* active_name = active.c_str();
+    for (int i = 0; i < kNTypoJsPresets; ++i)
+        if (active == kTypoJsPresets[i].id) { active_name = kTypoJsPresets[i].name; break; }
 
-    if (!is_lyrics) {
-        // ── Empty state ───────────────────────────────────────────────────────
+    if (state.words_cache.empty()) {
         ImGui::Dummy({0.f, 40.f});
         ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
-        const char* msg = "Select a text, subtitle, or lyrics clip to style it";
+        const char* msg = "Transcribe or set a transcript to lay typography";
         float tw = ImGui::CalcTextSize(msg).x;
         ImGui::SetCursorPosX((w - tw) * 0.5f);
         ImGui::TextUnformatted(msg);
         ImGui::PopStyleColor();
         ImGui::Dummy({0.f, 6.f});
         ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
-        ImGui::TextWrapped("Add a text brick from the Text library, or right-click an "
-                           "audio/video clip and choose \"Make lyric video\".");
+        ImGui::TextWrapped("Right-click an audio/video clip and choose "
+                           "\"Make lyric video\", or run trigger_pipeline.");
         ImGui::PopStyleColor();
         return;
     }
 
-
-    // Which preset is currently active on this clip?
-    // Try to find it by matching the clip's stored preset_id if we stamped it, else fall back to state.
-    // We use state.typo_preset_id as the committed selection (updated on click).
-
     // ── Browse presets (collapsible) ──────────────────────────────────────────
-    // The preset grid is a chooser, not the daily driver — collapse it so the
-    // tune controls below are the first thing you see. The active preset's name
-    // rides in the header so it's clear what's applied while collapsed.
-    const TypographyPreset* apr = typo_preset_by_id(state.typo_preset_id.c_str());
-    char blbl[96];
+    char blbl[128];
     snprintf(blbl, sizeof(blbl), "Browse presets  ·  %s###typo_browse",
-             apr ? apr->label : "none");
+             active.empty() ? "none" : active_name);
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     bool browse_open = ImGui::TreeNodeEx(blbl,
         ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding);
@@ -159,14 +183,12 @@ void panel_typography(AppState& state, float w) {
     if (browse_open) {
     ImGui::Dummy({0.f, 6.f});
 
-    // Category filter pills (in place) — pick a category instead of scrolling
-    // the whole catalogue. Shared with the FX / background libraries.
     static std::string s_typo_cat;   // empty = All
     static std::string* s_typo_q = nullptr;
     {
         std::vector<const char*> cats;
-        for (int i = 0; i < g_n_typo_presets; ++i) {
-            const char* c = g_typo_presets[i].category;
+        for (int i = 0; i < kNTypoJsPresets; ++i) {
+            const char* c = kTypoJsPresets[i].category;
             bool seen = false;
             for (auto* x : cats) if (strcmp(x, c) == 0) { seen = true; break; }
             if (!seen) cats.push_back(c);
@@ -177,21 +199,31 @@ void panel_typography(AppState& state, float w) {
         s_typo_q = &s_typo_query;
     }
 
+    // Keep the current layer's Tune params when swapping presets ({} = none).
+    std::string keep_params = "{}";
+    if (has_layer) {
+        const Clip& lc = state.tracks[lti].clips[lci];
+        if (!lc.script_params.empty()) keep_params = lc.script_params;
+    }
+
+    // Thumbnail geometry: project canvas size, card-sized surface.
+    int cw = 1080, ch = 1920;
+    output_format_px(state.format, cw, ch);
+    float sample_t = typo_thumb_t(state);
+
     const float gap    = 4.f;
     const float cell_w = (full_w - gap) * 0.5f;
-    const float cell_h = 112.f;   // taller so the wrapped tagline + preview fit
+    const float cell_h = 112.f;
 
     const char* cur_cat = nullptr;
     int col_idx = 0;
 
-    for (int i = 0; i < g_n_typo_presets; ++i) {
-        const TypographyPreset& pr = g_typo_presets[i];
+    for (int i = 0; i < kNTypoJsPresets; ++i) {
+        const TypoJsPreset& pr = kTypoJsPresets[i];
         if (!s_typo_cat.empty() && s_typo_cat != pr.category) continue;
-        if (s_typo_q && !lib_search_match(*s_typo_q, pr.label, pr.tagline)) continue;
-        bool selected = (state.typo_preset_id == pr.id);
+        if (s_typo_q && !lib_search_match(*s_typo_q, pr.name, pr.tagline)) continue;
+        bool selected = (active == pr.id);
 
-        // Category label — full width, resets column. Only in "All" mode; when a
-        // pill is active the pill already names the category, so it's dropped.
         if (!cur_cat || strcmp(cur_cat, pr.category) != 0) {
             if (col_idx == 1) { ImGui::NewLine(); col_idx = 0; }
             if (s_typo_cat.empty()) {
@@ -223,26 +255,16 @@ void panel_typography(AppState& state, float w) {
         if (hov && !selected) { bg_col = IM_COL32(38, 34, 54, 255); brd_col = IM_COL32(100, 85, 150, 255); }
 
         dl->AddRectFilled(cp, {cp.x + cell_w, cp.y + cell_h}, bg_col, 6.f);
-
-        // Category accent bar left edge
         dl->AddRectFilled({cp.x, cp.y + 10.f}, {cp.x + 3.f, cp.y + cell_h - 10.f},
             typo_category_dot(pr.category), 2.f);
-
         dl->AddRect(cp, {cp.x + cell_w, cp.y + cell_h}, brd_col, 6.f, 0, brd_w);
-
-        // Color chip top-right
-        ImU32 chip = IM_COL32((int)(pr.color[0]*220), (int)(pr.color[1]*220), (int)(pr.color[2]*220), 220);
-        dl->AddRectFilled({cp.x + cell_w - 16.f, cp.y + 6.f},
-                          {cp.x + cell_w - 6.f,  cp.y + 16.f}, chip, 3.f);
 
         float tx = cp.x + 10.f;
         ImGui::PushFont(g_font_bold);
         dl->AddText(ImGui::GetFont(), 12.f, {tx, cp.y + 10.f},
-            selected ? IM_COL32(255,255,255,255) : IM_COL32(210,205,230,240), pr.label);
+            selected ? IM_COL32(255,255,255,255) : IM_COL32(210,205,230,240), pr.name);
         ImGui::PopFont();
 
-        // Tagline — wraps within the card (up to 2 lines) instead of being cut
-        // off at the card edge. The middle-dot-separated full hint is shown.
         {
             float tag_w = cell_w - 16.f;
             ImVec4 tag_clip = {tx, cp.y + 24.f, cp.x + cell_w - 6.f, cp.y + 52.f};
@@ -251,7 +273,7 @@ void panel_typography(AppState& state, float w) {
                         tag_w, &tag_clip);
         }
 
-        // ── Inline text preview ───────────────────────────────────────────────
+        // ── Live thumbnail through the Script clip pipeline ───────────────────
         {
             float px0 = cp.x + 6.f, px1 = cp.x + cell_w - 6.f;
             float py0 = cp.y + 56.f, py1 = cp.y + cell_h - 6.f;
@@ -259,108 +281,33 @@ void panel_typography(AppState& state, float w) {
 
             dl->AddRectFilled({px0, py0}, {px1, py1}, IM_COL32(10, 8, 18, 220), 3.f);
             dl->AddRect({px0, py0}, {px1, py1}, IM_COL32(40, 36, 58, 180), 3.f);
-            dl->PushClipRect({px0, py0}, {px1, py1}, true);
-
-            // Sample string in the preset's own letter case. Presets that group
-            // by phrase/line/segment shine on a full sentence, so preview them
-            // with one; word-grouped presets get a single word. Rendered in the
-            // preset's actual face so the card shows the real typeface.
-            int pc = (pr.text_case >= 0) ? pr.text_case : (pr.all_caps ? 1 : 0);
-            bool sentence = (pr.grouping != SubtitleMode::Word);
-            std::string sample = sentence ? "I want to see you every night." : "Stay";
-            if      (pc == 1) for (auto& ch : sample) ch = (char)toupper((unsigned char)ch);
-            else if (pc == 2) for (auto& ch : sample) ch = (char)tolower((unsigned char)ch);
-
-            ImFont* pfont = typo_font_get(pr.font);
-            float pfsz = fmaxf(8.f, fminf(20.f, pr.font_size * ph * 4.5f));
-            ImVec2 tsz2 = pfont->CalcTextSizeA(pfsz, FLT_MAX, -1.f, sample.c_str());
-            // Shrink to fit the preview width — sentences would overflow otherwise.
-            if (tsz2.x > pw - 4.f && tsz2.x > 0.f) {
-                pfsz = fmaxf(7.f, pfsz * (pw - 4.f) / tsz2.x);
-                tsz2 = pfont->CalcTextSizeA(pfsz, FLT_MAX, -1.f, sample.c_str());
-            }
-
-            // Animated preview: drive the REAL text renderer on a looping clock
-            // so the card shows the preset's actual motion (per-element cascade,
-            // typewriter, wave, gradient, glow, the real font) scaled to the box.
-            // Only the on-screen cards animate (cheap offscreen).
             if (ImGui::IsRectVisible({px0, py0}, {px1, py1})) {
-                Clip pc;
-                pc.clip_type    = ClipType::Text;
-                pc.text         = sample;
-                pc.clip_style   = pr.style;
-                pc.sub_font     = pr.font ? pr.font : "";
-                pc.anim_unit    = pr.anim_unit;
-                pc.anim_stagger = pr.anim_stagger > 0.f ? pr.anim_stagger : 0.06f;
-                pc.ease         = pr.ease;
-                pc.tracking     = pr.tracking;
-                pc.karaoke      = false;       // no word timings to drive it in a card
-                pc.grad_mode    = pr.grad_mode;
-                memcpy(pc.grad_col2, pr.grad_col2, sizeof(pc.grad_col2));
-                memcpy(pc.sub_color, pr.color, sizeof(pc.sub_color));
-                pc.sub_color_override = true;
-                pc.ts           = pr.ts;
-                pc.sub_anchor_h = 1;
-
-                // Loop: play the intro, hold, restart. Per-card phase offset so
-                // the grid doesn't pulse in unison.
-                const float loop_dur = 2.6f;
-                float lt = fmodf((float)ImGui::GetTime() + (float)i * 0.18f, loop_dur);
-                pc.start = 0.f; pc.end = loop_dur;
-
-                float fade_in  = fminf(0.25f, loop_dur * 0.3f);
-                float fade_out = fminf(0.25f, loop_dur * 0.2f);
-                float a_dx = 0.f, a_dy = 0.f, a_alpha = 1.f, a_scale = 1.f;
-                if (pc.anim_unit == 0 && pr.style != AnimStyle::None) {
-                    BlockAnim ba = compute_block_anim(pr.style, lt, loop_dur,
-                                                      fade_in, fade_out, pw, pc.ease);
-                    a_dx = ba.dx; a_dy = ba.dy; a_alpha = ba.alpha; a_scale = ba.scale;
-                }
-                float dfsz    = pfsz * a_scale;
-                float dline_h = dfsz * 1.25f;
-
-                float bty;
-                if (pr.sub_pos == 2)      bty = py0 + 2.f;
-                else if (pr.sub_pos == 0) bty = py1 - dline_h - 2.f;
-                else                       bty = py0 + ph * 0.5f - dline_h * 0.5f;
-
-                TextRenderCtx trc{};
-                trc.dl = dl; trc.font = pfont; trc.fsz = dfsz;
-                trc.anim_alpha = a_alpha; trc.anim_dx = a_dx; trc.anim_dy = 0.f;
-                trc.clip = &pc; trc.eff_style = pr.style; trc.anchor_h = 1;
-                trc.block_cx = px0 + pw * 0.5f; trc.ty = bty + a_dy;
-                trc.line_h = dline_h; trc.t = lt; trc.rotation = 0.f;
-                trc.canvas_w = pw; trc.canvas_x0 = px0;
-                trc.canvas_h = ph; trc.canvas_y0 = py0; trc.clip_words = nullptr;
-                std::vector<std::string> plines{ sample };
-                render_text_block(trc, plines);
+                Clip tmp;
+                tmp.clip_type = ClipType::Script;
+                tmp.start = 0.f;
+                tmp.end = sample_t + 1.f;
+                tmp.script_path = std::string("pms:typography/") + pr.id;
+                tmp.script_params = keep_params;
+                std::vector<ScriptError> serr;
+                char keybuf[64];
+                snprintf(keybuf, sizeof(keybuf), "typo_preview:%s", pr.id);
+                unsigned tex = script_clip_texture(state, tmp, keybuf, sample_t,
+                    cw, ch, (int)pw, (int)ph, false, serr);
+                if (tex)
+                    dl->AddImage((ImTextureID)(uintptr_t)tex,
+                                 {px0, py0}, {px1, py1}, {0, 0}, {1, 1});
             }
-
-            dl->PopClipRect();
         }
 
         ImGui::SetCursorScreenPos(cp);
         char btn_id[64]; snprintf(btn_id, sizeof(btn_id), "##tycard_%s", pr.id);
         ImGui::InvisibleButton(btn_id, {cell_w, cell_h});
         if (ImGui::IsItemClicked()) {
-            state.typo_preset_id = pr.id;
-            // Keep only the pinned (held) tweaks; everything else reverts to the
-            // new preset's own look — that's the sticky/hold UX.
-            state.typo.keep_held();
-            // A standalone Text/Subtitle brick just takes the preset's look
-            // (font, colour, position, animation) on that one clip. Lyrics
-            // regenerate the managed transcript track (regroup + lyrics FX).
-            if (typo_selected_is_standalone(state)) {
-                apply_typo_style(state.tracks[state.selected_track]
-                                     .clips[state.selected_clip], pr, state);
-                history_push(state, std::string("Typography — ") + pr.label);
-            } else if (state.typo.pinned(TF_Grouping)) {
-                // Grouping is held: keep the structure, just re-skin the generated
-                // lyrics in place (no clear, no regroup). Manual bricks keep their look.
-                typo_restyle_set(state, pr, ClipType::Lyrics, state.audio_path);
-                history_push(state, std::string("Typography — ") + pr.label);
-            } else {
-                generate_typography(state);
+            std::string err;
+            // Swap keeps the layer's Tune params; Reset (below) clears them.
+            if (!lay_typography_script(state, pr.id, keep_params, err) && !err.empty()) {
+                state.snapshot_msg = err;
+                state.snapshot_msg_new = true;
             }
         }
 
@@ -373,151 +320,94 @@ void panel_typography(AppState& state, float w) {
 
     ImGui::Dummy({0.f, 10.f}); ui_separator(); ImGui::Dummy({0.f, 8.f});
 
-    // ── Tune ──────────────────────────────────────────────────────────────────
-    // Every control below tweaks the active preset. Its "Hold" pin keeps that
-    // tweak when you switch to another preset (keep_held on the card click).
-    const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
-    auto& tw = state.typo;
+    if (!has_layer) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Col::dim);
+        ImGui::TextWrapped("Pick a preset above to lay the typography layer.");
+        ImGui::PopStyleColor();
+        return;
+    }
 
-    // Grouping — overrides the preset's word grouping for the managed lyrics track
-    // (value lives in state.subtitle_mode/_n). Hidden for a standalone text brick,
-    // where grouping doesn't apply. Changing it re-lays the transcript track.
-    if (!typo_selected_is_standalone(state)) {
-        ui_label("Grouping"); typo_hold_btn(state, TF_Grouping);
-        SubtitleMode gm = tw.on(TF_Grouping) ? state.subtitle_mode
-                                             : (pr ? pr->grouping : SubtitleMode::Phrase);
-        struct GBtn { SubtitleMode m; const char* label; const char* tip; };
-        static const GBtn gbtns[] = {
-            {SubtitleMode::Word,    "Word",     "One word per brick"},
-            {SubtitleMode::Phrase,  "Phrase",   "Sub-line phrases — a line split at its pauses"},
-            {SubtitleMode::Segment, "Sentence", "One brick per transcript line"},
-            {SubtitleMode::CustomN, "Custom",   "N words per brick"},
-        };
-        ImGui::PushID("ty_group");
-        for (auto& gb : gbtns) {
-            if (ui_btn(gb.label, gm == gb.m, true)) {
-                state.subtitle_mode = gb.m; tw.tweak(TF_Grouping);
-                generate_typography(state);
+    // ── Tune: edit the layer's params ─────────────────────────────────────────
+    Clip& lc = state.tracks[lti].clips[lci];
+    auto touch = [&](const char* action) {
+        script_clip_invalidate(script_clip_key(lti, lci));
+        history_push(state, action);
+    };
+
+    {
+        ui_label("Font Size");
+        float out_h  = output_px_height(state);
+        float fs = typo_param_num(lc, "fontSize", 0.09f);
+        float fs_px  = fs * out_h;
+        ImGui::SetNextItemWidth(full_w);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+        if (ImGui::SliderFloat("##tyfo", &fs_px, 0.03f * out_h, 0.30f * out_h, "%.0f px")) {
+            typo_param_set(lc, "fontSize", fs_px / out_h);
+            touch("Typography font size");
+        }
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 8.f});
+    }
+
+    {
+        ui_label("Color");
+        float col_buf[4]; const float dcol[4] = {1, 1, 1, 1};
+        typo_params_get4(lc, "color", col_buf, dcol);
+        ImGui::SetNextItemWidth(full_w);
+        if (ImGui::ColorEdit4("##tycol", col_buf,
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
+            typo_param_set4(lc, "color", col_buf);
+            touch("Typography color");
+        }
+        palette_widget("##pal_typo", col_buf);
+        ImGui::SameLine(0.f, 6.f);
+        {
+            float dp[3];
+            if (ui_dropper_button("##dp_typo", dp)) {
+                col_buf[0] = dp[0]; col_buf[1] = dp[1]; col_buf[2] = dp[2];
+                typo_param_set4(lc, "color", col_buf);
+                touch("Typography color");
             }
-            if (ImGui::IsItemHovered()) { ImGui::BeginTooltip(); ImGui::TextUnformatted(gb.tip); ImGui::EndTooltip(); }
+        }
+        ImGui::Dummy({0.f, 8.f});
+    }
+
+    {
+        ui_label("Alignment");
+        int cur = (int)typo_param_num(lc, "anchorH", 1.f);
+        struct AlignBtn { int v; const char* label; };
+        AlignBtn abtns[] = {{0,"Left"},{1,"Center"},{2,"Right"}};
+        ImGui::PushID("ty_align");
+        for (auto& ab : abtns) {
+            if (ui_btn(ab.label, cur == ab.v, true)) {
+                typo_param_set(lc, "anchorH", (float)ab.v);
+                touch("Typography alignment");
+            }
             ImGui::SameLine(0.f, 4.f);
         }
         ImGui::PopID();
         ImGui::NewLine();
-        if (gm == SubtitleMode::CustomN) {
-            ImGui::SetNextItemWidth(80.f);
-            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-            int n = state.subtitle_n;
-            if (ImGui::InputInt("words/brick##tycn", &n)) {
-                state.subtitle_n = (n < 1) ? 1 : (n > 20) ? 20 : n;
-                tw.tweak(TF_Grouping); generate_typography(state);
-            }
-            ImGui::PopStyleColor();
-        }
         ImGui::Dummy({0.f, 8.f});
     }
 
-    ui_label("Font Size"); typo_hold_btn(state, TF_FontSize);
-    float fs = tw.on(TF_FontSize) ? tw.font_size : (pr ? pr->font_size : 0.09f);
-    // Stored as a fraction of canvas height; shown in output pixels (the same
-    // px the renderer produces: font px = fraction * canvas height).
-    float out_h  = output_px_height(state);
-    float fs_px  = fs * out_h;
-    ImGui::SetNextItemWidth(full_w);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-    if (ImGui::SliderFloat("##tyfo", &fs_px, 0.03f * out_h, 0.30f * out_h, "%.0f px")) {
-        tw.font_size = fs_px / out_h; tw.tweak(TF_FontSize);
-        typo_restyle_live(state);
-    }
-    ImGui::PopStyleColor();
-
-    ImGui::Dummy({0.f, 8.f});
-
-    ui_label("Color"); typo_hold_btn(state, TF_Color);
-    float col_buf[4];
-    const float* src_col = tw.on(TF_Color) ? tw.color : (pr ? pr->color : tw.color);
-    memcpy(col_buf, src_col, sizeof(col_buf));
-    ImGui::SetNextItemWidth(full_w);
-    if (ImGui::ColorEdit4("##tycol", col_buf,
-            ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
-        memcpy(tw.color, col_buf, sizeof(tw.color)); tw.tweak(TF_Color);
-        typo_restyle_live(state);
-    }
-    palette_widget("##pal_typo", col_buf);
-    ImGui::SameLine(0.f, 6.f);
     {
-        float dp[3];
-        if (ui_dropper_button("##dp_typo", dp)) {
-            col_buf[0] = dp[0]; col_buf[1] = dp[1]; col_buf[2] = dp[2];
-            memcpy(tw.color, col_buf, sizeof(tw.color)); tw.tweak(TF_Color);
-            typo_restyle_live(state);
+        ui_label("Vertical");
+        int cur = (int)typo_param_num(lc, "pos", 1.f);
+        struct VBtn { int v; const char* label; };
+        VBtn vbtns[] = {{0,"Bottom"},{1,"Center"},{2,"Top"}};
+        ImGui::PushID("ty_vert");
+        for (auto& vb : vbtns) {
+            if (ui_btn(vb.label, cur == vb.v, true)) {
+                typo_param_set(lc, "pos", (float)vb.v);
+                touch("Typography vertical");
+            }
+            ImGui::SameLine(0.f, 4.f);
         }
-    }
-    // Only a palette-swatch click (which mutates col_buf in place) is a real
-    // edit. Compare against what we loaded (src_col) so just opening the tab
-    // doesn't fire a spurious restyle.
-    if (memcmp(col_buf, src_col, sizeof(col_buf)) != 0) {
-        memcpy(tw.color, col_buf, sizeof(tw.color)); tw.tweak(TF_Color);
-        typo_restyle_live(state);
+        ImGui::PopID();
+        ImGui::NewLine();
+        ImGui::Dummy({0.f, 10.f});
     }
 
-    ImGui::Dummy({0.f, 8.f});
-
-    // Karaoke highlight — only meaningful when the active preset does per-word
-    // karaoke. The Color above is the base (unsung) word; this is the sung word.
-    if ((pr && pr->karaoke) || tw.on(TF_KaraokeHi)) {
-        ui_label("Karaoke Highlight"); typo_hold_btn(state, TF_KaraokeHi);
-        float kh[4];
-        const float* src_kh = tw.on(TF_KaraokeHi) ? tw.karaoke_hi
-                            : (pr ? pr->karaoke_highlight_color : tw.karaoke_hi);
-        memcpy(kh, src_kh, sizeof(kh));
-        ImGui::SetNextItemWidth(full_w);
-        if (ImGui::ColorEdit4("##tykhi", kh,
-                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
-            memcpy(tw.karaoke_hi, kh, sizeof(tw.karaoke_hi)); tw.tweak(TF_KaraokeHi);
-            typo_restyle_live(state);
-        }
-        ImGui::Dummy({0.f, 8.f});
-    }
-
-    // Horizontal alignment — left / center / right (writes sub_anchor_h, which
-    // the renderer already honors; previously only presets could set it).
-    ui_label("Alignment"); typo_hold_btn(state, TF_AnchorH);
-    int cur_align = tw.on(TF_AnchorH) ? tw.anchor_h : (pr ? pr->sub_anchor_h : 1);
-    struct AlignBtn { int v; const char* label; };
-    AlignBtn abtns[] = {{0,"Left"},{1,"Center"},{2,"Right"}};
-    ImGui::PushID("ty_align");   // scope: "Center" also exists in Vertical below
-    for (auto& ab : abtns) {
-        if (ui_btn(ab.label, cur_align == ab.v, true)) {
-            tw.anchor_h = ab.v; tw.tweak(TF_AnchorH);
-            typo_restyle_live(state);
-        }
-        ImGui::SameLine(0.f, 4.f);
-    }
-    ImGui::PopID();
-    ImGui::NewLine();
-
-    ImGui::Dummy({0.f, 8.f});
-
-    // Vertical placement — bottom / center / top (sub_pos). Pairs with alignment.
-    ui_label("Vertical"); typo_hold_btn(state, TF_PosV);
-    int cur_pos = tw.on(TF_PosV) ? tw.pos_v : (pr ? pr->sub_pos : 1);
-    struct VBtn { int v; const char* label; };
-    VBtn vbtns[] = {{0,"Bottom"},{1,"Center"},{2,"Top"}};
-    ImGui::PushID("ty_vert");
-    for (auto& vb : vbtns) {
-        if (ui_btn(vb.label, cur_pos == vb.v, true)) {
-            tw.pos_v = vb.v; tw.tweak(TF_PosV);
-            typo_restyle_live(state);
-        }
-        ImGui::SameLine(0.f, 4.f);
-    }
-    ImGui::PopID();
-    ImGui::NewLine();
-
-    ImGui::Dummy({0.f, 10.f});
-
-    // ── Advanced ──────────────────────────────────────────────────────────────
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
     bool adv_open = ImGui::TreeNodeEx("Advanced##typo_adv",
         ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding);
@@ -525,92 +415,97 @@ void panel_typography(AppState& state, float w) {
     if (adv_open) {
         ImGui::Dummy({0.f, 6.f});
 
-        // Letter case — 3-way (As typed / UPPER / lower).
-        ui_label("Letter case"); typo_hold_btn(state, TF_Case);
-        int cur_case = tw.on(TF_Case) ? tw.text_case
-            : (pr ? (pr->text_case >= 0 ? pr->text_case : (pr->all_caps ? 1 : 0)) : 0);
+        ui_label("Letter case");
+        int cur_case = (int)typo_param_num(lc, "textCase", 0.f);
         struct CaseBtn { int v; const char* label; };
         CaseBtn cbtns[] = {{0,"As typed"},{1,"AA"},{2,"aa"}};
         for (auto& cb : cbtns) {
             if (ui_btn(cb.label, cur_case == cb.v, true)) {
-                tw.text_case = cb.v; tw.tweak(TF_Case);
-                typo_restyle_live(state);
+                typo_param_set(lc, "textCase", (float)cb.v);
+                touch("Typography case");
             }
             ImGui::SameLine(0.f, 4.f);
         }
         ImGui::NewLine();
 
         ImGui::Dummy({0.f, 8.f});
-        ui_label("Letter spacing"); typo_hold_btn(state, TF_Tracking);
-        float trk = tw.on(TF_Tracking) ? tw.tracking : (pr ? pr->tracking : 0.f);
+        ui_label("Letter spacing");
+        float trk = typo_param_num(lc, "tracking", 0.f);
         ImGui::SetNextItemWidth(full_w);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
         if (ImGui::SliderFloat("##tytrk", &trk, -0.1f, 0.5f, "%.2f")) {
-            tw.tracking = trk; tw.tweak(TF_Tracking);
-            typo_restyle_live(state);
+            typo_param_set(lc, "tracking", trk);
+            touch("Typography tracking");
         }
         ImGui::PopStyleColor();
 
         ImGui::Dummy({0.f, 8.f});
-        ui_label("Wrap width"); typo_hold_btn(state, TF_Wrap);
-        float wrp = tw.on(TF_Wrap) ? tw.wrap_w : (pr ? pr->sub_wrap_w : 0.85f);
+        ui_label("Wrap width");
+        float wrp = typo_param_num(lc, "wrapW", 0.85f);
         ImGui::SetNextItemWidth(full_w);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
         if (ImGui::SliderFloat("##tywrap", &wrp, 0.2f, 1.0f, "%.2f")) {
-            tw.wrap_w = wrp; tw.tweak(TF_Wrap);
-            typo_restyle_live(state);
+            typo_param_set(lc, "wrapW", wrp);
+            touch("Typography wrap");
         }
         ImGui::PopStyleColor();
 
-        // Fine horizontal / vertical offset.
         ImGui::Dummy({0.f, 8.f});
-        ui_label("X offset"); typo_hold_btn(state, TF_PosX);
-        float px = tw.on(TF_PosX) ? tw.pos_x : (pr ? pr->sub_pos_x : 0.5f);
+        ui_label("X offset");
+        float px = typo_param_num(lc, "posX", 0.5f);
         ImGui::SetNextItemWidth(full_w);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
         if (ImGui::SliderFloat("##typx", &px, 0.f, 1.f, "%.2f")) {
-            tw.pos_x = px; tw.tweak(TF_PosX);
-            typo_restyle_live(state);
+            typo_param_set(lc, "posX", px);
+            touch("Typography X offset");
         }
         ImGui::PopStyleColor();
 
         ImGui::Dummy({0.f, 8.f});
-        ui_label("Y offset"); typo_hold_btn(state, TF_PosY);
-        float py = tw.on(TF_PosY) ? tw.pos_y : (pr ? pr->sub_pos_y : 0.85f);
+        ui_label("Karaoke highlight");
+        float kh[4]; const float dkh[4] = {1, 0.85f, 0.1f, 1};
+        typo_params_get4(lc, "karaokeHi", kh, dkh);
         ImGui::SetNextItemWidth(full_w);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
-        if (ImGui::SliderFloat("##typy", &py, 0.f, 1.f, "%.2f")) {
-            // A manual Y offset means a custom vertical position (sub_pos=3).
-            tw.pos_y = py; tw.tweak(TF_PosY);
-            tw.pos_v = 3; tw.tweak(TF_PosV);
-            typo_restyle_live(state);
+        if (ImGui::ColorEdit4("##tykhi", kh,
+                ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaBar)) {
+            typo_param_set4(lc, "karaokeHi", kh);
+            touch("Typography karaoke highlight");
         }
-        ImGui::PopStyleColor();
+        ImGui::Dummy({0.f, 8.f});
 
-        // Fade in/out — track-wide via the shared section. apply_typo_style only
-        // applies these when the field is active, so existing fades aren't wiped.
         ImGui::Dummy({0.f, 10.f});
-        ui_label("Fade"); typo_hold_btn(state, TF_FadeIn);
-        if (!tw.on(TF_FadeIn)) tw.fade_in = 0.f;     // show 0 until the user sets it
-        if (!tw.on(TF_FadeOut)) tw.fade_out = 0.f;
-        if (section_fade(state, tw.fade_in, tw.fade_out, full_w)) {
-            tw.tweak(TF_FadeIn); tw.tweak(TF_FadeOut);
-            typo_restyle_live(state);
+        ui_label("Fade");
+        float fi = typo_param_num(lc, "fadeIn", 0.f);
+        float fo = typo_param_num(lc, "fadeOut", 0.f);
+        if (section_fade(state, fi, fo, full_w)) {
+            typo_param_set(lc, "fadeIn", fi);
+            typo_param_set(lc, "fadeOut", fo);
+            touch("Typography fade");
         }
 
-        // Text style (shadow/stroke/glow/box) — shared with the Clip tab.
         ImGui::Dummy({0.f, 10.f});
-        ui_label("Text style"); typo_hold_btn(state, TF_TextStyle);
-        if (!tw.on(TF_TextStyle) && pr) tw.ts = pr->ts;   // seed from preset until tweaked
-        if (section_text_style(state, tw.ts, full_w)) {
-            tw.tweak(TF_TextStyle);
-            typo_restyle_live(state);
+        ui_label("Text style");
+        {
+            float se = typo_param_num(lc, "ts_shadow_enabled", 1.f);
+            float sw = typo_param_num(lc, "ts_stroke_enabled", 0.f);
+            float gl = typo_param_num(lc, "ts_glow_enabled", 0.f);
+            float bg = typo_param_num(lc, "ts_bg_enabled", 0.f);
+            bool sh = se > 0.5f, st = sw > 0.5f, go = gl > 0.5f, bo = bg > 0.5f;
+            bool changed = false;
+            if (ImGui::Checkbox("Shadow##tyts_sh", &sh)) { typo_param_set(lc, "ts_shadow_enabled", sh ? 1.f : 0.f); changed = true; }
+            ImGui::SameLine();
+            if (ImGui::Checkbox("Stroke##tyts_st", &st)) { typo_param_set(lc, "ts_stroke_enabled", st ? 1.f : 0.f); changed = true; }
+            ImGui::SameLine();
+            if (ImGui::Checkbox("Glow##tyts_gl", &go)) { typo_param_set(lc, "ts_glow_enabled", go ? 1.f : 0.f); changed = true; }
+            ImGui::SameLine();
+            if (ImGui::Checkbox("Box##tyts_bg", &bo)) { typo_param_set(lc, "ts_bg_enabled", bo ? 1.f : 0.f); changed = true; }
+            if (changed) touch("Typography text style");
         }
 
         ImGui::Dummy({0.f, 8.f});
         if (ui_btn("Reset all to preset", false, true)) {
-            tw.active = 0; tw.held = 0;   // drop every tweak and pin
-            typo_restyle_live(state);
+            lc.script_params = "{}";
+            touch("Typography reset");
         }
 
         ImGui::TreePop();
@@ -657,17 +552,16 @@ Clip make_text_brick(AnimStyle style, float start) {
     return c;
 }
 
-// A 2 s lyric brick at `start`, skinned by the active typography preset. Left
-// freestanding (empty source_id) so a transcript regen never wipes it.
+// A 2 s freestanding lyric brick at `start` (empty source_id so a
+// transcript regen never wipes it). Manual Text-clip styling applies.
 Clip make_lyric_brick(AppState& state, float start) {
+    (void)state;
     Clip c;
     c.clip_type = ClipType::Lyrics;
     c.text      = "Lyric";
     c.start     = start;
     c.end       = start + 2.f;
-    const TypographyPreset* pr = typo_preset_by_id(state.typo_preset_id.c_str());
-    if (!pr) pr = &g_typo_presets[0];
-    apply_typo_style(c, *pr, state);
+    c.sub_pos   = 1;
     return c;
 }
 

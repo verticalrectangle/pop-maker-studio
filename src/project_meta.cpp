@@ -120,6 +120,10 @@ bool open_project_path(AppState& state, const std::string& path) {
     // synchronously so the first frame renders with it; a cache miss starts
     // the background run (progress via get_audio_analysis).
     audio_analysis_republish(state);
+    // Transcript words back the typography Script layer (pms.words falls back
+    // to words_cache when the analysis has no words): hydrate from the saved
+    // words JSON path so a reloaded project renders lyrics on frame one.
+    load_words_cache(state);
     recent_projects_push(path);
     history_push(state, "Open project");
     mark_project_clean(state);

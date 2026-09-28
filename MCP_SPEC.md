@@ -157,7 +157,8 @@ The server registers ~70 tools spanning the full editing surface. **The canonica
 | **Bin** | `add_to_bin`, `remove_from_bin` (bin contents surface via `get_project.bin`) |
 | **Timeline edits** | `add_clip`, `add_clip_sequence`, `delete_clip`, `move_clip`, `trim_clip`, `split_clip`, `set_clip_prop`, `set_clip_props`, `set_text_style` |
 | **Tracks** | `add_track`, `rename_track`, `delete_clips_after`, `trim_all_to` |
-| **Effects / bricks** | `add_effect_brick`, `add_body_fx_brick`, `add_multifx_brick`, `add_callout`, `generate_typography` |
+| **Effects / bricks** | `add_effect_brick`, `add_body_fx_brick`, `add_multifx_brick`, `add_callout` |
+| **Typography** | `set_typography_preset` (lays/replaces ONE `pms:typography/<id>` Script clip spanning the words; `generate_typography` is its legacy alias), `set_text_style`, `set_transcript` |
 | **Markers** | `add_chapter_marker`, `remove_chapter_marker`, `generate_chapters` |
 | **ML pipeline** | `trigger_pipeline`, `get_pipeline_status`, `get_transcript`, `read_transcript_context`, `search_transcript`, `analyze_audio`, `get_audio_analysis`, `find_audio_cue` |
 | **Search / discovery** | `find_and_add_clip`, `find_video_moment`, `cut_at_phrase`, `cut_filler_words`, `remove_silence` |

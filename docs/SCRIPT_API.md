@@ -57,12 +57,12 @@ export function render(f) {}      // required; once per frame the clip is visibl
 | `pms.canvas` | `Context2D` | §4. Every drawing-state attribute is reset to its spec default (identity transform, `10px sans-serif`, black styles, no clip) and the framebuffer cleared to transparent before each `render`. Drawing outside `render` throws; `measureText` works in `setup` too. |
 | `pms.params` | object | the clip's `script_params` JSON (`{}` if empty) |
 | `pms.audio` | `Analysis \| null` | audio analysis v2 of the project's master audio, times converted to **timeline seconds** (docs/AUDIO_ANALYSIS.md schema). `null` until analysis exists. |
-| `pms.words` | `Word[]` | `{w, t0, t1, line, i, conf}` in timeline seconds (from `pms.audio.words`, empty if none) |
+| `pms.words` | `Word[]` | `{w, t0, t1, line, i, conf}` in timeline seconds (from `pms.audio.words`; when the analysis has no words, falls back to the project transcript — `AppState::words_cache` in source seconds of `state.audio_path` with `lyrics_edits` applied, mapped to timeline seconds through the timeline clip that plays that source with the same `in_point − start` mapping as `pms.audio`; identity-stable — rebuilt only when the words, edits or mapping change) |
 | `pms.lines` | `string[]` | lyric lines |
 | `pms.json(path)` | any | parse a JSON file (relative to the script file); cached; watched for reload |
 | `pms.image(path)` | `Image` | `{width, height}`; decoded synchronously on first call (stb_image, RGBA, alpha kept), cached per runtime; relative paths resolve against the script file. Call it at module top level for every image a scene uses: decoding then happens once at load instead of stalling the first frame that needs it while scrubbing |
 | `pms.face(path)` | `FaceTrack \| null` | per-frame face data for a media file (§3.1). `null` while tracking; the host starts tracking on first request; export blocks until every requested track is ready. |
-| `pms.font(family, path)` | void | add a TTF/OTF face to a family (idempotent; several files under one family are matched by weight/style like CSS; a bold request on a regular-only family is synthesised). Built-in families: `"Inter"` (400/700/900; also `sans-serif`, `system-ui`), `"Mono"` (JetBrains Mono 400; also `monospace`) |
+| `pms.font(family, path)` | void | add a TTF/OTF face to a family (idempotent; several files under one family are matched by weight/style like CSS; a bold request on a regular-only family is synthesised). Built-in families: `"Inter"` (400/700/900; also `sans-serif`, `system-ui`), `"Mono"` (JetBrains Mono 400; also `monospace`). `pms:fonts/<relative path>` resolves to `assets/fonts/<relative path>` (exact path first, then a case-insensitive basename match under `assets/fonts/display/`), so presets register bundled display faces via `pms.font(family, 'pms:fonts/<file>.ttf')` |
 | `pms.post(frag, uniforms)` | void | set this frame's post shader (§5). Call inside `render`; if not called, no post pass. |
 | `pms.hash(a, b?, c?)` | number in [0,1) | deterministic integer hash, bit-identical to the reference in §7 |
 | `pms.log(...args)` | void | to the script log (`get_script_errors` returns the last 200 lines); `console.log/warn/error` alias it |
@@ -167,6 +167,27 @@ the preview framebuffer is smaller than `u_res`.
   → per-word boxes; `fit(ctx, words, box, {max, min})` → largest font size that fits without
   splitting words; glyph iteration for per-glyph transforms (flip, offset, scramble).
 - `pms:typography/<preset>` — the ported typography presets (see `assets/scripts/typography/`).
+  A typography layer is ONE Script clip whose `script_path` is `pms:typography/<id>`
+  (the entry resolver accepts `pms:` specifiers so projects stay portable) and whose
+  `script_params` JSON carries the per-layer Tune overrides. Each preset module exports
+  `meta = {id, name, category}` and `render(f)`; the shared renderer is
+  `assets/scripts/typography/lib/typography.js`. Presets with an `fx` config array
+  (VHS/FilmGrain/Scanlines/ChromaticAberration) additionally lay global Effect
+  bricks on a managed LyricsFX track (same bricks the native generator laid), so
+  the effect covers everything below the lyrics track; the Script clip itself
+  applies no post pass.
+  Params (all optional): `fontSize` (fraction of canvas height), `pos` (0 bottom /
+  1 center / 2 top), `posX`, `posY`, `anchorH` (0 left / 1 center / 2 right), `wrapW`
+  (fraction of canvas width), `color`/`karaokeHi`/`gradCol2` (`[r,g,b,a]` 0..1),
+  `textCase` (0 as-typed / 1 UPPER / 2 lower), `tracking` (fraction of font size),
+  `ease`, `animUnit`, `animStagger`, `karaokeMode`, `gradMode`, `grouping`,
+  `customN`, `pauseGap`, `maxWords`, `rotationDeg`, `fadeIn`/`fadeOut` (seconds),
+  `font`/`style` aliases, `shadow`/`stroke`/`glow`/`bg` toggles plus `ts_*`
+  shadow/stroke/glow/box keys. `pms.words` supplies the words (transcript fallback
+  above); grouping, layout, animation, karaoke and gradient semantics mirror the
+  old native renderer. IPC/MCP `set_typography_preset` / `generate_typography`
+  (legacy alias) and `trigger_pipeline`'s preset auto-lay create/replace that
+  Script clip spanning the words' time range instead of generating Text clips.
 
 ## 7. Reference hash
 
@@ -182,9 +203,10 @@ function hash(a, b = 0, c = 0) {
 
 ## 8. Clip fields, IPC and MCP
 
-- `Clip::script_path` (entry module; absolute, or relative to the project file),
-  `Clip::script_params` (JSON string). Standard transform/opacity/fade fields apply; the
-  layer covers the canvas at `pos 0.5/0.5, scale 1`.
+- `Clip::script_path` (entry module; a `pms:` specifier, an absolute path, or
+  relative to the project file), `Clip::script_params` (JSON string). Standard
+  transform/opacity/fade fields apply; the layer covers the canvas at
+  `pos 0.5/0.5, scale 1`.
 - IPC / MCP: `add_script_clip {track, start, duration, path, params?}`,
   `set_script_clip {track, clip, path?, params?}`,
   `get_script_errors {track?, clip?}` → `{clips: [{clip: "track:clip", errors: [{message,
