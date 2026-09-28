@@ -38,7 +38,6 @@ std::mutex g_mtx;
 std::deque<FillJob> g_jobs;
 std::vector<ReadyMask> g_ready;  // pumped to GL by skin_mask_pump
 bool g_worker_up = false;
-bool g_quit = false;  // set at process exit only; worker is detached
 
 // Keys with a job queued/in-flight or a ready mask awaiting pump. Checked in
 // skin_mask_request (skip duplicates) and skin_mask_texture (don't report a
@@ -156,7 +155,6 @@ void skin_mask_request(const std::string& src_key,
     // Cap the ORT input: 256x256 net, so downsample large sources on the
     // caller thread (cheap box average) — the worker's bilinear 256 resize
     // runs per pixel and a 1920x1440 source would cost ~40 ms before ORT.
-    static thread_local std::vector<uint8_t> small;
     const uint8_t* in = rgb;
     int iw = w, ih = h;
     std::vector<uint8_t> owned;

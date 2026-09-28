@@ -11,6 +11,7 @@
 #include "proxy.h"
 #include "history.h"
 #include "fx_shader.h"
+#include "../skin_mask_cache.h"
 #include "bg_presets.h"
 #include "theme.h"
 #include "../ipc_server.h"
@@ -2036,6 +2037,10 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                             char skbuf[512];
                             snprintf(skbuf, sizeof(skbuf), "%s@vf:%.3f",
                                      cl_ptr->text.c_str(), (double)src_t);
+                            if (skin_mask_texture(skbuf, vi_g.width, vi_g.height)) {
+                                // Hot cache: point the chain at it, no readback.
+                                fx_set_skin_source(skbuf, nullptr, 0, 0);
+                            } else {
                             static thread_local std::vector<uint8_t> s_rgb;
                             static std::vector<uint8_t> s_full;
                             int hw2 = vi_g.width / 2, hh2 = vi_g.height / 2;
@@ -2068,6 +2073,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
                                 }
                                 fx_set_skin_source(skbuf, s_rgb.data(), hw2, hh2,
                                                    vi_g.width, vi_g.height);
+                            }
                             }
                         }
                         tex = fx_apply(tex, slot, vi_g.width, vi_g.height, glass_ea, glass_cfx, t_anim);
