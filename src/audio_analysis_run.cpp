@@ -89,7 +89,7 @@ inline double onset_frame_time(int f) { return (double)f * kHop / kSR; }
 // Peak-pick an onset envelope per the spec table; write hits with p90 strengths.
 // norm_q: quantile for norm = env / p97; delta = 0.5 * quantile(norm, delta_q).
 void pick_hits(const std::vector<float>& env, float delta_q, float wait_s,
-               std::vector<AudioHit>& out) {
+               std::vector<AudioHit>& out, double t_off = 0.0) {
     out.clear();
     int n = (int)env.size();
     if (n == 0) return;
@@ -108,7 +108,7 @@ void pick_hits(const std::vector<float>& env, float delta_q, float wait_s,
     for (int p : peaks) {
         float s = norm[p] / ref;
         if (s > 1.f) s = 1.f;
-        out.push_back({onset_frame_time(p), s});
+        out.push_back({onset_frame_time(p) + t_off, s});
     }
 }
 
@@ -169,17 +169,42 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
     (void)absbuf;
     out.source = fs::absolute(audio_path).string();
 
+    // Optional analysis range [range_t0, range_t1) in source seconds: decode,
+    // separate, analyse and normalise only that span; all event times stay in
+    // source seconds (offset by the span start). Like the reference, which
+    // analysed the 80–130 s segment of the song (SEG_START=80).
+    double span_t0 = 0.0, span_t1 = -1.0;
+    bool use_span = false;
+    if (opt.has_range && opt.range_t1 > opt.range_t0 && opt.range_t0 >= 0.0) {
+        span_t0 = opt.range_t0;
+        span_t1 = opt.range_t1;
+        use_span = true;
+    }
+    size_t span_s0 = 0;  // span start in samples @ kOutSR (mix rate)
+    size_t span_n = 0;   // span length in samples @ kOutSR
+
     // ── 1. Decode the mix ────────────────────────────────────────────────────
     report(progress, 0.02f, "Decoding mix…");
     std::vector<float> mix;
     {
         std::string derr;
-        if (!aadsp::decode_mono(audio_path, kOutSR, mix, &derr)) {
-            if (err) *err = derr;
-            return false;
+        if (use_span) {
+            if (!aadsp::decode_mono_span(audio_path, kOutSR, span_t0, span_t1, mix, &derr)) {
+                if (err) *err = derr;
+                return false;
+            }
+            span_s0 = (size_t)std::llround(span_t0 * kOutSR);
+            span_n = mix.size();
+        } else {
+            if (!aadsp::decode_mono(audio_path, kOutSR, mix, &derr)) {
+                if (err) *err = derr;
+                return false;
+            }
         }
     }
-    out.duration = (double)mix.size() / kOutSR;
+    double span_off = use_span ? (double)span_s0 / kOutSR : 0.0;  // source seconds of mix[0]
+    out.duration = use_span ? span_off + (double)mix.size() / kOutSR
+                            : (double)mix.size() / kOutSR;
 
     // ── 2. Stems ─────────────────────────────────────────────────────────────
     // Order: drums, bass, other, vocals.
@@ -192,17 +217,28 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         have4 = true;
         for (int i = 0; i < 4; i++) {
             std::string derr;
-            if (aadsp::decode_mono(stem_paths[i], kOutSR, stems[i], &derr)) have[i] = true;
+            if (use_span) {
+                if (aadsp::decode_mono_span(stem_paths[i], kOutSR, span_t0, span_t1, stems[i],
+                                            &derr))
+                    have[i] = true;
+            } else if (aadsp::decode_mono(stem_paths[i], kOutSR, stems[i], &derr)) {
+                have[i] = true;
+            }
         }
         have4 = have[0] && have[1] && have[2] && have[3];
         for (int i = 0; i < 4; i++) out.stems[i] = have[i] ? stem_paths[i] : std::string();
     } else if (opt.separate_stems && separate4_available()) {
         std::string derr;
-        fs::path od = fs::path(cache_path(audio_path, "_stems4"));
+        fs::path od = fs::path(use_span ? cache_path(audio_path + "\nspan", "_stems4")
+                                        : cache_path(audio_path, "_stems4"));
         std::error_code ec;
         fs::create_directories(od, ec);
         std::array<std::string, 4> op;
-        if (separate_stems4(audio_path, od.string(), op, nullptr, &derr)) {
+        bool sep_ok = use_span
+            ? separate_stems4_span(audio_path, span_t0, span_t1, od.string(), op, nullptr,
+                                   &derr)
+            : separate_stems4(audio_path, od.string(), op, nullptr, &derr);
+        if (sep_ok) {
             for (int i = 0; i < 4; i++) {
                 stem_paths[i] = op[i];
                 out.stems[i] = op[i];
@@ -239,10 +275,14 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         auto oenv = aadsp::onset_strength_mel(mix.data(), (int)mix.size(), kSR, kHop);
         auto bt = aadsp::beat_track(oenv.data(), (int)oenv.size(), kSR, kHop, 400.f, false);
         out.bpm = bt.bpm;
+        // Span-relative bookkeeping: the DSP runs on the span slice, so frame
+        // times are span-local; the user-visible duration/beats stay absolute.
+        double span_len = (double)mix.size() / kOutSR;
         for (int f : bt.frames) {
-            double t = onset_frame_time(f);
-            if (t >= -0.05 && t < out.duration) out.beats.push_back(t);
-            else if (t >= out.duration && t < out.duration + 0.011)
+            double tl = onset_frame_time(f);
+            double t = tl + span_off;
+            if (tl >= -0.05 && tl < span_len) out.beats.push_back(t);
+            else if (tl >= span_len && tl < span_len + 0.011)
                 out.beats.push_back(t);  // keep the closing-frame beat (trim=False)
         }
     }
@@ -280,8 +320,12 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                         nfr);
         std::vector<float> chroma;
         aadsp::chroma_from_power(cfb, mag.data(), nfr, chroma);
+        // Beat-frame indices must be INTEGERS on the onset grid: beats sit
+        // exactly on frames (0.61 s period = 61 hops), and (b - span_off) in
+        // floating point can land one frame low (80.81 → 80 instead of 81),
+        // shifting chroma sync + bass windows and flipping the phase.
         std::vector<int> bf;
-        for (double b : out.beats) bf.push_back((int)(b * kSR / kHop));
+        for (double b : out.beats) bf.push_back((int)std::llround((b - span_off) * kSR / kHop));
         int phase = 0;
         if (!bf.empty())
             phase = aadsp::downbeat_phase(bo.data(), (int)bo.size(), bf.data(),
@@ -305,26 +349,28 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         auto kick_env = aadsp::band_flux(mag.data(), bins, nfr, kSR, 2048, 30, 150);
         auto snare_env = aadsp::band_flux(mag.data(), bins, nfr, kSR, 2048, 180, 4000);
         auto hat_env = aadsp::band_flux(mag.data(), bins, nfr, kSR, 2048, 7000, 16000);
-        pick_hits(kick_env, 0.90f, 0.12f, out.hits[(int)HitKind::Kick]);
-        pick_hits(snare_env, 0.90f, 0.12f, out.hits[(int)HitKind::Snare]);
-        pick_hits(hat_env, 0.80f, 0.07f, out.hits[(int)HitKind::Hat]);
+        pick_hits(kick_env, 0.90f, 0.12f, out.hits[(int)HitKind::Kick], span_off);
+        pick_hits(snare_env, 0.90f, 0.12f, out.hits[(int)HitKind::Snare], span_off);
+        pick_hits(hat_env, 0.80f, 0.07f, out.hits[(int)HitKind::Hat], span_off);
         auto stem_onsets = [&](const std::vector<float>& s) {
             return aadsp::onset_strength_mel(s.data(), (int)s.size(), kSR, kHop);
         };
         std::vector<float> bsrc = have[1] ? stems[1] : (have_vocals ? instrumental : mix);
         std::vector<float> osrc = have[2] ? stems[2] : (have_vocals ? instrumental : mix);
         std::vector<float> vsrc = have_vocals ? stems[3] : mix;
-        pick_hits(stem_onsets(bsrc), 0.85f, 0.10f, out.hits[(int)HitKind::Bass]);
-        pick_hits(stem_onsets(osrc), 0.85f, 0.08f, out.hits[(int)HitKind::Other]);
-        pick_hits(stem_onsets(vsrc), 0.85f, 0.08f, out.hits[(int)HitKind::Vocal]);
+        pick_hits(stem_onsets(bsrc), 0.85f, 0.10f, out.hits[(int)HitKind::Bass], span_off);
+        pick_hits(stem_onsets(osrc), 0.85f, 0.08f, out.hits[(int)HitKind::Other], span_off);
+        pick_hits(stem_onsets(vsrc), 0.85f, 0.08f, out.hits[(int)HitKind::Vocal], span_off);
     }
 
     // ── 6. Envelopes at 60 fps ───────────────────────────────────────────────
+    // Span-relative: frame f ↔ span_off + f/fps (env/spectrum stay span-local
+    // like the reference clip analysis; beats/hits/words carry absolute times).
     report(progress, 0.70f, "Building envelopes…");
     {
         out.fps = 60;
         int hop = kSR / out.fps;
-        int n_frames = (int)(out.duration * out.fps);
+        int n_frames = (int)((double)mix.size() / kOutSR * out.fps);
         const std::vector<float>* srcs[5] = {&mix, &mix, &mix, &mix, &mix};
         if (have4) {
             srcs[1] = &stems[0];
@@ -351,7 +397,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
     {
         out.spectrum_bands = 32;
         int hop = kSR / out.fps;
-        int n_frames = (int)(out.duration * out.fps);
+        int n_frames = (int)((double)mix.size() / kOutSR * out.fps);
         const int n_fft = 4096;
         auto win = aadsp::hann_periodic(n_fft);
         std::vector<float> mag;
@@ -392,12 +438,23 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         std::vector<float> v16;
         std::string align_err;
         bool aligned = false;
+        // v16_off: source seconds of v16[0]. Span stem files cover the span
+        // (span-relative); whole-file sources are sliced to the span here.
+        double v16_off = use_span ? span_off : 0.0;
         {
             const char* vsrc = nullptr;
             if (have_vocals && !out.stems[3].empty()) vsrc = out.stems[3].c_str();
             std::string derr;
-            if (!aadsp::decode_mono(vsrc ? vsrc : audio_path, 16000, v16, &derr))
-                align_err = derr;
+            bool ok16;
+            if (use_span && vsrc) {
+                ok16 = aadsp::decode_mono(vsrc, 16000, v16, &derr);
+            } else if (use_span) {
+                ok16 = aadsp::decode_mono_span(audio_path, 16000, span_t0, span_t1, v16,
+                                               &derr);
+            } else {
+                ok16 = aadsp::decode_mono(vsrc ? vsrc : audio_path, 16000, v16, &derr);
+            }
+            if (!ok16) align_err = derr;
         }
         std::string model_path = wav2vec2_ctc_path();
         CtcVocab vocab = load_ctc_vocab(model_path);
@@ -409,11 +466,13 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
         // total failure of the pass).
         std::vector<std::pair<double, double>> wins(opt.lyrics.size(), {0.0, 0.0});
         std::vector<char> win_given(opt.lyrics.size(), 0);
+        double span_end = use_span ? span_off + (double)mix.size() / kOutSR
+                                     : out.duration;
         for (size_t li = 0; li < opt.lyrics.size(); li++) {
             if (opt.lyrics[li].has_window && opt.lyrics[li].w1 > opt.lyrics[li].w0) {
                 double w0 = opt.lyrics[li].w0, w1 = opt.lyrics[li].w1;
-                if (w0 < 0.0) w0 = 0.0;
-                if (w1 > out.duration) w1 = out.duration;
+                if (w0 < span_off) w0 = span_off;
+                if (w1 > span_end) w1 = span_end;
                 if (w1 > w0) {
                     wins[li] = {w0, w1};
                     win_given[li] = 1;
@@ -501,8 +560,8 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                     const auto& tgt = line_targets[li];
                     if (tgt.empty()) continue;
                     int L = (int)tgt.size();
-                    int s0 = std::max(0, (int)(w0 * 16000.0));
-                    int s1 = std::min((int)v16.size(), (int)(w1 * 16000.0));
+                    int s0 = std::max(0, (int)((w0 - v16_off) * 16000.0));
+                    int s1 = std::min((int)v16.size(), (int)((w1 - v16_off) * 16000.0));
                     if (s1 <= s0) continue;
                     // Per-window zero-mean unit-variance chunk (the reference
                     // runs inference over the window slice only).
