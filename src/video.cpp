@@ -1,7 +1,7 @@
 #include "platform.h"
 #include "video.h"
+#include "perf.h"
 #include "fx_shader.h"
-
 // ── stb_image — JPEG + PNG decode ────────────────────────────────────────────
 #define STB_IMAGE_IMPLEMENTATION
 #pragma GCC diagnostic push
@@ -26,8 +26,11 @@ extern "C" {
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
-#include <functional>
-#include <deque>
+// th/perf-decode: async decode needs shared_future/steady_clock (slot requests
+// below) — chrono was previously only pulled in transitively.
+#include <chrono>
+#include <future>
+#include <utility>
 
 #include "gl_compat.h"
 
@@ -469,29 +472,43 @@ static void cpu_apply_blur(uint8_t* px, int w, int h, float sigma) {
 
 // ── Preview state ─────────────────────────────────────────────────────────────
 
-// ── Per-slot decoded-frame ring ──────────────────────────────────────────────
+// ── Per-slot decoded-frame cache (th/perf-decode async redesign) ─────────────
 //
-// Each slot keeps a small ring of CPU-decoded frames. video_prefetch_frames()
-// fills the ring with current + N future frames on worker threads; the main
-// thread's video_get_texture() then uploads the matching cached frame with
-// zero JPEG decode work on the critical path.
+// Old design: an 8-frame forward-only ring filled by video_prefetch_frames()
+// with a blocking tp.wait_idle() on the UI thread, plus a synchronous decode
+// fallback inside video_get_texture() on every cache miss. Scrubbing to a
+// cold frame therefore ran a full libav seek+decode+sws+datamosh on the main
+// thread (~40-55 ms at 1080p60) — the UI-frame p95/p99 spikes in the baseline.
 //
-// fx_stamp captures the identity of decode-affecting FX params. When FX
-// params change, fx_stamp bumps and the ring's entries become stale (they
-// stay in memory but get skipped by ring_find()). Pure-time changes do NOT
-// bump fx_stamp unless a time-driven FX is on, so playback under static
-// FX keeps cache hits.
+// New design:
+// - video_get_texture() NEVER decodes on the calling thread. On a miss it
+//   submits at most one async decode for the requested frame (latest wins;
+//   a newer request cancels the in-flight one) and presents the nearest
+//   already-cached frame for that slot meanwhile (or the previous GL texture,
+//   or 0 when nothing is available yet).
+// - video_prefetch_frames() only submits (never waits): current frame ±
+//   lookahead on both sides of the playhead, bounded per slot, plus the
+//   memory-budgeted preview LRU below.
+// - fx_stamp captures the identity of decode-affecting FX params (unchanged
+//   semantics): FX changes bump it and cached entries with an older stamp
+//   are skipped. Pure-time changes do NOT bump unless a time-driven FX is on.
 //
-// 8-frame ring (~135 ms at 60 fps) gives the canvas pre-walk room to warm
-// both the active clip and a 1-second-boundary neighbor without thrashing
-// each other's entries.
+// Two tiers per slot:
+// - Ring: RING_FRAMES decoded frames around the playhead (both directions),
+//   keyed by (frame_idx, fx_stamp). Fast path for scrub/playback locality.
+// - Preview LRU: recently SHOWN frames kept CPU-side under a global byte
+//   budget (kPreviewLruBudgetBytes), so a scrub back to a recently visited
+//   spot re-uploads from RAM instead of re-decoding. GPU textures stay
+//   bounded: one live texture per slot (+1 thumbnail), unchanged.
 static constexpr int RING_FRAMES = 8;
+static constexpr size_t kPreviewLruBudgetBytes = 1024ull * 1024ull * 1024ull;  // 1 GiB total
 
 struct DecodedFrame {
     int      frame_idx = -1;       // -1 = empty, -2 = reserved (in-flight)
     uint64_t fx_stamp  = 0;
     int      w = 0, h = 0;
     bool     rgba = false;
+    bool     draft = false;        // reduced-res / FX-skipped scrub preview
     std::vector<uint8_t> rgb;        // decoded RGB pixels (always populated)
     std::vector<uint8_t> rgba_buf;   // composited RGBA (populated when rgba=true)
     std::vector<uint8_t> corr_alpha; // corruption-bleed alpha mask scratch
@@ -572,7 +589,116 @@ struct PreviewState {
 
     DecodedFrame ring[RING_FRAMES];
     int          ring_head = 0;   // next eviction target (round-robin)
+    // ── th/perf-decode async request state ─────────────────────────────────
+    // Latest-request-wins: at most one in-flight decode per slot. Main thread
+    // bumps async_seq to retarget; the worker publishes only when its snapshot
+    // still matches, otherwise discards (stale cancel). Atomics: the worker
+    // writes async_busy/async_done off the main thread (TSan-clean).
+    std::atomic<uint64_t> async_seq{0};   // bumped per new request (main thread)
+    std::atomic<uint64_t> async_done{0};  // seq of last published result (worker)
+    std::atomic<int>      async_frame{-1};// frame the in-flight decode wants
+    std::atomic<uint64_t> async_stamp{0}; // fx_stamp the request was issued under
+    bool     async_draft = false;  // reduced-res scrub decode in flight (main only)
+    std::atomic<bool> async_busy{false};  // a worker currently owns the decode
+    std::vector<uint8_t> present_scratch;  // miss-upload scratch (no per-frame alloc)
 };
+
+// ── Global preview LRU (CPU-side, memory-budgeted) ───────────────────────────
+// Recently SHOWN frames per slot, keyed (slot, frame_idx, fx_stamp, draft).
+// Re-serves from RAM without re-decoding when the ring has moved on (e.g.
+// scrub away and back). Bounded by kPreviewLruBudgetBytes across all slots;
+// eviction is oldest-shown-first. Main thread only on lookup/store paths
+// below (single mutex for safety; workers never touch it).
+struct LruEntry {
+    int slot = -1;
+    int frame_idx = -1;
+    uint64_t stamp = 0;
+    bool draft = false;
+    int w = 0, h = 0;
+    bool rgba = false;
+    std::vector<uint8_t> px;  // rgba_buf when rgba, else rgb
+    size_t bytes = 0;
+};
+static std::mutex g_lru_mu;
+static std::unordered_map<uint64_t, LruEntry> g_preview_lru;
+static std::vector<uint64_t> g_lru_order;  // oldest first
+static size_t g_lru_bytes = 0;
+static uint64_t lru_key(int slot, int frame_idx, uint64_t stamp, bool draft) {
+    uint64_t k = (uint64_t)(uint32_t)slot * 0x9E3779B97F4A7C15ull
+               ^ (uint64_t)(uint32_t)frame_idx * 0xBF58476D1CE4E5B9ull
+               ^ (stamp * 0x94D049BB133111EBull)
+               ^ (draft ? 0xD1B54A32D192ED03ull : 0);
+    return k ? k : 1;
+}
+static void lru_touch_locked(uint64_t k) {
+    for (size_t i = 0; i < g_lru_order.size(); ++i) {
+        if (g_lru_order[i] == k) {
+            g_lru_order.erase(g_lru_order.begin() + (long)i);
+            g_lru_order.push_back(k);
+            return;
+        }
+    }
+}
+static void lru_evict_while_over_budget_locked() {
+    while (g_lru_bytes > kPreviewLruBudgetBytes && !g_lru_order.empty()) {
+        uint64_t k = g_lru_order.front();
+        g_lru_order.erase(g_lru_order.begin());
+        auto it = g_preview_lru.find(k);
+        if (it == g_preview_lru.end()) continue;
+        g_lru_bytes -= it->second.bytes;
+        g_preview_lru.erase(it);
+    }
+}
+static void lru_store(int slot, const DecodedFrame& f) {
+    if (f.frame_idx < 0 || f.w <= 0 || f.h <= 0) return;
+    size_t bytes = f.rgba ? f.rgba_buf.size() : f.rgb.size();
+    if (bytes == 0 || bytes > kPreviewLruBudgetBytes / 4) return;
+    uint64_t k = lru_key(slot, f.frame_idx, f.fx_stamp, f.draft);
+    std::lock_guard<std::mutex> lk(g_lru_mu);
+    auto it = g_preview_lru.find(k);
+    if (it != g_preview_lru.end()) {
+        g_lru_bytes -= it->second.bytes;
+        it->second.px = f.rgba ? f.rgba_buf : f.rgb;
+        it->second.bytes = bytes;
+        it->second.w = f.w; it->second.h = f.h; it->second.rgba = f.rgba;
+        g_lru_bytes += bytes;
+        lru_touch_locked(k);
+    } else {
+        LruEntry e;
+        e.slot = slot; e.frame_idx = f.frame_idx; e.stamp = f.fx_stamp; e.draft = f.draft;
+        e.w = f.w; e.h = f.h; e.rgba = f.rgba;
+        e.px = f.rgba ? f.rgba_buf : f.rgb;
+        e.bytes = bytes;
+        g_preview_lru.emplace(k, std::move(e));
+        g_lru_order.push_back(k);
+        g_lru_bytes += bytes;
+    }
+    lru_evict_while_over_budget_locked();
+}
+// Exact full-quality hit first; when full==false also accept a cached draft
+// scrub decode (better than blank). Main thread only.
+static bool lru_lookup(int slot, int frame_idx, uint64_t stamp, bool full,
+                       std::vector<uint8_t>& out, int& w, int& h, bool& rgba) {
+    std::lock_guard<std::mutex> lk(g_lru_mu);
+    uint64_t kf = lru_key(slot, frame_idx, stamp, false);
+    auto it = g_preview_lru.find(kf);
+    if (it != g_preview_lru.end()) {
+        out = it->second.px;
+        w = it->second.w; h = it->second.h; rgba = it->second.rgba;
+        lru_touch_locked(kf);
+        return true;
+    }
+    if (!full) return false;
+    uint64_t kd = lru_key(slot, frame_idx, stamp, true);
+    it = g_preview_lru.find(kd);
+    if (it != g_preview_lru.end()) {
+        out = it->second.px;
+        w = it->second.w; h = it->second.h; rgba = it->second.rgba;
+        lru_touch_locked(kd);
+        return true;
+    }
+    return false;
+}
 
 static PreviewState g_pv[MAX_VIDEO_SLOTS];
 
@@ -655,6 +781,12 @@ struct ThreadPool {
         cv_task.notify_one();
     }
 
+    bool try_wait_idle_for(int timeout_ms) {
+        std::unique_lock<std::mutex> lk(mu);
+        return cv_done.wait_for(lk, std::chrono::milliseconds(timeout_ms),
+                                [this]{ return inflight.load() == 0; });
+    }
+    bool busy() const { return inflight.load(std::memory_order_relaxed) != 0; }
     void wait_idle() {
         std::unique_lock<std::mutex> lk(mu);
         cv_done.wait(lk, [this]{ return inflight.load() == 0; });
@@ -978,6 +1110,19 @@ static DecodedFrame* ring_find(PreviewState& pv, int frame_idx) {
             return &f;
     return nullptr;
 }
+// Quality-gated variant: full requests (want_draft=false) only match full
+// entries; draft requests match either (a full entry is BETTER than a draft
+// one — serve it rather than re-decoding a worse copy).
+static DecodedFrame* ring_find_q(PreviewState& pv, int frame_idx, bool want_draft) {
+    DecodedFrame* draft_hit = nullptr;
+    for (auto& f : pv.ring) {
+        if (f.frame_idx != frame_idx || f.fx_stamp != pv.fx_stamp) continue;
+        if (!f.draft) return &f;  // full entry serves either request
+        if (want_draft) return &f;
+        draft_hit = &f;
+    }
+    return want_draft ? draft_hit : nullptr;
+}
 
 // Reserve a ring slot for decode. Round-robin eviction, but skip slots that
 // are already reserved (-2) so a prefetch batch of N ≤ RING_FRAMES jobs
@@ -1117,7 +1262,12 @@ static bool intermediate_decode_locked(PreviewState& pv, int frame_idx,
     return got;
 }
 
+static void prepare_proxy_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame_idx, bool draft);
+static void prepare_proxy_frame_cpu_impl(PreviewState& pv, DecodedFrame& f, int frame_idx, bool draft);
 static void prepare_proxy_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame_idx) {
+    prepare_proxy_frame_cpu_impl(pv, f, frame_idx, false);
+}
+static void prepare_proxy_frame_cpu_impl(PreviewState& pv, DecodedFrame& f, int frame_idx, bool draft) {
     auto release_empty = [&]{ f.frame_idx = -1; };
 
     if (!pv.fmt_ctx || !pv.dec_ctx || pv.proxy.offsets.empty() ||
@@ -1209,17 +1359,25 @@ static void prepare_proxy_frame_cpu(PreviewState& pv, DecodedFrame& f, int frame
     }
 
     // ── Phase 2 (unlocked): CPU FX + optional RGBA composite ───────────────
-    const uint8_t* bg_ptr = (pfx.bg_remove_on && !bg_mask_snapshot.empty())
-                            ? bg_mask_snapshot.data() : nullptr;
+    // Draft (drag-quality) decodes skip CPU pixel FX entirely (datamosh,
+    // glitch, VHS, grade, blur) — the fullscreen pass refines once the drag
+    // stops. Chroma-key alpha is also skipped (needs the grade path); the
+    // draft presents opaque and refines to keyed.
+    const uint8_t* bg_ptr = nullptr;
     bool want_rgba = false;
-    apply_pixel_fx_rgb(f.rgb.data(), out_w, out_h, &pfx,
-                       bg_ptr, bg_mask_w_snap, bg_mask_h_snap,
-                       pfx.bg_remove_softness,
-                       f.rgba_buf, f.corr_alpha, want_rgba);
+    if (!draft) {
+        bg_ptr = (pfx.bg_remove_on && !bg_mask_snapshot.empty())
+                 ? bg_mask_snapshot.data() : nullptr;
+        apply_pixel_fx_rgb(f.rgb.data(), out_w, out_h, &pfx,
+                           bg_ptr, bg_mask_w_snap, bg_mask_h_snap,
+                           pfx.bg_remove_softness,
+                           f.rgba_buf, f.corr_alpha, want_rgba);
+    }
 
     f.w         = out_w;
     f.h         = out_h;
     f.rgba      = want_rgba;
+    f.draft     = draft;
     f.fx_stamp  = stamp_at_decode;
     f.frame_idx = frame_idx;   // publish
 }
@@ -1367,11 +1525,36 @@ static bool reopen_decoder_software(PreviewState& pv) {
 
 static void probe_frame0_or_fallback_sw(int track_id) {
     PreviewState& pv = g_pv[track_id];
+    // video_get_texture() is non-blocking now: a cold slot submits an async
+    // decode and returns 0/nearest. Drain that first decode here (open path
+    // only — NOT the per-frame path) so the canvas has frame 0 immediately
+    // and the HW→software fallback probe below tests a real result.
     if (video_get_texture(track_id, 0.0)) return;
+    ThreadPool& tp = pool();
+    // Wait for the slot's in-flight decode (bounded: a single 1080p
+    // software decode is ~30-60 ms; cap at 5 s so a wedged worker can't
+    // hang project open forever).
+    for (int i = 0; i < 500 && pv.async_busy.load(std::memory_order_acquire); ++i) {
+        if (tp.try_wait_idle_for(10)) break;
+    }
+    pv.async_busy.store(false, std::memory_order_release);  // wedged worker (if any) discards on publish
+    if (DecodedFrame* f = ring_find(pv, 0)) {
+        upload_ring_gl(pv, *f);
+        pv.last_frame_idx = 0;
+        return;
+    }
     if (!pv.hw_dev_ctx) return;
     fprintf(stderr, "[video] HW decode produced no frames, retrying in software\n");
     if (!reopen_decoder_software(pv)) return;
     (void)video_get_texture(track_id, 0.0);
+    for (int i = 0; i < 500 && pv.async_busy.load(std::memory_order_acquire); ++i) {
+        if (tp.try_wait_idle_for(10)) break;
+    }
+    pv.async_busy.store(false, std::memory_order_release);
+    if (DecodedFrame* f2 = ring_find(pv, 0)) {
+        upload_ring_gl(pv, *f2);
+        pv.last_frame_idx = 0;
+    }
 }
 
 // Decode (or sequentially advance) to the given frame index, transfer to CPU
@@ -1543,6 +1726,7 @@ static void prepare_native_frame_cpu(PreviewState& pv, DecodedFrame& f, int fram
     f.w         = out_w;
     f.h         = out_h;
     f.rgba      = want_rgba;
+    f.draft     = false;  // native path never issues draft decodes
     f.fx_stamp  = stamp_at_decode;
     f.frame_idx = frame_idx;   // publish
 }
@@ -1593,6 +1777,15 @@ static void close_slot(PreviewState& pv) {
     pv.gif = false; pv.gif_total = 0.f; pv.gif_w = pv.gif_h = pv.gif_n = 0;
     pv.gif_uploaded = -1; pv.gif_px.clear(); pv.gif_end.clear();
     ring_invalidate(pv);
+    // Cancel any in-flight async decode: bump the seq so the worker's result
+    // is discarded on publish (the worker checks seq atomically). The ring
+    // slot it reserved stays marked -2 until publish, where it is released
+    // as empty — never shown (stamp check happens first).
+    uint64_t seq = pv.async_seq.load(std::memory_order_relaxed) + 1;
+    pv.async_seq.store(seq, std::memory_order_release);
+    pv.async_busy.store(false, std::memory_order_release);
+    pv.async_frame.store(-1, std::memory_order_relaxed);
+    pv.async_done.store(seq, std::memory_order_release);
     pv.fx_stamp++;
 }
 
@@ -1900,6 +2093,38 @@ bool video_open_gif(int track_id, const std::string& path) {
     pv.info.width = w; pv.info.height = h;
     return true;
 }
+// ── th/perf-decode async decode core ──────────────────────────────────────────
+// Draft (drag-quality) policy: while the playhead is being dragged the canvas
+// pre-walk sets video_set_scrubbing(true); decodes issued in that window use
+// reduced work and skip CPU pixel FX (datamosh/glitch/vhs/grade). The draft
+// flag rides the ring entry + LRU key, so the refine pass after the drag
+// stops re-decodes full quality (stamp match, draft miss → decode).
+static std::atomic<bool> g_scrubbing{false};
+void video_set_scrubbing(bool on) { g_scrubbing.store(on, std::memory_order_relaxed); }
+static bool scrub_draft_active(const PreviewState& pv) {
+    return g_scrubbing.load(std::memory_order_relaxed) &&
+           pv.source == PreviewSource::Proxy;  // native keeps full res (GOP state)
+}
+// Nearest cached frame to want (ring only, current stamp). Prefers exact >
+// past > future by distance; ties break toward the past (motion looks
+// continuous scrubbing backward).
+static DecodedFrame* ring_nearest(PreviewState& pv, int want) {
+    DecodedFrame* best = nullptr;
+    int best_dist = INT_MAX;
+    for (auto& f : pv.ring) {
+        if (f.frame_idx < 0 || f.fx_stamp != pv.fx_stamp) continue;
+        int d = abs(f.frame_idx - want);
+        if (!best || d < best_dist || (d == best_dist && f.frame_idx < best->frame_idx)) {
+            best = &f; best_dist = d;
+        }
+    }
+    return best;
+}
+// Submit an async decode for (slot, frame). Latest-request-wins: bumps
+// async_seq; if a worker is already busy the new request supersedes it (the
+// worker discards its result when seq mismatches). When idle, reserves a
+// ring slot (-2) and hands it to the pool.
+static void async_submit(int slot, int frame_idx, bool draft);
 
 uintptr_t video_get_texture(int track_id, double playhead) {
     if (track_id < 0 || track_id >= MAX_VIDEO_SLOTS) return 0;
@@ -1914,8 +2139,12 @@ uintptr_t video_get_texture(int track_id, double playhead) {
         while (idx < pv.gif_n - 1 && tt >= pv.gif_end[(size_t)idx]) ++idx;
         if (idx != pv.gif_uploaded && pv.gif_w > 0) {
             size_t fsz = (size_t)pv.gif_w * pv.gif_h * 4;
+            auto t0 = std::chrono::steady_clock::now();
             upload_pixels_gl(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba,
                              pv.gif_px.data() + (size_t)idx * fsz, pv.gif_w, pv.gif_h, true);
+            perf::record(perf::S_UPLOAD,
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0).count());
             pv.gif_uploaded = idx;
         }
         return pv.tex ? (uintptr_t)pv.tex : 0;
@@ -1926,35 +2155,126 @@ uintptr_t video_get_texture(int track_id, double playhead) {
 
     int frame_idx = playhead_to_frame_idx(pv, playhead);
     if (frame_idx < 0) return 0;
+    bool draft = scrub_draft_active(pv);
 
-    // Same frame, same FX, already on the GPU → no work.
-    if (frame_idx == pv.last_frame_idx && pv.tex && !pv.pixel_fx_dirty)
+    // Same frame, same FX, already on the GPU → no work. Draft and full are
+    // different presentations: a draft on screen must refine to full once the
+    // drag stops, so last_frame_idx alone is not a hit — the ring entry's
+    // draft flag must also match (checked below via ring_find + draft gate).
+    if (frame_idx == pv.last_frame_idx && pv.tex && !pv.pixel_fx_dirty && !draft)
         return (uintptr_t)pv.tex;
 
-    // Ring cache hit (prefetched by an earlier video_prefetch_frames call).
-    if (DecodedFrame* f = ring_find(pv, frame_idx)) {
+    // Exact ring hit at the right quality → upload (main-thread GL only).
+    // ring_find_q: full requests only match full entries (refine re-decodes);
+    // draft requests match either (a cached full entry beats a draft decode).
+    if (DecodedFrame* f = ring_find_q(pv, frame_idx, draft)) {
         pv.pixel_fx_dirty = false;
         pv.last_frame_idx = frame_idx;
-        return upload_ring_gl(pv, *f);
+        auto t0 = std::chrono::steady_clock::now();
+        uintptr_t tex = upload_ring_gl(pv, *f);
+        perf::record(perf::S_UPLOAD,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count());
+        lru_store(track_id, *f);
+        return tex;
+    }
+    // LRU hit (evicted from the ring but recently shown) → re-upload from RAM.
+    {
+        int lw = 0, lh = 0; bool lrgba = false;
+        if (lru_lookup(track_id, frame_idx, pv.fx_stamp, !draft,
+                       pv.present_scratch, lw, lh, lrgba) && lw > 0 && lh > 0) {
+            pv.pixel_fx_dirty = false;
+            pv.last_frame_idx = frame_idx;
+            auto t0 = std::chrono::steady_clock::now();
+            upload_pixels_gl(&pv.tex, &pv.tex_w, &pv.tex_h, &pv.tex_rgba,
+                             pv.present_scratch.data(), lw, lh, lrgba);
+            perf::record(perf::S_UPLOAD,
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0).count());
+            return pv.tex ? (uintptr_t)pv.tex : 0;
+        }
     }
 
+    // ── Cache miss: NEVER decode synchronously. Request the frame async ──
+    // (latest-request-wins; supersedes any in-flight decode for this slot)
+    // and present the nearest available frame meanwhile so the UI thread
+    // stays at vsync cadence. The correct frame lands within a few frames
+    // via the worker → ring → upload path above.
     pv.pixel_fx_dirty = false;
-    pv.last_frame_idx = frame_idx;
-    return (pv.source == PreviewSource::Proxy)
-        ? decode_proxy_frame (pv, frame_idx)
-        : decode_native_frame(pv, frame_idx);
+    async_submit(track_id, frame_idx, draft);
+    if (DecodedFrame* n = ring_nearest(pv, frame_idx)) {
+        pv.last_frame_idx = n->frame_idx;  // note: NOT frame_idx (refine pending)
+        auto t0 = std::chrono::steady_clock::now();
+        uintptr_t tex = upload_ring_gl(pv, *n);
+        perf::record(perf::S_UPLOAD,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0).count());
+        return tex;
+    }
+    // Nothing cached yet for this slot: hold the previous GL texture (if any)
+    // so the preview holds instead of flashing blank mid-scrub.
+    return pv.tex ? (uintptr_t)pv.tex : 0;
+}
+
+// Async worker body: decode one frame into the reserved ring slot, then
+// publish-or-discard. Stale results (a newer request superseded this one)
+// release the reservation as empty. Publish check reads async_seq/_stamp
+// atomically; close_slot bumps async_seq first so a slot torn down mid-decode
+// can never publish into reused state.
+static void async_decode_body(int slot, DecodedFrame* tgt, int fidx,
+                              uint64_t seq, uint64_t stamp, bool draft, bool is_native) {
+    auto t0 = std::chrono::steady_clock::now();
+    PreviewState& pv = g_pv[slot];
+    if (is_native)
+        prepare_native_frame_cpu(pv, *tgt, fidx);
+    else
+        prepare_proxy_frame_cpu_impl(pv, *tgt, fidx, draft);
+    perf::record_decode_cpu(
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count());
+    if (pv.async_seq.load(std::memory_order_acquire) != seq ||
+        pv.async_stamp.load(std::memory_order_acquire) != stamp) {
+        tgt->frame_idx = -1;  // stale: release reservation, never shown
+    }
+    // else: prepare_* already published (frame_idx = fidx) — visible.
+    pv.async_done.store(seq, std::memory_order_release);
+    pv.async_busy.store(false, std::memory_order_release);
+}
+static void async_submit(int slot, int frame_idx, bool draft) {
+    if (slot < 0 || slot >= MAX_VIDEO_SLOTS) return;
+    PreviewState& pv = g_pv[slot];
+    if (!pv.is_open) return;
+    if (pv.source != PreviewSource::Proxy && pv.source != PreviewSource::Native) return;
+    // Latest-request-wins: supersede whatever is in flight (its result will
+    // be discarded on publish). If a worker is busy, just retarget — do NOT
+    // queue a second decode behind it.
+    uint64_t seq = pv.async_seq.load(std::memory_order_relaxed) + 1;
+    pv.async_seq.store(seq, std::memory_order_release);
+    pv.async_frame.store(frame_idx, std::memory_order_relaxed);
+    pv.async_stamp.store(pv.fx_stamp, std::memory_order_release);
+    pv.async_draft = draft;
+    bool expected = false;
+    if (!pv.async_busy.compare_exchange_strong(expected, true,
+            std::memory_order_acq_rel, std::memory_order_relaxed))
+        return;  // worker busy — retargeted above, it will discard
+    uint64_t stamp = pv.async_stamp.load(std::memory_order_acquire);
+    bool is_native = (pv.source == PreviewSource::Native);
+    DecodedFrame* tgt = &ring_alloc(pv);
+    ThreadPool& tp = pool();
+    tp.submit([slot, tgt, frame_idx, seq, stamp, draft, is_native]{
+        async_decode_body(slot, tgt, frame_idx, seq, stamp, draft, is_native);
+    });
 }
 
 void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
     if (!reqs || n <= 0) return;
-
-    // Per-slot prefetch window: 1 frame for time-driven FX (every frame is
-    // unique, no point caching), RING_FRAMES otherwise. The current frame
-    // counts as one slot of the window.
-    struct Job { PreviewState* pv; int frame_idx; DecodedFrame* target; };
-    std::vector<Job> jobs;
-    jobs.reserve((size_t)n * RING_FRAMES);
-
+    auto t0 = std::chrono::steady_clock::now();
+    // Submit-only (NEVER wait): frames on BOTH sides of the playhead so a
+    // scrub reversal hits warm cache. Per slot: the exact frame (via
+    // async_submit's latest-wins fast path) + up to half the ring behind and
+    // half ahead. Time-driven FX keeps a window of 1 (every frame unique).
+    // max_frames caps the per-slot window (boundary-warm neighbors pass 3).
+    constexpr int BACK_FRAMES = RING_FRAMES / 2;
     for (int i = 0; i < n; ++i) {
         int t = reqs[i].track_id;
         if (t < 0 || t >= MAX_VIDEO_SLOTS) continue;
@@ -1964,44 +2284,40 @@ void video_prefetch_frames(const VideoPrefetchReq* reqs, int n) {
 
         int base_fidx = playhead_to_frame_idx(pv, reqs[i].playhead);
         if (base_fidx < 0) continue;
+        bool draft = scrub_draft_active(pv);
+
+        // The exact frame always goes through latest-wins (retargets in-flight).
+        if (!ring_find(pv, base_fidx))
+            async_submit(t, base_fidx, draft);
 
         int window = pfx_is_time_driven(pv.pixel_fx) ? 1 : RING_FRAMES;
         if (reqs[i].max_frames > 0 && reqs[i].max_frames < window)
             window = reqs[i].max_frames;
         int max_fidx = max_frame_idx_for(pv);
-        for (int k = 0; k < window; ++k) {
+        // Behind first (scrub-back locality), then ahead. Skip the base frame
+        // (handled above) and anything already cached. Submit at most one
+        // extra async per slot per frame — the pool drains the rest via the
+        // next frames' prefetch calls; this bounds per-frame submit work.
+        int extra = 0;
+        for (int k = 1; k <= BACK_FRAMES && extra < window - 1; ++k) {
+            int fidx = base_fidx - k;
+            if (fidx < 0) break;
+            if (ring_find(pv, fidx)) continue;
+            if (!pv.async_busy.load(std::memory_order_acquire)) { async_submit(t, fidx, draft); extra++; }
+            break;  // one back-fill probe per frame per slot
+        }
+        for (int k = 1; k < window && extra < window - 1; ++k) {
             int fidx = base_fidx + k;
             if (max_fidx > 0 && fidx >= max_fidx) break;
-            if (ring_find(pv, fidx)) continue;  // already cached
-            jobs.push_back({&pv, fidx, nullptr});
+            if (ring_find(pv, fidx)) continue;
+            if (!pv.async_busy.load(std::memory_order_acquire)) { async_submit(t, fidx, draft); extra++; }
+            break;  // one forward-fill probe per frame per slot
         }
     }
-    if (jobs.empty()) return;
-
-    // Reserve ring slots on the main thread (ring_alloc is not thread-safe).
-    for (auto& j : jobs) j.target = &ring_alloc(*j.pv);
-
-    auto run_one = [](PreviewState* pv, DecodedFrame* tgt, int fidx) {
-        if (pv->source == PreviewSource::Native)
-            prepare_native_frame_cpu(*pv, *tgt, fidx);
-        else
-            prepare_proxy_frame_cpu(*pv, *tgt, fidx);
-    };
-
-    // 1 job: skip the pool entirely (no thread hand-off cost).
-    if (jobs.size() == 1) {
-        run_one(jobs[0].pv, jobs[0].target, jobs[0].frame_idx);
-        return;
-    }
-
-    ThreadPool& tp = pool();
-    for (auto& j : jobs) {
-        PreviewState* pv = j.pv;
-        DecodedFrame* tgt = j.target;
-        int fidx = j.frame_idx;
-        tp.submit([pv, tgt, fidx, run_one]{ run_one(pv, tgt, fidx); });
-    }
-    tp.wait_idle();
+    perf::record(perf::S_PREFETCH,
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count());
+    perf::drain_decode();  // fold worker CPU time into S_DECODE once per frame
 }
 
 uintptr_t video_get_thumbnail(double t, int* out_w, int* out_h) {

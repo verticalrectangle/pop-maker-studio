@@ -17,6 +17,10 @@
 #include <cstring>
 #include <filesystem>
 #include <system_error>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <utility>
 namespace fs = std::filesystem;
 
 // Forward decls: hoist order kept callers above callees.
@@ -50,12 +54,37 @@ int group_head_of(const AppState& state, int ti) {
 // intermediate is CFR at min(source fps, 30) with rotation baked and no
 // audio, so export and preview derive from the same frames.
 std::string clip_video_src(const AppState& state, const Clip& cl) {
+    // th/perf-decode: per-frame memo. The canvas calls this 2-3× per video
+    // clip per frame (pre-walk + draw + bbox), and each call did a
+    // proxy_is_ready stat pair + proxy_load idx/probe reads. Cache the
+    // resolved path per (source, proxy-ready-epoch); proxy generation
+    // finishing mid-session bumps the epoch via proxy_ready_epoch() so stale
+    // "source" answers flip to "intermediate" without a restart.
     (void)state;
+    struct SrcEntry { std::string resolved; uint64_t epoch = 0; };
+    static std::mutex s_src_mu;
+    static std::unordered_map<std::string, SrcEntry> s_src_cache;
+    extern uint64_t proxy_ready_epoch();
+    uint64_t epoch = proxy_ready_epoch();
+    {
+        std::lock_guard<std::mutex> lk(s_src_mu);
+        auto it = s_src_cache.find(cl.text);
+        if (it != s_src_cache.end() && it->second.epoch == epoch)
+            return it->second.resolved;
+    }
+    std::string resolved = cl.text;
     if (proxy_is_ready(cl.text)) {
         ProxyInfo pi;
-        if (proxy_load(cl.text, pi)) return pi.interm_path;
+        if (proxy_load(cl.text, pi)) resolved = pi.interm_path;
     }
-    return cl.text;
+    {
+        std::lock_guard<std::mutex> lk(s_src_mu);
+        // Bound the cache: sources are few per project, but a long session
+        // opening many projects must not grow it without bound.
+        if (s_src_cache.size() > 4096) s_src_cache.clear();
+        s_src_cache[cl.text] = {resolved, epoch};
+    }
+    return resolved;
 }
 
 bool fx_type_is_audio_fx(FXType ft) {

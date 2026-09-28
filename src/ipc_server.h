@@ -27,3 +27,7 @@ std::string engine_command(AppState& state, const std::string& json_request);
 // Live scene-analysis (describe_video) progress for the canvas banner. Returns
 // true while a run is active; fills the counts (any pointer may be null).
 bool scene_analysis_progress(int* vid_idx, int* vid_total, int* frame_idx, int* frame_total);
+// th/perf-decode: process-start steady_clock seconds, shared by bench_tick()
+// (ipc_server.cpp) and the draw_preview presented-frame hook (canvas.cpp) so
+// seek-to-present latencies use one epoch.
+double bench_now_s();

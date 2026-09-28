@@ -47,6 +47,9 @@ bool proxy_is_ready(const std::string& video_path);
 // Load the ProxyInfo (offsets, dimensions, fps) for an existing proxy.
 // Returns false if the proxy files are missing or corrupt.
 bool proxy_load(const std::string& video_path, ProxyInfo& out);
+// th/perf-decode: in-session counter bumped when a path becomes proxy-ready.
+// clip_video_src() memoizes per (source, epoch).
+uint64_t proxy_ready_epoch();
 
 // Path helpers — deterministic, no state needed.
 std::string proxy_interm_path(const std::string& video_path);

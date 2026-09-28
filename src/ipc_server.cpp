@@ -99,11 +99,12 @@ static int s_bench_fd = -1;
 static std::string s_bench_id;
 static int s_bench_remaining = 0;  // seeks left to issue (scrub)
 static double s_bench_last_frame_t = 0.0;
-static double now_s() {
+double bench_now_s() {
     using clock = std::chrono::steady_clock;
     static const auto t0 = clock::now();
     return std::chrono::duration<double>(clock::now() - t0).count();
 }
+static double now_s() { return bench_now_s(); }
 static void bench_tick(AppState& state);
 
 static int  g_srv_fd   = -1;
