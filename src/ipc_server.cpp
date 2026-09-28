@@ -1465,6 +1465,20 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return j;
     }
 
+    // Publish an analysis v2 JSON (docs/AUDIO_ANALYSIS.md) as the live analysis —
+    // fixtures, cached results, or analyses produced outside the app.
+    if (method == "load_audio_analysis") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        auto a = std::make_shared<AudioAnalysis>();
+        std::string lerr;
+        if (!audio_analysis_load_json(path, *a, &lerr)) { err = lerr; return {}; }
+        state.audio_analysis = std::move(a);
+        const AudioAnalysis& la = *state.audio_analysis;
+        return {{"beats", la.beats.size()}, {"downbeats", la.downbeats.size()},
+                {"words", la.words.size()}, {"duration", la.duration}};
+    }
+
     if (method == "analyze_audio") {
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path required"; return {}; }
