@@ -53,6 +53,8 @@ std::string audio_analysis_to_json(const AudioAnalysis& a);
 struct AudioAnalysisOptions {
     bool separate_stems = true;          // 4-stem separation (drums/bass/other/vocals) when the model exists
     std::vector<std::string> lyrics;     // optional lyric lines to force-align to the vocals
+    std::string stems_dir;               // reuse precomputed stems (<dir>/{drums,bass,other,vocals}.wav);
+                                         // when all four exist, separation is skipped
 };
 
 // Blocking full analysis; run on a worker thread. progress(0..1, stage label).
