@@ -1,6 +1,6 @@
 #pragma once
-// Auto-generated from src/typography_presets.h by
-// tools/gen_typography_presets.py — do not edit.
+// Picker table for the 76 typography Script-clip presets (id/label/category).
+// Source of truth is assets/scripts/typography/*.js (meta + config); this copy
 struct TypoJsPreset { const char* id; const char* name;
                      const char* category; const char* tagline; };
 static const TypoJsPreset kTypoJsPresets[] = {
