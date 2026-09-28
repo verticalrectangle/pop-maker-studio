@@ -4694,6 +4694,26 @@ void ipc_server_poll(AppState& state) {
         g_clients.end());
 }
 // ── th/perf bench main-loop driver ────────────────────────────────────────────
+void ipc_wait_for_request(int timeout_ms) {
+    if (g_srv_fd < 0 && g_clients.empty()) return;
+    // +1 for the listen fd; cap clients so one pathological burst can't blow
+    // the stack (extra fds just wait for the timeout instead of waking us).
+    constexpr size_t kCap = 65;
+    size_t ncli = g_clients.size();
+    if (ncli > kCap - 1) ncli = kCap - 1;
+    struct pollfd fds[kCap];
+    size_t n = 0;
+    if (g_srv_fd >= 0) {
+        fds[n].fd = g_srv_fd; fds[n].events = POLLIN; fds[n].revents = 0; ++n;
+    }
+    for (size_t i = 0; i < ncli; ++i) {
+        int fd = g_clients[i].fd;
+        if (fd < 0) continue;
+        fds[n].fd = fd; fds[n].events = POLLIN; fds[n].revents = 0; ++n;
+    }
+    if (n == 0) return;
+    (void)::poll(fds, (nfds_t)n, timeout_ms);
+}
 static double pct(std::vector<double> v, double p) {
     if (v.empty()) return 0.0;
     std::sort(v.begin(), v.end());

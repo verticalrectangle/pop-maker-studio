@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <csignal>
 #include <unistd.h>
+
 #include <deque>
 #include <string>
 #include <chrono>
@@ -371,8 +372,13 @@ int main(int argc, char** argv) {
                 if (busy) break;
             }
         }
-        if (busy) glfwPollEvents();
-        else glfwWaitEventsTimeout(0.25);
+        // NOTE: glfwWaitEventsTimeout() does NOT work here — something posts
+        // X events continuously (Xvfb wakeups), so the wait returns instantly
+        // and the loop still spins at 60 Hz. Instead: drain events, then block
+        // in poll() on the IPC socket (+ all client fds) with a 250 ms cap, so
+        // an IPC arrival wakes us immediately while background-job completion
+        glfwPollEvents();
+        if (!busy) ipc_wait_for_request(250);
         // PMS_FRAME_DEBUG=1: log frames that stall the UI (>100 ms) — used to
         // hunt the "project open freezes for a bit" reports.
         static const bool s_fdbg = getenv("PMS_FRAME_DEBUG") != nullptr;

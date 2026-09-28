@@ -104,6 +104,7 @@ const char* stage_name(Stage s) {
         case S_COMPOSITE:return "composite";
         case S_TEXT:     return "text";
         case S_SHAPES:   return "shapes";
+        case S_SCRIPT:   return "script";
         case S_SWAP:     return "swap";
         default:         return "?";
     }

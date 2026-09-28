@@ -8,6 +8,10 @@ void ipc_server_start();
 // Reads pending IPC messages and dispatches them against state.
 // Non-blocking. Call every frame from app_frame.
 void ipc_server_poll(AppState& state);
+// Block up to timeout_ms waiting for IPC activity (new connection or bytes on
+// any client). Used by the main-loop idle throttle so an IPC arrival wakes us
+// immediately instead of waiting out the sleep. Zero fds / error → returns.
+void ipc_wait_for_request(int timeout_ms);
 
 // Closes the socket and removes the lock file.
 // Call at app shutdown.
