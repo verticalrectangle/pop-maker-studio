@@ -91,6 +91,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "get_project", "get_clips", "get_all_clips", "get_media_info", "list_dir", "get_stills",
         "get_video_description", "describe_video", "get_canvas_geometry",
         "get_face_track", "verify_clips", "make_contact_sheet", "pexels_search",
+        "get_script_errors", "get_media_face",
     ],
     "timeline": [
         "add_clip", "add_clip_sequence", "add_track", "delete_clip", "delete_clips_after",
@@ -99,6 +100,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "remove_from_bin", "set_format", "set_loop_region", "add_callout", "add_chapter_marker",
         "remove_chapter_marker", "get_chapter_markers", "generate_chapters", "crop_media",
         "find_and_add_clip", "find_video_moment", "apply_multicam_cuts", "pexels_add_clip",
+        "add_script_clip", "set_script_clip",
     ],
     "text": ["set_typography_preset", "set_text_style", "set_transcript"],
     "shape": ["add_shape", "set_shape_path", "set_shape_style", "set_shape_keyframes", "get_shape_path",
@@ -120,7 +122,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "read_transcript_context", "cut_at_phrase", "get_search_status", "cancel_search",
     ],
     "capture": [
-        "take_snapshot", "ui_input", "vrecord_start", "vrecord_stop", "set_monitor",
+        "take_snapshot", "render_still", "ui_input", "vrecord_start", "vrecord_stop", "set_monitor",
         "set_camera_monitor", "detect_screen_activity", "get_activity_status",
         "set_virtual_mic",
     ],
@@ -2818,6 +2820,103 @@ async def list_tools() -> list[Tool]:
                 "required": ["path"],
             },
         ),
+        Tool(
+            name="add_script_clip",
+            description=(
+                "Add a Script clip (ClipType::Script) to a track — a timeline clip whose pixels "
+                "are produced every frame by a JavaScript module (docs/SCRIPT_API.md). Use for "
+                "data-driven motion graphics, audio-reactive HUDs, particle systems, or anything "
+                "the fixed clip types cannot express.\n\n"
+                "path: entry JS module (absolute, or relative to the project file). params: JSON "
+                "object exposed to the script as pms.params ({} if omitted). duration defaults to "
+                "2s. Start/end snap to the frame grid; content clips cannot overlap on one track. "
+                "Returns {clip} (the new clip index)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "start": {"type": "number"},
+                    "duration": {"type": "number"},
+                    "path": {"type": "string", "description": "Entry JS module path (absolute or project-relative)"},
+                    "params": {"type": "object", "description": "Params JSON exposed as pms.params (default {})"},
+                },
+                "required": ["track", "start", "duration", "path"],
+            },
+        ),
+        Tool(
+            name="set_script_clip",
+            description=(
+                "Update a Script clip's entry module and/or params JSON (invalidates the runtime; "
+                "the clip hot-reloads). Only provided fields change. Fails unless the clip is a "
+                "Script clip. Provide at least one of path / params."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "clip": {"type": "integer"},
+                    "path": {"type": "string", "description": "New script path (optional)"},
+                    "params": {"type": "object", "description": "New params object (optional)"},
+                },
+                "required": ["track", "clip"],
+            },
+        ),
+        Tool(
+            name="get_script_errors",
+            description=(
+                "Read script-clip build errors (docs/SCRIPT_API.md §8). Pass track and "
+                "clip TOGETHER for single-clip mode: {errors: [{message, file, line}], "
+                "log: []}. Omit both for project-wide mode: {clips: [{clip: 'ti:ci', "
+                "errors}]}. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "track": {"type": "integer"},
+                    "clip": {"type": "integer"},
+                },
+            },
+        ),
+        Tool(
+            name="render_still",
+            description=(
+                "Render the canvas frame at time t to a PNG file at path and return the "
+                "image inline so you can see it, like take_snapshot. format (optional) "
+                "persists like set_format: vertical/9:16, horizontal/16:9, square/1:1. "
+                "Moves the playhead to t. Blocks server-side up to ~30s; returns {path} "
+                "plus the image inline."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "t": {"type": "number", "description": "Timeline position to render (default: current playhead)"},
+                    "path": {"type": "string", "description": "Destination PNG path"},
+                    "format": {
+                        "type": "string",
+                        "enum": ["vertical", "9:16", "horizontal", "16:9", "square", "1:1"],
+                        "description": "Canvas format preset (persists like set_format)",
+                    },
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="get_media_face",
+            description=(
+                "Cached face analysis for a media file (pms.face data): {status "
+                "('ready'|'building'|'failed'), progress, ...ready fields}. wait=true "
+                "blocks until the cache build finishes. Read-only."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path of the source media file"},
+                    "wait": {"type": "boolean", "description": "Block until the cache build finishes (default false)"},
+                },
+                "required": ["path"],
+            },
+        ),
     ]
 
 
@@ -4786,6 +4885,27 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     ImageContent(type="image", data=base64.b64encode(raw).decode(), mimeType="image/png"),
                 ]
         raise RuntimeError("take_snapshot timed out")
+    if name == "render_still":
+        result = _call("render_still", arguments)
+        path = result["path"]
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError:
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+        try:
+            from PIL import Image as _PILImage
+            img = _PILImage.open(io.BytesIO(raw))
+            img.thumbnail((540, 960))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            raw = buf.getvalue()
+        except Exception:
+            pass
+        return [
+            TextContent(type="text", text=path),
+            ImageContent(type="image", data=base64.b64encode(raw).decode(), mimeType="image/png"),
+        ]
     if name == "detect_screen_activity":
         src = _resolve_path(arguments["path"])
         mjpeg_path, idx_path = _proxy_files(src)

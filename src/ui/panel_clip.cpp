@@ -28,6 +28,8 @@
 #include "../av_measure.h"
 #include "../video.h"
 #include "canvas.h"   // canvas_request_shape_pen / canvas_shape_pen_active (Shape inspector)
+#include "script_clip.h"
+#include "script_runtime.h"  // ScriptError
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <filesystem>
@@ -3204,6 +3206,131 @@ void panel_clip(AppState& state, float w) {
                     history_push(state, "Clear shape morph keys");
                 }
             }
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        if (ImGui::CollapsingHeader("Fade")) {
+            ImGui::Dummy({0.f, 4.f});
+            section_fade(state, clip.fade_in, clip.fade_out, w);
+            ImGui::Dummy({0.f, 4.f});
+        }
+    }
+    else if (clip.clip_type == ClipType::Script) {
+        float sc_bar_w = w - 16.f;
+
+        // Edit buffers re-seeded whenever the selected clip changes.
+        static char s_script_path[1024] = {};
+        static char s_script_params[4096] = {};
+        static int s_script_last_ti = -1, s_script_last_ci = -1;
+        if (s_script_last_ti != sel_ti || s_script_last_ci != sel_ci) {
+            strncpy(s_script_path, clip.script_path.c_str(), sizeof(s_script_path)-1);
+            s_script_path[sizeof(s_script_path)-1] = '\0';
+            strncpy(s_script_params, clip.script_params.c_str(), sizeof(s_script_params)-1);
+            s_script_params[sizeof(s_script_params)-1] = '\0';
+            s_script_last_ti = sel_ti; s_script_last_ci = sel_ci;
+        }
+        char script_key[64];
+        snprintf(script_key, sizeof(script_key), "%d:%d", sel_ti, sel_ci);
+
+        // ── Script: entry module path + params JSON ─────────────────────────
+        if (ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Dummy({0.f, 4.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Entry"); ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::SetNextItemWidth(sc_bar_w);
+            bool path_commit = ImGui::InputText("##script_path", s_script_path,
+                sizeof(s_script_path), ImGuiInputTextFlags_EnterReturnsTrue);
+            if (ImGui::IsItemDeactivated() && clip.script_path != s_script_path)
+                path_commit = true;
+            ImGui::PopStyleColor(2);
+            if (path_commit) {
+                clip.script_path = s_script_path;
+                script_clip_invalidate(script_key);
+                history_push(state, "Script path");
+            }
+            ImGui::Dummy({0.f, 4.f});
+            if (ui_btn("Browse…##script_browse", false, true)) {
+                std::string p = filepicker_open("Select script entry", "JS", "*.js *.mjs");
+                if (!p.empty()) {
+                    clip.script_path = p;
+                    strncpy(s_script_path, p.c_str(), sizeof(s_script_path)-1);
+                    s_script_path[sizeof(s_script_path)-1] = '\0';
+                    script_clip_invalidate(script_key);
+                    history_push(state, "Script path");
+                }
+            }
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Params (JSON)"); ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, Col::bg_soft);
+            ImGui::PushStyleColor(ImGuiCol_Border,  Col::line);
+            ImGui::SetNextItemWidth(sc_bar_w);
+            ImGui::InputTextMultiline("##script_params", s_script_params,
+                sizeof(s_script_params), {sc_bar_w, 80.f});
+            ImGui::PopStyleColor(2);
+            ImGui::Dummy({0.f, 4.f});
+            if (ui_btn("Apply params##script_apply", false, true)) {
+                if (clip.script_params != s_script_params) {
+                    clip.script_params = s_script_params;
+                    script_clip_invalidate(script_key);
+                    history_push(state, "Script params");
+                }
+            }
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        // ── Errors: live script errors for this clip ────────────────────────
+        if (ImGui::CollapsingHeader("Errors", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Dummy({0.f, 4.f});
+            bool sc_any_err = false;
+            for (auto& [k, errs] : script_clip_errors(state)) {
+                if (k != script_key) continue;
+                for (auto& er : errs) {
+                    sc_any_err = true;
+                    char ebuf[1024];
+                    if (!er.file.empty() && er.line > 0)
+                        snprintf(ebuf, sizeof(ebuf), "%s \xe2\x80\x94 line %d: %s",
+                            er.file.c_str(), er.line, er.message.c_str());
+                    else if (!er.file.empty())
+                        snprintf(ebuf, sizeof(ebuf), "%s: %s",
+                            er.file.c_str(), er.message.c_str());
+                    else
+                        snprintf(ebuf, sizeof(ebuf), "%s", er.message.c_str());
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.3f, 0.3f, 1.f));
+                    ImGui::TextWrapped("%s", ebuf);
+                    ImGui::PopStyleColor();
+                }
+            }
+            if (!sc_any_err) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+                ImGui::TextUnformatted("No errors.");
+                ImGui::PopStyleColor();
+            }
+            ImGui::Dummy({0.f, 4.f});
+        }
+
+        // ── Position: transform keyframes (same props as every clip type) ─────
+        if (ImGui::CollapsingHeader("Position", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("pos_x", "Left \xe2\x86\x94 Right", &clip.pos_x, -1.f, 2.f, "%.2f");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("pos_y", "Up \xe2\x86\x95 Down",   &clip.pos_y, -1.f, 2.f, "%.2f");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            float size = (clip.scale_x + clip.scale_y) * 0.5f;
+            if (kf_slider("scale_x", "Size", &size, 0.f, 4.f, "%.2f", 1.f, "scale_y")) {
+                clip.scale_x = size; clip.scale_y = size;
+            }
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 4.f});
+            kf_slider("rotation", "Rotation", &clip.rotation, -180.f, 180.f, "%.1f\xc2\xb0");
+            kf_interp_bar();
+            ImGui::Dummy({0.f, 6.f});
+            kf_slider("opacity", "Opacity", &clip.opacity, 0.f, 100.f, "%.0f%%", 100.f);
+            kf_interp_bar();
             ImGui::Dummy({0.f, 4.f});
         }
 

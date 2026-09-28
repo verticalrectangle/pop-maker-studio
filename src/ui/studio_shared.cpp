@@ -883,6 +883,7 @@ ImVec4 clip_type_badge_color(ClipType ct) {
         case ClipType::BodyFX:     return {255.f/255,80.f/255,160.f/255,1.f};
         case ClipType::Record:     return {220.f/255,50.f/255,50.f/255,1.f};
         case ClipType::VideoRecord: return {235.f/255,90.f/255,40.f/255,1.f};
+        case ClipType::Script:      return {230.f/255,140.f/255,40.f/255,1.f};
         default:                   return {120.f/255,80.f/255,220.f/255,1.f};
     }
 }
@@ -899,6 +900,7 @@ const char* clip_type_name(ClipType ct) {
         case ClipType::BodyFX:     return "BODY FX";
         case ClipType::Record:     return "REC";
         case ClipType::VideoRecord: return "CAM";
+        case ClipType::Script:      return "SCRIPT";
         default:                   return "ADJUST";
     }
 }
