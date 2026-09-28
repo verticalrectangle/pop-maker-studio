@@ -1,7 +1,9 @@
 // analysis-parity: offline driver for audio_analysis_run (acceptance only).
-// Usage: analysis-parity <clip.wav> <out.json> [--stems-dir DIR]
-// Lyrics come from <out>.lyrics.json (a JSON list of strings; written by
-// tools/analysis_parity.py). Prints progress + summary to stdout.
+// Usage: analysis-parity <clip.wav> <out.json> [--stems-dir DIR] [--separate]
+// Lyrics come from <out>.lyrics.json: a JSON list whose items are either
+// plain strings or {"text": ..., "t0": ..., "t1": ...} objects with a coarse
+// window in source seconds (written by tools/analysis_parity.py). Prints
+// progress + summary to stdout.
 #include "audio_analysis.h"
 #include "json.hpp"
 
@@ -12,6 +14,24 @@
 #include <vector>
 
 using json = nlohmann::json;
+
+static void push_lyric(AudioAnalysisOptions& opt, const json& l) {
+    LyricLine ll;
+    if (l.is_string()) {
+        ll.text = l.get<std::string>();
+    } else if (l.is_object()) {
+        ll.text = l.value("text", "");
+        if (l.contains("t0") && l.contains("t1")) {
+            double t0 = l.value("t0", 0.0), t1 = l.value("t1", 0.0);
+            if (t1 > t0) {
+                ll.has_window = true;
+                ll.w0 = t0;
+                ll.w1 = t1;
+            }
+        }
+    }
+    if (!ll.text.empty()) opt.lyrics.push_back(std::move(ll));
+}
 
 int main(int argc, char** argv) {
     if (argc < 3) {
@@ -36,7 +56,7 @@ int main(int argc, char** argv) {
         if (f) {
             try {
                 json lj = json::parse(f);
-                for (auto& l : lj) opt.lyrics.push_back(l.get<std::string>());
+                for (auto& l : lj) push_lyric(opt, l);
             } catch (...) {}
         }
     }
@@ -48,7 +68,7 @@ int main(int argc, char** argv) {
         if (f) {
             try {
                 json lj = json::parse(f);
-                for (auto& l : lj) opt.lyrics.push_back(l.get<std::string>());
+                for (auto& l : lj) push_lyric(opt, l);
             } catch (...) {}
         }
     }

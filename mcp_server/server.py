@@ -1561,15 +1561,26 @@ async def list_tools() -> list[Tool]:
                 "Run audio analysis v2 (beats, downbeats, hits, envelopes, "
                 "spectrum, words) on an audio file. Blocks until complete — "
                 "returns {status: 'done', analysis} with the v2 JSON "
-                "(docs/AUDIO_ANALYSIS.md) when finished. Optional lyrics: "
-                "string[] force-aligned to the vocals. No polling needed."
+                "(docs/AUDIO_ANALYSIS.md) when finished. Optional lines: plain "
+                "strings (whisper coarse windows) or {text, t0, t1} objects with "
+                "a per-line coarse window in source seconds (reference-grade "
+                "alignment, skips the whisper pass). No polling needed."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Absolute path to audio file"},
-                    "lyrics": {"type": "array", "items": {"type": "string"},
-                               "description": "Optional lyric lines to force-align"},
+                    "lyrics": {"type": "array",
+                               "items": {"anyOf": [{"type": "string"},
+                                                   {"type": "object",
+                                                    "properties": {
+                                                        "text": {"type": "string"},
+                                                        "t0": {"type": "number"},
+                                                        "t1": {"type": "number"}},
+                                                    "required": ["text"]}]},
+                               "description": "Optional lyric lines: plain strings use whisper "
+                                              "coarse windows; {text,t0,t1} objects align exactly "
+                                              "like the reference pipeline"},
                     "separate": {"type": "boolean",
                                  "description": "Run 4-stem separation (default true when model present)"},
                     "stems_dir": {"type": "string",

@@ -30,9 +30,17 @@ def load_lines():
     return list(g["LINES"])
 
 
-def run_analysis(binary, clip, stems, out_json, lyrics, separate=False):
-    # lyrics sidecar the C++ driver reads (<out>.lyrics.json)
-    Path(out_json + ".lyrics.json").write_text(json.dumps(lyrics))
+def run_analysis(binary, clip, stems, out_json, lyrics, separate=False, windows=None):
+    # lyrics sidecar the C++ driver reads (<out>.lyrics.json): plain strings,
+    # or {"text","t0","t1"} objects with a coarse window in source seconds.
+    # windows: optional parallel list of [t0,t1] (or None) per line; when every
+    # line has one the analysis aligns exactly like the reference pipeline.
+    if windows:
+        payload = [{"text": t, "t0": w[0], "t1": w[1]} if w else t
+                   for t, w in zip(lyrics, windows)]
+    else:
+        payload = list(lyrics)
+    Path(out_json + ".lyrics.json").write_text(json.dumps(payload))
     cmd = [str(binary), str(clip), str(out_json)]
     if separate:
         cmd += ["--separate"]
@@ -118,10 +126,14 @@ def main():
     ap.add_argument("--out", default="/tmp/audio-work/parity")
     ap.add_argument("--lyrics", default="",
                     help="path to a JSON list of lyric lines (default: pipeline LINES)")
+    ap.add_argument("--windows", default="",
+                    help="JSON list parallel to the lyric lines: [t0,t1] source-second "
+                         "coarse window per line (or null); enables the reference "
+                         "windowed path instead of the whisper coarse pass")
     args = ap.parse_args()
-
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
+
     if args.lyrics:
         lines = json.loads(Path(args.lyrics).read_text())
     else:
@@ -129,6 +141,9 @@ def main():
     (outdir / "lines.json").write_text(json.dumps(lines))
     ref = json.loads(Path(args.ref).read_text())
 
+    wins = json.loads(Path(args.windows).read_text()) if args.windows else None
+    if wins is not None and len(wins) != len(lines):
+        raise SystemExit(f"--windows has {len(wins)} entries for {len(lines)} lines")
     results = {}
     sep = bool(args.separate)
     # Acceptance: --separate runs the C++ separate_stems4 path; --stems DIR
@@ -140,7 +155,8 @@ def main():
         got = run_analysis(args.binary, args.clip,
                            None if tag == "fallback" else stems,
                            out_json, lines,
-                           separate=(sep and tag == "stems"))
+                           separate=(sep and tag == "stems"),
+                           windows=wins)
         m = metrics(got, ref)
         results[tag] = m
         print(f"=== [{tag}] beats worst {m['beats'].get('worst_ms')}ms "
