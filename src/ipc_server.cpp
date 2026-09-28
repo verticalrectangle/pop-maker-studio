@@ -22,6 +22,10 @@
 #include "video.h"
 #include "proxy.h"
 #include "transcribe.h"
+#include "face_cache.h"
+#include "script_clip.h"
+#include "script_runtime.h"
+#include "script_face.h"
 #include "generated/fx_clip_set_dispatch.h"
 #include "generated/fx_type_list.h"
 #include "json.hpp"
@@ -232,6 +236,7 @@ static std::string clip_type_str(ClipType t) {
         case ClipType::VideoRecord: return "video_record";
         case ClipType::Bus:        return "bus";
         case ClipType::Shape:      return "shape";
+        case ClipType::Script:     return "script";
         default: break;
     }
     return "unknown";
@@ -663,7 +668,10 @@ static json clip_to_json_slim(int idx, const Clip& c) {
         j["selected_take"] = c.rec_take_sel;
         if (c.clip_type == ClipType::VideoRecord) j["photo_mode"] = c.rec_photo;
     }
-    if (c.fx_coupled) j["coupled"] = true;
+    if (c.clip_type == ClipType::Script) {
+        j["path"] = c.script_path;
+        if (!c.script_params.empty()) j["params"] = c.script_params;
+    }
     if (c.clip_type == ClipType::Effect && fx_type_is_audio_fx(c.fx_type)) {
         json a;
         a["autotune_on"] = c.audio_fx.autotune_on;
@@ -882,10 +890,13 @@ static json clip_to_json(int idx, const Clip& c) {
         }
         j["fx_chain"] = chain;
     }
+    if (c.clip_type == ClipType::Script) {
+        j["path"] = c.script_path;
+        j["params"] = c.script_params;
+    }
     if (c.fx_coupled) j["coupled"] = true;
     return j;
 }
-
 static json state_to_json_slim(const AppState& state) {
     json j;
     j["duration"]         = state.duration;
@@ -1035,6 +1046,7 @@ static ClipType parse_clip_type(const std::string& s) {
     if (s == "record")    return ClipType::Record;
     if (s == "bus")       return ClipType::Bus;
     if (s == "shape")     return ClipType::Shape;
+    if (s == "script")    return ClipType::Script;
     return ClipType::Text;
 }
 
@@ -1116,6 +1128,7 @@ static bool clip_type_occupies_row(ClipType t) {
            t == ClipType::Video  || t == ClipType::Audio ||
            t == ClipType::Background ||
            t == ClipType::Shape ||
+           t == ClipType::Script ||
            t == ClipType::VideoRecord || t == ClipType::Record;
 }
 static bool row_overlap_on_track(const AppState& state, int ti, ClipType ct,
@@ -1479,16 +1492,191 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 {"words", la.words.size()}, {"duration", la.duration}};
     }
 
-    if (method == "analyze_audio") {
+    // ── Script clips (docs/SCRIPT_API.md §8) ───────────────────────────────────
+    if (method == "add_script_clip") {
+        int ti = track_by_name_or_index(state, params);
+        if (!check_track(state, ti, err)) return {};
+        if (state.tracks[ti].locked) { err = "track is locked"; return {}; }
         std::string path = params.value("path", "");
         if (path.empty()) { err = "path required"; return {}; }
+        float start = snap_to_frame(params.value("start", 0.f), state.fps);
+        float duration = params.value("duration", 2.f);
+        float end = snap_end_to_frame(start + duration, state.fps);
+        Clip cl;
+        cl.clip_type = ClipType::Script;
+        cl.start = start; cl.end = end;
+        cl.script_path = path;
+        if (params.contains("params")) cl.script_params = params["params"].dump();
+        if (row_overlap_on_track(state, ti, cl.clip_type, cl.start, cl.end, -1, err))
+            return {};
+        state.tracks[ti].clips.push_back(cl);
+        int new_ci = (int)state.tracks[ti].clips.size() - 1;
+        clip_flash(state, ti, new_ci, /*reveal=*/true);
+        history_push(state, "Add script clip");
+        json r; r["clip"] = new_ci;
+        return r;
+    }
+
+    if (method == "set_script_clip") {
+        int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+        if (!check_clip(state, ti, ci, err)) return {};
+        Clip& cl = state.tracks[ti].clips[ci];
+        if (cl.clip_type != ClipType::Script) { err = "not a script clip"; return {}; }
+        if (params.contains("path")) cl.script_path = params.value("path", cl.script_path);
+        if (params.contains("params")) cl.script_params = params["params"].dump();
+        char key[64]; snprintf(key, sizeof(key), "%d:%d", ti, ci);
+        script_clip_invalidate(key);
+        history_push(state, "Set script clip");
+        return json::object();
+    }
+
+    if (method == "get_script_errors") {
+        json out = json::object();
+        if (params.contains("clip") || params.contains("track")) {
+            int ti = track_by_name_or_index(state, params), ci = params.value("clip", -1);
+            if (!check_clip(state, ti, ci, err)) return {};
+            char key[64]; snprintf(key, sizeof(key), "%d:%d", ti, ci);
+            json lst = json::array();
+            for (auto& [k, errs] : script_clip_errors(state)) {
+                if (k != key) continue;
+                for (auto& er : errs) {
+                    json ee;
+                    ee["message"] = er.message;
+                    ee["file"] = er.file;
+                    ee["line"] = er.line;
+                    lst.push_back(ee);
+                }
+            }
+            out["errors"] = lst;
+            out["log"] = json::array();
+        } else {
+            json arr = json::array();
+            for (auto& [k, errs] : script_clip_errors(state)) {
+                json e;
+                e["clip"] = k;
+                json lst = json::array();
+                for (auto& er : errs) {
+                    json ee;
+                    ee["message"] = er.message;
+                    ee["file"] = er.file;
+                    ee["line"] = er.line;
+                    lst.push_back(ee);
+                }
+                e["errors"] = lst;
+                arr.push_back(e);
+            }
+            out["clips"] = arr;
+        }
+        return out;
+    }
+
+    if (method == "get_media_face") {
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        bool wait = params.value("wait", false);
+        face_cache_request(path, 0);
+        float prog = 0.f;
+        FaceCacheStatus st = face_cache_status(path, &prog);
+        if (wait && st != FaceCacheStatus::Ready) {
+            bool ok = face_cache_ensure_sync(path, 0, nullptr);
+            st = face_cache_status(path, &prog);
+            if (!ok || st != FaceCacheStatus::Ready) {
+                json r;
+                r["status"] = "failed";
+                r["progress"] = prog;
+                return r;
+            }
+        }
+        if (st != FaceCacheStatus::Ready) {
+            json r;
+            r["status"] = st == FaceCacheStatus::Failed ? "failed" : "building";
+            r["progress"] = prog;
+            return r;
+        }
+        std::string dump, derr;
+        if (!face_track_dump_json(path, 0, dump, &derr)) {
+            json r; r["status"] = "failed"; r["progress"] = 1.f; r["error"] = derr;
+            return r;
+        }
+        json r = json::parse(dump);
+        r["status"] = "ready";
+        r["progress"] = 1.f;
+        return r;
+    }
+
+    if (method == "render_still") {
+        float t = params.value("t", state.playhead);
+        std::string path = params.value("path", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        if (params.contains("format")) {
+            std::string fmt = params.value("format", "");
+            if      (fmt == "vertical"   || fmt == "9:16") state.format = OutputFormat::Vertical;
+            else if (fmt == "horizontal" || fmt == "16:9") state.format = OutputFormat::Horizontal;
+            else if (fmt == "square"     || fmt == "1:1")  state.format = OutputFormat::Square;
+            else { err = "unknown format"; return {}; }
+        }
+        // Sync GL snapshot needs the draw thread (IPC runs on its own
+        // thread): route through the request flag serviced in draw_preview.
+        // `path` selects the output — render_snapshot_gl derives its name
+        // from media stems, so copy the result to `path` when done.
+        state.playhead = t;
+        state.snapshot_done = false;
+        state.snapshot_done_path.clear();
+        state.snapshot_done_err.clear();
+        state.snapshot_request = true;
+        state.snapshot_source_canvas = false;
+        state.snapshot_source_ui = false;
+        if (client_fd >= 0) {
+            // Async: the GL thread fulfills the request in draw_preview;
+            // poll get_snapshot_status, then copy to `path`.
+            fd_mark_busy(client_fd);
+            AppState* stp = &state;
+            std::thread([path, client_fd, req_id, stp]() {
+                AppState& st = *stp;
+                for (int i = 0; i < 600; ++i) {
+                    // snapshot_done is written by the GL thread; poll it.
+                    // (Unsynchronised cross-thread read — matches the
+                    // existing take_snapshot/get_snapshot_status pattern.)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    if (!st.snapshot_done) continue;
+                    json r;
+                    if (!st.snapshot_done_err.empty()) {
+                        send_err_id(client_fd, req_id, st.snapshot_done_err);
+                    } else {
+                        std::string got = st.snapshot_done_path;
+                        if (!path.empty() && path != got) {
+                            std::error_code ec;
+                            std::filesystem::copy_file(got, path,
+                                std::filesystem::copy_options::overwrite_existing, ec);
+                            if (ec) send_err_id(client_fd, req_id, ec.message());
+                            else { r["path"] = path; send_ok_id(client_fd, req_id, r); }
+                        } else {
+                            r["path"] = got; send_ok_id(client_fd, req_id, r);
+                        }
+                    }
+                    agent_done();
+                    fd_mark_free(client_fd);
+                    return;
+                }
+                send_err_id(client_fd, req_id, "render_still timed out");
+                agent_done();
+                fd_mark_free(client_fd);
+            }).detach();
+            json sentinel; sentinel["__async"] = true; return sentinel;
+        }
+        json r2; r2["status"] = "started"; return r2;
+    }
+
+    if (method == "analyze_audio") {
+        std::string apath = params.value("path", "");
+        if (apath.empty()) { err = "path required"; return {}; }
         if (s_audio_analysis.running.load()) { err = "analysis already running"; return {}; }
         s_audio_analysis.running.store(true);
         s_audio_analysis.done.store(false);
         if (client_fd >= 0) {
             fd_mark_busy(client_fd);
-            std::thread([path, client_fd, req_id]() {
-                s_audio_analysis.result = beat_detect(path);
+            std::thread([apath, client_fd, req_id]() {
+                s_audio_analysis.result = beat_detect(apath);
                 s_audio_analysis.done.store(true);
                 s_audio_analysis.running.store(false);
                 auto& res = s_audio_analysis.result;
@@ -1509,8 +1697,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }).detach();
             json sentinel; sentinel["__async"] = true; return sentinel;
         }
-        std::thread([path]() {
-            s_audio_analysis.result = beat_detect(path);
+        std::thread([apath]() {
+            s_audio_analysis.result = beat_detect(apath);
             s_audio_analysis.done.store(true);
             s_audio_analysis.running.store(false);
         }).detach();
@@ -2998,7 +3186,12 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         cl.start = start;
         cl.end   = end;
         cl.text  = text;
-        if (!apply_bg_preset(cl, text, err)) return {};
+        if (cl.clip_type == ClipType::Script) {
+            cl.script_path = params.value("path", text);
+            if (params.contains("params"))
+                cl.script_params = params["params"].dump();
+            if (cl.script_path.empty()) { err = "script path required (path)"; return {}; }
+        }
         if (clip_is_fx(cl) && fx_overlap_on_track(state, ti, start, end, -1, err))
             return {};
         if (cl.clip_type == ClipType::Video || cl.clip_type == ClipType::Audio) {
@@ -3266,7 +3459,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                            : prop == "bg_c2" ? cl.bg_c2 : cl.bg_c3;
                 for (int i = 0; i < 4; ++i) dst[i] = jval_float(val[i]);
             }
-            else { err = "unknown prop: " + prop; return {}; }
+            else if (prop == "script_path") { cl.script_path = val.get<std::string>(); }
+            else if (prop == "script_params") { cl.script_params = val.dump(); }
         }
         return json::object();
     }
@@ -3400,6 +3594,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         else if (prop == "flip_v")   { cl.flip_v = jval_bool(val); }
         // ── Text props ───────────────────────────────────────────────────────
         else if (prop == "text")       { cl.text      = val.get<std::string>(); }
+        else if (prop == "script_path") { cl.script_path = val.get<std::string>(); }
+        else if (prop == "script_params") { cl.script_params = val.dump(); }
         else if (prop == "font_size")  { cl.font_size = jval_float(val); }
         else if (prop == "sub_pos")    { cl.sub_pos   = jval_int(val); }
         else if (prop == "sub_pos_x")  { cl.sub_pos_x = jval_float(val); }
