@@ -17,6 +17,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/intreadwrite.h>
 #include <libavutil/display.h>
 #include <libswscale/swscale.h>
 }
@@ -2405,6 +2406,28 @@ static int stream_rotation(const AVStream* st) {
     return 0;
 }
 
+// Container cropping (MOV clean aperture — e.g. iPhone Live Photos store
+// 1920x1440 coded frames cropped to 1744x1308 for display) as
+// {top, bottom, left, right} px; zeros when absent. ffmpeg's CLI (proxies,
+// intermediates, face tracking) applies it by default, so every libav decode
+// path must too or preview and export disagree on framing.
+static void stream_crop(const AVStream* st, int crop[4]) {
+    crop[0] = crop[1] = crop[2] = crop[3] = 0;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
+    const AVCodecParameters* cp = st->codecpar;
+    for (int i = 0; i < cp->nb_coded_side_data; ++i) {
+        const AVPacketSideData& sd = cp->coded_side_data[i];
+        if (sd.type != AV_PKT_DATA_FRAME_CROPPING || sd.size < 16) continue;
+        for (int k = 0; k < 4; ++k) crop[k] = (int)AV_RL32(sd.data + 4 * k);
+        if (crop[0] + crop[1] >= cp->height || crop[2] + crop[3] >= cp->width)
+            crop[0] = crop[1] = crop[2] = crop[3] = 0;
+        return;
+    }
+#else
+    (void)st;
+#endif
+}
+
 MediaFileInfo video_probe_file(const std::string& path) {
     MediaFileInfo info;
     AVFormatContext* fc = nullptr;
@@ -2426,8 +2449,10 @@ MediaFileInfo video_probe_file(const std::string& path) {
         AVCodecParameters* cp = st->codecpar;
         if (cp->codec_type == AVMEDIA_TYPE_VIDEO && !info.has_video) {
             info.has_video   = true;
-            info.width       = cp->width;
-            info.height      = cp->height;
+            int crop[4];
+            stream_crop(st, crop);
+            info.width       = cp->width - crop[2] - crop[3];
+            info.height      = cp->height - crop[0] - crop[1];
             info.rotation    = stream_rotation(st);
             if (st->avg_frame_rate.den > 0)
                 info.fps = av_q2d(st->avg_frame_rate);
@@ -2701,6 +2726,7 @@ static struct ExportState {
     SwsContext*      sws              = nullptr;
     int              stream_idx       = -1;
     int              rotation         = 0;   // degrees CW to apply to decoded frames (0/90/180/270)
+    int              crop[4]          = {};  // container crop {top, bottom, left, right} (stream_crop)
     VideoInfo        info             = {};
     // Sequential decode state — avoids seek+flush on every frame when exporting.
     // Set to -1 when a seek is needed (first call, new file, backward jump, etc.).
@@ -2766,8 +2792,9 @@ bool video_open_export(int slot, const std::string& path) {
     ex.codec_ctx->thread_type  = FF_THREAD_SLICE;
     avcodec_open2(ex.codec_ctx, codec, nullptr);
 
-    ex.info.width    = ex.codec_ctx->width;
-    ex.info.height   = ex.codec_ctx->height;
+    stream_crop(st, ex.crop);
+    ex.info.width    = ex.codec_ctx->width - ex.crop[2] - ex.crop[3];
+    ex.info.height   = ex.codec_ctx->height - ex.crop[0] - ex.crop[1];
     ex.info.duration = (double)ex.fmt_ctx->duration / AV_TIME_BASE;
     ex.info.fps      = av_q2d(st->avg_frame_rate);
 
@@ -2861,6 +2888,13 @@ static VideoFrame* decode_and_rotate(ExportState& ex, AVFrame* frm) {
     vf->pts = frm->pts * av_q2d(st->time_base);
     uint8_t* dst[1] = { vf->data };
     int      lsz[1] = { vf->width * 4 };
+    if (ex.crop[0] | ex.crop[1] | ex.crop[2] | ex.crop[3]) {
+        frm->crop_top    = (size_t)ex.crop[0];
+        frm->crop_bottom = (size_t)ex.crop[1];
+        frm->crop_left   = (size_t)ex.crop[2];
+        frm->crop_right  = (size_t)ex.crop[3];
+        av_frame_apply_cropping(frm, AV_FRAME_CROP_UNALIGNED);
+    }
     sws_scale(ex.sws,
         (const uint8_t* const*)frm->data, frm->linesize,
         0, frm->height, dst, lsz);

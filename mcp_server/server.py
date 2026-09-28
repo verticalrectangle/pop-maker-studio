@@ -52,6 +52,7 @@ from mcp.types import Tool, TextContent, ImageContent
 # whether run directly (python3 mcp_server/server.py) or imported by the tool
 # scripts (which insert mcp_server/ into sys.path first).
 import style_expander
+from framing import album_box
 
 # ── Registry-driven FX catalog ───────────────────────────────────────────────
 # The add_effect_brick description used to hand-list every shader effect, so new
@@ -734,6 +735,10 @@ async def list_tools() -> list[Tool]:
                 "clips; otherwise it returns the insets for you to set after add_clip.\n\n"
                 "aspect: 'square' (1:1), 'vertical' (9:16), 'horizontal' (16:9), or 'W:H'.\n"
                 "face_detect (default true): auto-detect the face box and center the crop on it.\n"
+                "framing: 'face' (default — padded face box at the target aspect) or 'album' — the "
+                "Remain in Light cover portrait: a SQUARE crop from PMS face landmarks (side 1.89x "
+                "cheek width, nose tip at 56% height; for videos the frame given by `frame`, default "
+                "the last frame, i.e. a Live Photo's shutter frame). 'album' ignores aspect/pads.\n"
                 "x_pct / y_pct: manual center when face_detect=false (0.5/0.5 = dead center).\n"
                 "pad_top / pad_bottom: padding around the face (fraction of face height).\n"
                 "to_file (default false): set true ONLY when you genuinely need a cropped FILE on "
@@ -761,6 +766,10 @@ async def list_tools() -> list[Tool]:
                                      "description": "Vertical center of crop (0=top, 1=bottom) — used when face_detect=false"},
                     "to_file":      {"type": "boolean", "default": False,
                                      "description": "Render a cropped FILE instead of setting clip crop props (destructive; default false)"},
+                    "framing":      {"type": "string", "enum": ["face", "album"], "default": "face",
+                                     "description": "face = padded face box at aspect; album = square cover-portrait framing from face landmarks"},
+                    "frame":        {"type": "integer",
+                                     "description": "album framing on video: tracked frame index (default: last frame)"},
                 },
                 "required": ["source_path"],
             },
@@ -5226,7 +5235,28 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # ── Face detection ───────────────────────────────────────────────────
         face_cx, face_cy = None, None
         face_detected = False
-        if face_detect:
+        framing = arguments.get("framing", "face")
+        if framing == "album":
+            if is_image:
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": "framing 'album' needs a video (PMS face tracking runs on video)"}))]
+            face = _call("get_media_face", {"path": src, "wait": True})
+            if face.get("status") != "ready":
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": f"face tracking {face.get('status')}: {face.get('error', '')}"}))]
+            n = len(face["landmarks"])
+            fi = int(arguments.get("frame", n - 1)) % n
+            fw_, fh_ = face["width"], face["height"]
+            pts = [[x * fw_, y * fh_] for x, y in face["landmarks"][fi]]
+            if not any(x or y for x, y in pts):
+                return [TextContent(type="text", text=json.dumps(
+                    {"error": f"no face on tracked frame {fi}"}))]
+            bx, by, side = album_box(pts, fw_, fh_)
+            sx, sy = src_w / fw_, src_h / fh_
+            x, y = int(round(bx * sx)), int(round(by * sy))
+            crop_w, crop_h = int(round(side * sx)), int(round(side * sy))
+            face_detected = True
+            face_detect = False
             try:
                 # get a representative frame (image or mid-video frame)
                 if is_image:
@@ -5343,16 +5373,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                  "+repage", out_path],
                 check=True, stderr=subprocess.DEVNULL)
         else:
-            # Prepend a transpose filter so crop sees display-orientation coords.
-            # rotate=0 clears the stored rotation metadata (pixels are already rotated).
-            if rot == -90 or rot == 270:
-                vf = f"transpose=1,crop={crop_w}:{crop_h}:{x}:{y}"
-            elif rot == 90 or rot == -270:
-                vf = f"transpose=2,crop={crop_w}:{crop_h}:{x}:{y}"
-            elif abs(rot) == 180:
-                vf = f"vflip,hflip,crop={crop_w}:{crop_h}:{x}:{y}"
-            else:
-                vf = f"crop={crop_w}:{crop_h}:{x}:{y}"
+            # ffmpeg autorotates (and applies container cropping) on input, so
+            # the crop box is already in the decoded display orientation.
+            vf = f"crop={crop_w}:{crop_h}:{x}:{y}"
             subprocess.run(
                 ["ffmpeg", "-y", "-i", src,
                  "-vf", vf,

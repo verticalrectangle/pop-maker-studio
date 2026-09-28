@@ -197,9 +197,28 @@ static void set_nonblock(int fd) {
     if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+// Client sockets are non-blocking: write the whole reply, waiting for the
+// peer to drain its buffer (a single write() used to truncate replies larger
+// than the socket buffer — e.g. get_media_face — and the client then waited
+// forever for the newline). Gives up after 10 s without progress.
 static void send_json(int fd, const json& j) {
     std::string s = j.dump() + "\n";
-    (void)write(fd, s.c_str(), s.size());
+    const char* p = s.data();
+    size_t left = s.size();
+    while (left > 0) {
+        ssize_t n = send(fd, p, left, MSG_NOSIGNAL);
+        if (n > 0) {
+            p += n;
+            left -= (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            pollfd pfd{fd, POLLOUT, 0};
+            if (poll(&pfd, 1, 10000) > 0 && !(pfd.revents & (POLLERR | POLLHUP))) continue;
+        }
+        return;  // peer gone or stalled
+    }
 }
 
 // id will be added by the caller at dispatch time
@@ -2610,7 +2629,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             json f; f["i"] = fi;
             if (!face_cache_frame(path, rot_q, fi, o, &st)) {
                 f["eye_open"] = 0.0; f["blend_blink"] = 0.0; f["blink"] = 0.0;
-                f["src_time"] = 0.0; f["face"] = false;
+                f["src_time"] = st; f["face"] = false;
                 frames.push_back(std::move(f));
                 continue;
             }

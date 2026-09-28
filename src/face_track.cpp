@@ -949,7 +949,12 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     if (!face_track_available()) return false;
     MediaFileInfo info = video_probe_file(video_path);
     if (!info.has_video || info.width <= 0 || info.fps <= 0.0) return false;
-    const int W = info.width, H = info.height;
+    // ffmpeg autorotates the decode by the container rotation (phone portrait
+    // clips store landscape pixels + a 90° tag), like the preview/export
+    // decoders: track — and store coords — in that display orientation.
+    const bool tag_swap = info.rotation == 90 || info.rotation == 270;
+    const int W = tag_swap ? info.height : info.width;
+    const int H = tag_swap ? info.width : info.height;
     const int hw2 = W / 2, hh2 = H / 2;
     rot_q = ((rot_q % 4) + 4) % 4;
     // Upright half-res dims the tracker sees (90° steps swap them).
@@ -1104,7 +1109,7 @@ bool face_track_build_cache(const std::string& video_path, int rot_q,
     std::string tmp = out_path + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
-    uint32_t magic = 0x46534D50, version = 12;  // v12: real pts times, per-frame (unsmoothed) eye signals
+    uint32_t magic = 0x46534D50, version = 13;  // v13: display-orientation frames for rotation-tagged media
     int32_t  rq = rot_q, rw = W, rh = H;
     float    fps = (float)info.fps;
     uint32_t count = (uint32_t)n;

@@ -72,11 +72,19 @@ export function render(f) {}      // required; once per frame the clip is visibl
 ```ts
 {
   width: number, height: number,          // source frame size in px (display orientation)
-  times: number[],                        // source seconds per tracked frame (real, VFR-safe)
-  landmarks: [number, number][][],        // per frame: 478 [x, y] normalised 0..1 (MediaPipe topology)
-  eyeOpen: number[],                      // per frame: eyelid-gap ratio (src/face_metrics.h)
-  blink: number[],                        // per frame: max(blendshape blink, 1 - eyeOpen/openBaseline), 0..1
-  mesh: { tesselation: [number,number][], contours: [number,number][], irises: [number,number][] }
+  fps: number,                            // container frame rate (nominal; use times for VFR)
+  times: number[],                        // source seconds per tracked frame (real pts, VFR-safe)
+  landmarks: [number, number][][],        // per frame: 478 [x, y] normalised 0..1 in display
+                                          // orientation (all zeros on frames without a face)
+  eyeOpen: number[],                      // per frame: eyelid-gap ratio (src/face_metrics.h), unsmoothed
+  blink: number[],                        // per frame: unified blink 0..1 — max of the calibrated
+                                          // geometric term (eyeOpen vs a streaming open-eye baseline)
+                                          // and the blendshape term (face_metrics.h face_blink_signal)
+  mesh: {                                 // MediaPipe face-mesh connection sets, [a, b] index pairs
+    tesselation: [number,number][],       // 2556 edges
+    contours: [number,number][],          // lips, eyes, brows, face oval (124 edges)
+    irises: [number,number][]             // both irises (8 edges)
+  }
 }
 ```
 

@@ -20,7 +20,8 @@ FaceCacheStatus face_cache_status(const std::string& take_path, float* progress)
 
 // Landmarks for source time src_t (seconds into the take). Returns false
 // while the cache is missing/building or when that frame has no face.
-// Coords are RAW full-res take pixels (obs.w/h = take dimensions).
+// Coords are full-res take pixels in the decoded (container-rotation applied)
+// orientation, before rot_q (obs.w/h = those dimensions).
 bool face_cache_obs(const std::string& take_path, int rot_q,
                     double src_t, FaceObs& out);
 
@@ -28,7 +29,8 @@ bool face_cache_obs(const std::string& take_path, int rot_q,
 int face_cache_frame_count(const std::string& take_path, int rot_q);
 // Per-frame data: score (>0 = face), geometric eyeOpen, and the frame's
 // source presentation time (seconds into the take; VFR sources report real
-// times, not frame_index/fps). Returns false when unavailable.
+// times, not frame_index/fps). Returns false when unavailable or when the
+// frame has no face — src_time is still set for any valid frame index.
 bool face_cache_frame(const std::string& take_path, int rot_q, int fi,
                       FaceObs& out, double* src_time);
 
@@ -36,6 +38,8 @@ bool face_cache_frame(const std::string& take_path, int rot_q, int fi,
 // Returns false on failure. progress is forwarded to the builder.
 bool face_cache_ensure_sync(const std::string& take_path, int rot_q,
                             const std::function<void(float)>& progress);
-// Frame count + fps for the ready cache (script runtime / FaceTrack dump).
-// Returns -1 when no ready cache exists for this rotation.
-int face_cache_frame_count(const std::string& take_path, int rot_q, float* fps_out);
+// Frame count + fps + raw (unrotated) frame size for the ready cache (script
+// runtime / FaceTrack dump). Returns -1 when no ready cache exists for this
+// rotation.
+int face_cache_frame_count(const std::string& take_path, int rot_q, float* fps_out,
+                           int* raw_w = nullptr, int* raw_h = nullptr);
