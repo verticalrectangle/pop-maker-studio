@@ -199,12 +199,10 @@ static double audio_offset_for(const AppState& state, const AudioAnalysis& a,
     return 0.0;
 }
 
-static JSValue new_float_array(JSContext* ctx, const std::vector<float>& v,
-                               double shift) {
+static JSValue new_time_array(JSContext* ctx, const std::vector<double>& v, double shift) {
     JSValue arr = JS_NewArray(ctx);
     for (uint32_t i = 0; i < v.size(); ++i)
-        JS_DefinePropertyValueUint32(ctx, arr, i,
-            JS_NewFloat64(ctx, (double)v[i] + shift), JS_PROP_C_W_E);
+        JS_DefinePropertyValueUint32(ctx, arr, i, JS_NewFloat64(ctx, v[i] + shift), JS_PROP_C_W_E);
     return arr;
 }
 
@@ -248,15 +246,15 @@ static void ensure_audio_memo(ScriptRuntime::Impl* self) {
     JS_DefinePropertyValueStr(ctx, o, "offset", JS_NewFloat64(ctx, off), JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(ctx, o, "bpm", JS_NewFloat64(ctx, a->bpm), JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(ctx, o, "fps", JS_NewInt32(ctx, a->fps), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, o, "beats", new_float_array(ctx, a->beats, -off), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, o, "downbeats", new_float_array(ctx, a->downbeats, -off), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, o, "beats", new_time_array(ctx, a->beats, -off), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, o, "downbeats", new_time_array(ctx, a->downbeats, -off), JS_PROP_C_W_E);
     JSValue hits = JS_NewObject(ctx);
     for (int k = 0; k < (int)HitKind::Count; ++k) {
         JSValue arr = JS_NewArray(ctx);
         uint32_t i = 0;
         for (auto& h : a->hits[k]) {
             JSValue e = JS_NewObject(ctx);
-            JS_DefinePropertyValueStr(ctx, e, "t", JS_NewFloat64(ctx, (double)h.t - off), JS_PROP_C_W_E);
+            JS_DefinePropertyValueStr(ctx, e, "t", JS_NewFloat64(ctx, h.t - off), JS_PROP_C_W_E);
             JS_DefinePropertyValueStr(ctx, e, "s", JS_NewFloat64(ctx, (double)h.s), JS_PROP_C_W_E);
             JS_DefinePropertyValueUint32(ctx, arr, i++, e, JS_PROP_C_W_E);
         }
@@ -319,8 +317,8 @@ static void ensure_audio_memo(ScriptRuntime::Impl* self) {
         JS_DefinePropertyValueStr(ctx, e, "w", JS_NewString(ctx, wd.w.c_str()), JS_PROP_C_W_E);
         JS_DefinePropertyValueStr(ctx, e, "line", JS_NewInt32(ctx, wd.line), JS_PROP_C_W_E);
         JS_DefinePropertyValueStr(ctx, e, "i", JS_NewInt32(ctx, wd.i), JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, e, "t0", JS_NewFloat64(ctx, (double)wd.t0 - off), JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, e, "t1", JS_NewFloat64(ctx, (double)wd.t1 - off), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, e, "t0", JS_NewFloat64(ctx, wd.t0 - off), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, e, "t1", JS_NewFloat64(ctx, wd.t1 - off), JS_PROP_C_W_E);
         JS_DefinePropertyValueStr(ctx, e, "conf", JS_NewFloat64(ctx, (double)wd.conf), JS_PROP_C_W_E);
         JS_DefinePropertyValueUint32(ctx, words, i++, e, JS_PROP_C_W_E);
     } }

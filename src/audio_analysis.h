@@ -14,8 +14,11 @@ enum class EnvKind : int { Mix = 0, Drums, Bass, Other, Vocals, Count };
 const char* hit_kind_name(HitKind k);  // "kick" "snare" "hat" "bass" "other" "vocal"
 const char* env_kind_name(EnvKind k);  // "mix" "drums" "bass" "other" "vocals"
 
+// Event times are double: song-length sources put float32 time resolution at
+// ~1e-5 s, enough to flip an event that lands exactly on a frame boundary
+// (e.g. a downbeat at 94.300 s vs frame 378 at 60 fps after the clip offset).
 struct AudioHit {
-    float t = 0.f;  // onset time, source seconds
+    double t = 0.0; // onset time, source seconds
     float s = 0.f;  // strength 0..1: peak / p90(picked peaks of this kind), clipped
 };
 
@@ -23,8 +26,8 @@ struct AnalysisWord {
     std::string w;
     int   line = 0;       // index into AudioAnalysis::lines
     int   i    = 0;       // word index within the line
-    float t0   = 0.f;     // source seconds
-    float t1   = 0.f;
+    double t0  = 0.0;     // source seconds
+    double t1  = 0.0;
     float conf = 0.f;     // mean CTC token posterior, 0..1
 };
 
@@ -33,8 +36,8 @@ struct AudioAnalysis {
     std::string source;          // analysed audio file (absolute path)
     double      duration = 0.0;  // seconds
     float       bpm = 0.f;
-    std::vector<float> beats;      // seconds, ascending
-    std::vector<float> downbeats;  // seconds, ascending, subset of beats
+    std::vector<double> beats;      // seconds, ascending
+    std::vector<double> downbeats;  // seconds, ascending, subset of beats
     std::array<std::vector<AudioHit>, (int)HitKind::Count> hits;
     int fps = 60;                                                // envelope/spectrum frame rate
     std::array<std::vector<float>, (int)EnvKind::Count> env;     // 0..1 per frame (p98-normalised RMS)

@@ -42,9 +42,9 @@ export function render(f) {}      // required; once per frame the clip is visibl
 
 | field | meaning |
 |---|---|
-| `t` | timeline time in seconds (same clock as `pms.audio` times) |
-| `local` | seconds since the clip's start |
-| `frame` | integer timeline frame index (`round(t * fps)`) |
+| `t` | timeline time in seconds on the project frame grid (`frame / fps`, exact in double precision — same clock as `pms.audio` times) |
+| `local` | `t` minus the clip's start |
+| `frame` | integer timeline frame index |
 | `fps` | project frame rate |
 | `width`, `height` | canvas size in px for this render (changes with project format / multi-format export) |
 | `duration` | clip duration in seconds |
