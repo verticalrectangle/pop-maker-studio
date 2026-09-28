@@ -21,6 +21,7 @@
 #include "vision_caption.h"
 #include "video.h"
 #include "proxy.h"
+#include "skin_segment.h"
 #include "transcribe.h"
 #include "generated/fx_clip_set_dispatch.h"
 #include "generated/fx_type_list.h"
@@ -2868,6 +2869,58 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             }
             json r; r["stills"] = stills;
             send_ok_id(client_fd, req_id, r);
+            agent_done();
+            fd_mark_free(client_fd);
+        }).detach();
+        json sentinel; sentinel["__async"] = true; return sentinel;
+    }
+
+    // ── Skin segmentation: selfie_multiclass_256x256 per-class confidence ───
+    // segment_image {path, out_dir}: writes out_dir/{background,hair,
+    // body_skin,face_skin,clothes,others}.png — single-channel 8-bit PNGs
+    // where the value is the softmax confidence (0..255) of that class, NOT
+    // a hard argmax mask — at the source image's display resolution. Returns
+    // {width, height, classes: {name: path}}. Async with progress (ORT run +
+    // per-class upsample/write); the MCP `segment_image` tool documents the
+    // same contract. Read-only w.r.t. project state: placed before the
+    // auto-batch line so it never opens an undo step.
+    if (method == "segment_image") {
+        std::string path = params.value("path", "");
+        std::string out_dir = params.value("out_dir", "");
+        if (path.empty()) { err = "path required"; return {}; }
+        if (out_dir.empty()) { err = "out_dir required"; return {}; }
+        if (!skin_segment_available()) {
+            err = "skin model not found (models/selfie_multiclass_256x256.onnx)"; return {};
+        }
+        if (client_fd < 0) {
+            std::array<std::string, SKIN_NCLASSES> outs;
+            int sw = 0, sh = 0;
+            std::string serr;
+            if (!skin_segment_image(path, out_dir, outs, sw, sh, nullptr, &serr)) {
+                err = serr; return {};
+            }
+            json r, classes = json::object();
+            for (int k = 0; k < SKIN_NCLASSES; ++k)
+                classes[SKIN_CLASS_NAMES[k]] = outs[(size_t)k];
+            r["width"] = sw; r["height"] = sh; r["classes"] = std::move(classes);
+            return r;
+        }
+        fd_mark_busy(client_fd);
+        std::thread([path, out_dir, client_fd, req_id]() {
+            std::array<std::string, SKIN_NCLASSES> outs;
+            int sw = 0, sh = 0;
+            std::string serr;
+            auto prog = [&](float p) { send_progress(client_fd, req_id, p, ""); };
+            bool ok = skin_segment_image(path, out_dir, outs, sw, sh, prog, &serr);
+            if (!ok) {
+                send_err_id(client_fd, req_id, serr);
+            } else {
+                json r, classes = json::object();
+                for (int k = 0; k < SKIN_NCLASSES; ++k)
+                    classes[SKIN_CLASS_NAMES[k]] = outs[(size_t)k];
+                r["width"] = sw; r["height"] = sh; r["classes"] = std::move(classes);
+                send_ok_id(client_fd, req_id, r);
+            }
             agent_done();
             fd_mark_free(client_fd);
         }).detach();
