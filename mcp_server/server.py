@@ -113,7 +113,7 @@ _CATEGORIES: dict[str, list[str]] = {
         "validate_glsl",
     ],
     "audio": [
-        "analyze_audio", "get_audio_analysis", "get_audio_perf",
+        "analyze_audio", "get_audio_analysis", "load_audio_analysis", "get_audio_perf",
         "set_audio_path", "remove_silence", "cut_filler_words", "find_audio_cue",
     ],
     "style": [
@@ -1587,6 +1587,23 @@ Tool(
                 "Poll every 2s until status='done'."
             ),
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="load_audio_analysis",
+            description=(
+                "Publish an audio analysis v2 JSON file (docs/AUDIO_ANALYSIS.md) as the "
+                "project's analysis instead of running analyze_audio — for fixtures, "
+                "cached results or analyses produced outside the app. Script clips see it "
+                "as pms.audio; the path is saved with the project. Returns "
+                "{beats, downbeats, words, duration}."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the analysis JSON"},
+                },
+                "required": ["path"],
+            },
         ),
         Tool(
             name="get_song_structure",
