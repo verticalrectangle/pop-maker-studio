@@ -7,6 +7,7 @@
 // Threading: all entry points run on the main/GL thread (preview, export
 // tick, snapshot). Hot-reload polling (script_runtime_poll) is cheap
 // (stat mtimes) and also runs there. No worker threads.
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -66,6 +67,7 @@ public:
     void clear_log() { log_tail_.clear(); }
     // Script-requested post shader for the last rendered frame.
     bool has_post() const { return has_post_; }
+    void set_canvas(class ScriptCanvas* c);
     const std::string& post_frag() const { return post_frag_; }
     const std::vector<std::pair<std::string, std::vector<float>>>& post_uniforms() const {
         return post_uniforms_;
@@ -75,8 +77,9 @@ public:
     // JSON files loaded via pms.json (for file watching).
     const std::vector<std::string>& json_deps() const { return json_deps_; }
 
-private:
+public:
     struct Impl;
+private:
     std::unique_ptr<Impl> impl_;
     std::vector<std::string> log_tail_;
     bool has_post_ = false;
