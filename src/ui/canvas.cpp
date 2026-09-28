@@ -1478,6 +1478,10 @@ static uintptr_t camera_live_tex(AppState& st, const Clip*& out_brick,
 AppState* g_state_for_mirror = nullptr;
 
 void draw_preview(AppState& state, ImVec2 p, float w, float h) {
+    // th/perf-finish: shape tessellation cache lives for the whole frame pass
+    // (stable-identity map + serial); pruned right after Pass 1 below.
+    static std::unordered_map<ShapeTessKey, ShapeTessCache, ShapeTessKeyHash> s_tess;
+    static uint64_t s_tess_frame = 0;
     // IPC-triggered snapshot — fulfilled here on the GL thread
     if (state.snapshot_request) {
         state.snapshot_request = false;
@@ -1972,18 +1976,22 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             float rad = rot * 3.14159265f / 180.f;
 
             ShapePath path = cl.eval_path(state.playhead);
-            // th/perf-finish: tessellation cache keyed on the evaluated path +
-            // style (re-tessellate only when inputs change). One entry per clip
-            // address; static shapes hit every frame.
-            static std::unordered_map<uint64_t, ShapeTessCache> s_tess;
-            uint64_t tkey = (uint64_t)(uintptr_t)&cl;
-            ShapeTessCache& tc = s_tess[tkey];
+            // th/perf-finish: tessellation cache on a STABLE identity (track
+            // index + clip start + content hash of evaluated inputs) — never
+            // on Clip* addresses (vector realloc would alias/leak). Static
+            // shapes hit every frame; any visual change re-tessellates.
+            if (ti == (int)state.tracks.size() - 1) ++s_tess_frame;  // first track each frame
+            uint64_t content = shape_tess_content_hash(
+                path, stroke_len, width_mul, style.stroke_width,
+                (int)w, (int)h, cx, cy, hw, hh, cosf(rad), sinf(rad),
+                mirror_fold, mirror_refl);
+            ShapeTessKey tkey{ti, cl.start, content};
             float fill_alpha = 0.f;
             auto t0sh = std::chrono::steady_clock::now();
             const ShapeGeometry* geomp = shape_tessellate_cached(
-                tc, path, stroke_len, width_mul, style.stroke_width,
-                (int)w, (int)h, cx, cy, hw, hh, cosf(rad), sinf(rad),
-                mirror_fold, mirror_refl, fill_alpha);
+                s_tess, s_tess_frame, tkey, path, stroke_len, width_mul,
+                style.stroke_width, (int)w, (int)h, cx, cy, hw, hh,
+                cosf(rad), sinf(rad), mirror_fold, mirror_refl, fill_alpha);
             perf::record(perf::S_SHAPES, std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - t0sh).count());
             scene_add_shape(*geomp, style, alpha, fill_alpha, (int)w, (int)h);
@@ -2440,6 +2448,7 @@ void draw_preview(AppState& state, ImVec2 p, float w, float h) {
             }
         }
     }  // end Pass 1 track loop
+    shape_tess_cache_prune(s_tess, s_tess_frame);
 
     // (Live camera preview now composites at its track's z-order inside the
     // Pass 1 loop above — it used to be drawn here, on top of every track.)

@@ -14,6 +14,8 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <cstring>
+#include <unordered_map>
 #include "keyframe.h"
 
 // A single point on a shape path. Coordinates are in the shape's LOCAL
@@ -191,27 +193,66 @@ ShapeGeometry shape_radial_replicate(const ShapeGeometry& g,
 // ── Tessellation cache (th/perf-finish) ─────────────────────────────────────
 // Keyed on the evaluated (canvas-space) inputs to shape_tessellate +
 // shape_radial_replicate: re-tessellates only when inputs change, otherwise
-// returns the cached geometry. Single-entry LRU per call site (preview,
-// snapshot, export) is enough — the same shape renders many frames in a row.
-// Pass a per-call-site ShapeTessCache (static at the call site) so preview
-// and export never share (and thrash) one entry across different canvas sizes.
+// returns the cached geometry. Keyed on a STABLE identity (track index +
+// clip start + content hash of the evaluated path/style/props), never on a
+// Clip* address — vector realloc on add/remove/reorder must not alias or
+// leak entries. Stale entries (identity not seen this frame) are pruned by
+// shape_tess_cache_prune(), called once per frame after the scene pass.
+// One entry per (identity) is enough — the same shape renders many frames.
 struct ShapeTessCache {
     // Full input key: quantised so float noise can't defeat the hit.
     std::vector<float> key;
     ShapeGeometry geom;   // post-replication geometry (ready to draw)
     bool valid = false;
+    uint64_t last_seen = 0;  // frame serial of last use (for pruning)
+    // Echo of the map key (track/start/content) — guards against a hash
+    // collision aliasing two different clips' geometry.
+    int key_id_track = -2;
+    float key_id_start = 0.f;
+    uint64_t key_id_content = 0;
 };
-// Cached wrapper: key = (path pts/closed, stroke_length, width_mul,
-// base_stroke_width, canvas_w/h, cx/cy/hw/hh/cos/sin, fold, reflect).
-// On hit returns &cached.geom; on miss re-tessellates (+ replicates) into the
-// cache and returns it. fill_alpha_out always recomputed (cheap scalar).
-const ShapeGeometry* shape_tessellate_cached(ShapeTessCache& cache,
-                                             const ShapePath& path,
-                                             float stroke_length, float width_mul,
-                                             float base_stroke_width,
-                                             int canvas_w, int canvas_h,
-                                             float cx, float cy,
-                                             float hw, float hh,
-                                             float cos_r, float sin_r,
-                                             int fold, bool reflect,
-                                             float& fill_alpha_out);
+// Stable identity for one shape clip's tessellation input: track index +
+// clip start time (stable across vector realloc) + content hash of every
+// evaluated input that feeds the tessellator.
+struct ShapeTessKey {
+    int track = -1;
+    float start = 0.f;      // clip.start at cache time
+    uint64_t content = 0;   // FNV-1a over evaluated path/style/props
+    bool operator==(const ShapeTessKey& o) const {
+        return track == o.track && start == o.start && content == o.content;
+    }
+};
+struct ShapeTessKeyHash {
+    size_t operator()(const ShapeTessKey& k) const noexcept {
+        size_t h = (size_t)k.track * 0x9e3779b1u;
+        h ^= (size_t)k.content + 0x9e3779b1u + (h << 6) + (h >> 2);
+        uint32_t sb;
+        memcpy(&sb, &k.start, sizeof(sb));
+        h ^= (size_t)sb + 0x9e3779b1u + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+// Content hash over the evaluated tessellation inputs (path pts/closed,
+// stroke_length, width_mul, base_stroke_width, canvas, transform, fold,
+// reflect). Quantised to 1/4096 like the key compare.
+uint64_t shape_tess_content_hash(const ShapePath& path,
+                                 float stroke_length, float width_mul,
+                                 float base_stroke_width,
+                                 int canvas_w, int canvas_h,
+                                 float cx, float cy, float hw, float hh,
+                                 float cos_r, float sin_r,
+                                 int fold, bool reflect);
+// Cached wrapper: on hit returns &cached geometry; on miss re-tessellates
+// (+ replicates). fill_alpha_out always recomputed (cheap scalar).
+// `frame` is a monotonically increasing frame serial (for pruning).
+const ShapeGeometry* shape_tessellate_cached(
+    std::unordered_map<ShapeTessKey, ShapeTessCache, ShapeTessKeyHash>& map,
+    uint64_t frame, const ShapeTessKey& id,
+    const ShapePath& path,
+    float stroke_length, float width_mul, float base_stroke_width,
+    int canvas_w, int canvas_h, float cx, float cy, float hw, float hh,
+    float cos_r, float sin_r, int fold, bool reflect, float& fill_alpha_out);
+// Drop entries not seen since `frame` (call once per frame after the pass).
+void shape_tess_cache_prune(
+    std::unordered_map<ShapeTessKey, ShapeTessCache, ShapeTessKeyHash>& map,
+    uint64_t frame);
