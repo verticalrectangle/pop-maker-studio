@@ -8,6 +8,9 @@ void ipc_server_start();
 // Reads pending IPC messages and dispatches them against state.
 // Non-blocking. Call every frame from app_frame.
 void ipc_server_poll(AppState& state);
+// Republish the saved (.pms v72) analysis request after project load: cached
+// analysis publishes synchronously, cache miss starts the background run.
+void audio_analysis_republish(AppState& state);
 // Block up to timeout_ms waiting for IPC activity (new connection or bytes on
 // any client). Used by the main-loop idle throttle so an IPC arrival wakes us
 // immediately instead of waiting out the sleep. Zero fds / error → returns.

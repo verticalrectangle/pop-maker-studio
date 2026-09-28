@@ -11,6 +11,7 @@
 #include "history.h"
 #include "project.h"
 #include "transcribe.h"
+#include "ipc_server.h"
 #include "globals.h"
 #include "json.hpp"
 #include <algorithm>
@@ -115,6 +116,10 @@ bool open_project_path(AppState& state, const std::string& path) {
             if (cl.clip_type == ClipType::Audio && !cl.text.empty())
                 audio_source_ensure(cl.text);
     lap("queue+audio ensure");
+    // Saved analysis request (.pms v72): republish the cached analysis
+    // synchronously so the first frame renders with it; a cache miss starts
+    // the background run (progress via get_audio_analysis).
+    audio_analysis_republish(state);
     recent_projects_push(path);
     history_push(state, "Open project");
     mark_project_clean(state);
