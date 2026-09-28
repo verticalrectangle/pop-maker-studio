@@ -20,9 +20,13 @@ void app_focus_typography_panel() { if (g_focus_typography_hook) g_focus_typogra
 
 bool lay_typography_script(AppState& state, const std::string& preset,
                            const std::string& params_json, std::string& err) {
-    // Validate the preset id against the shipped JS modules.
+    // Validate the preset id against the shipped JS modules (must exist on
+    // disk — script_resolve_spec maps any pms:typography/<id> syntactically).
     std::string resolved = script_resolve_spec("pms:typography/" + preset, "", "");
-    if (resolved.empty()) { err = "unknown typography preset '" + preset + "'"; return false; }
+    if (resolved.empty() || !std::filesystem::exists(resolved)) {
+        err = "unknown typography preset '" + preset + "'";
+        return false;
+    }
     if (state.words_cache.empty()) { err = "no transcript words — transcribe or set_transcript first"; return false; }
     if (state.audio_path.empty()) { err = "no audio source on project"; return false; }
 
