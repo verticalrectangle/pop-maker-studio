@@ -93,6 +93,15 @@ void app_frame(AppState& state) {
         for (const auto& c : tr.clips)
             if (c.end > state.duration) state.duration = c.end;
 
+    // th/perf: apply one coalesced bench/drag seek per UI frame (latest wins).
+    // bench_tick() (inside ipc_server_poll below) only ever *queues* into
+    // pending_seek, so N seeks landing between frames collapse to one apply.
+    if (state.pending_seek >= 0.f && !state.playing) {
+        state.playhead = state.pending_seek;
+        state.pending_seek = -1.f;
+        state.scrub_changed = true;
+        audio_seek(state.playhead);
+    }
     // Update playhead BEFORE rendering so the video frame shown this cycle
     // matches the audio position this cycle, not last cycle's.
     if (state.playing) {

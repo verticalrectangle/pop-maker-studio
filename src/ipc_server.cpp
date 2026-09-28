@@ -3,6 +3,7 @@
 #include "metal_render.h"   // metal_render_fx_debug for the fx_debug command
 #endif
 #include "audio.h"
+#include "perf.h"
 #include "recorder.h"
 #include "video_recorder.h"
 #include "face_track.h"
@@ -47,6 +48,7 @@ static const char* k_gen_fx_names[] = {
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <chrono>
 #include <unordered_set>
 #include <fstream>
 #include <filesystem>
@@ -84,6 +86,25 @@ bool scene_analysis_progress(int* vid_idx, int* vid_total, int* frame_idx, int* 
     if (frame_total) *frame_total = s_scene_analysis.frame_total.load();
     return true;
 }
+// ── th/perf bench driver state (main-loop owned) ──────────────────────────────
+// bench_scrub/bench_play stash their schedule here; bench_tick() (called from
+// ipc_server_poll, i.e. once per UI frame) advances it.
+static std::vector<float> s_bench_seeks;
+static std::vector<double> s_bench_lat;    // seek-to-present latency samples (ms)
+static std::vector<double> s_bench_frames; // UI frame-time samples (ms)
+static int s_bench_kind = 0;       // 0 = scrub, 1 = play
+static double s_bench_interval = 0.0; // scrub: seconds between seeks; play: duration
+static double s_bench_next = 0.0;  // next scheduled seek (bench clock s)
+static int s_bench_fd = -1;
+static std::string s_bench_id;
+static int s_bench_remaining = 0;  // seeks left to issue (scrub)
+static double s_bench_last_frame_t = 0.0;
+static double now_s() {
+    using clock = std::chrono::steady_clock;
+    static const auto t0 = clock::now();
+    return std::chrono::duration<double>(clock::now() - t0).count();
+}
+static void bench_tick(AppState& state);
 
 static int  g_srv_fd   = -1;
 static std::string g_sock_path;
@@ -1289,11 +1310,113 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "get_project") {
         bool verbose = params.value("verbose", false);
         json r = verbose ? state_to_json(state) : state_to_json_slim(state);
-        // ASCII map of the track-layering system (Z-order, timing, overlaps) so a
-        // non-vision agent can actually picture the editing surface.
         r["timeline"] = build_timeline_ascii(state);
         return r;
     }
+    // ── th/perf: preview-stage timers + scrub/playback bench ───────────────────
+
+    if (method == "get_perf_stats") {
+        json r, stages = json::object();
+        for (int s = 0; s < perf::S_COUNT; ++s) {
+            perf::StageStats st;
+            perf::stage_stats((perf::Stage)s, st);
+            json j;
+            j["last_ms"] = st.last; j["ema_ms"] = st.ema;
+            j["max_ms"] = st.max;   j["n"] = st.n;
+            stages[perf::stage_name((perf::Stage)s)] = j;
+        }
+        r["stages"] = stages;
+        double p50, p95, p99, mx;
+        perf::frame_percentiles(p50, p95, p99, mx);
+        r["ui_frame_ms"] = {{"p50", p50}, {"p95", p95}, {"p99", p99}, {"max", mx}};
+        r["playhead"] = state.playhead;
+        r["playing"] = state.playing;
+        return r;
+    }
+
+    if (method == "bench_scrub") {
+        // Drive seek_to from the main loop: {pattern: random|sweep|jitter,
+        // seconds, rate_hz}. Returns UI frame-time percentiles + time until
+        // the correct frame is on screen (seek-to-present latency).
+        std::string pattern = params.value("pattern", "random");
+        double seconds = params.value("seconds", 5.0);
+        double rate_hz = params.value("rate_hz", 10.0);
+        if (seconds <= 0.0 || seconds > 120.0) { err = "seconds must be 0..120"; return {}; }
+        if (rate_hz <= 0.0 || rate_hz > 120.0) { err = "rate_hz must be 0..120"; return {}; }
+        if (state.bench_running) { err = "bench already running"; return {}; }
+        if (state.duration <= 0.f) { err = "empty timeline — nothing to scrub"; return {}; }
+        if (client_fd < 0) { err = "bench_scrub needs a socket client"; return {}; }
+        // Build the seek schedule now (deterministic seed): the main loop
+        // consumes one target per tick at rate_hz.
+        int n = (int)(seconds * rate_hz + 0.5);
+        if (n < 1) n = 1;
+        if (n > 4096) n = 4096;
+        uint32_t rng = 12345u;
+        auto rnd = [&]() { rng = rng * 1664525u + 1013904223u; return (double)(rng >> 8) / (double)(1 << 24); };
+        float lo = 0.1f, hi = state.duration - 0.1f;
+        if (hi <= lo) hi = lo + 0.1f;
+        s_bench_seeks.clear();
+        s_bench_seeks.reserve((size_t)n);
+        if (pattern == "sweep") {
+            for (int i = 0; i < n; ++i)
+                s_bench_seeks.push_back(n == 1 ? lo : lo + (hi - lo) * (float)i / (float)(n - 1));
+        } else if (pattern == "jitter") {
+            float base = (lo + hi) * 0.5f;
+            for (int i = 0; i < n; ++i)
+                s_bench_seeks.push_back(fmaxf(lo, fminf(hi, base + (float)(rnd() * 2.0 - 1.0))));
+        } else if (pattern == "random") {
+            for (int i = 0; i < n; ++i)
+                s_bench_seeks.push_back(lo + (float)rnd() * (hi - lo));
+        } else { err = "pattern must be random|sweep|jitter"; return {}; }
+        s_bench_lat.clear();
+        s_bench_frames.clear();
+        s_bench_kind = 0;
+        s_bench_interval = 1.0 / rate_hz;
+        s_bench_next = 0.0;
+        s_bench_fd = client_fd;
+        s_bench_id = req_id;
+        s_bench_remaining = n;
+        state.bench_running = true;
+        state.bench_frames = 0;
+        state.bench_t0 = now_s();
+        state.pending_seek = -1.f;
+        perf::frame_reset();
+        fd_mark_busy(client_fd);
+        json sentinel; sentinel["__async"] = true; return sentinel;
+    }
+
+    if (method == "bench_play") {
+        // Play `seconds` of the timeline, then report UI frame percentiles +
+        // dropped-frame estimate (playhead advance vs wall clock).
+        double seconds = params.value("seconds", 5.0);
+        if (seconds <= 0.0 || seconds > 120.0) { err = "seconds must be 0..120"; return {}; }
+        if (state.bench_running) { err = "bench already running"; return {}; }
+        if (state.duration <= 0.f) { err = "empty timeline — nothing to play"; return {}; }
+        if (client_fd < 0) { err = "bench_play needs a socket client"; return {}; }
+        s_bench_lat.clear();
+        s_bench_frames.clear();
+        s_bench_kind = 1;
+        s_bench_interval = seconds;
+        s_bench_next = 0.0;
+        s_bench_fd = client_fd;
+        s_bench_id = req_id;
+        s_bench_remaining = 0;
+        state.bench_running = true;
+        state.bench_frames = 0;
+        state.bench_t0 = now_s();
+        state.bench_play_t0 = state.playhead;
+        if (!state.playing) {
+            state.playing = true;
+            state.play_start_wall = std::chrono::steady_clock::now();
+            state.play_start_pos = state.playhead;
+            audio_seek(state.playhead);
+            audio_play();
+        }
+        perf::frame_reset();
+        fd_mark_busy(client_fd);
+        json sentinel; sentinel["__async"] = true; return sentinel;
+    }
+
 
     if (method == "get_project_summary") {
         std::string path = params.value("path", "");
@@ -4358,6 +4481,7 @@ void ipc_server_start() {
 }
 
 void ipc_server_poll(AppState& state) {
+    bench_tick(state);
     if (g_srv_fd < 0) return;
 
     // Accept new connections
@@ -4378,6 +4502,106 @@ void ipc_server_poll(AppState& state) {
         std::remove_if(g_clients.begin(), g_clients.end(),
                        [](const Client& c){ return c.fd < 0; }),
         g_clients.end());
+}
+// ── th/perf bench main-loop driver ────────────────────────────────────────────
+static double pct(std::vector<double> v, double p) {
+    if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
+    return v[std::min(v.size() - 1, (size_t)(p * v.size()))];
+}
+static void bench_finish(AppState& state) {
+    double wall = now_s() - state.bench_t0;
+    json r;
+    r["frames"] = state.bench_frames;
+    r["wall_s"] = wall;
+    {
+        auto v = s_bench_frames;
+        std::sort(v.begin(), v.end());
+        auto q = [&](double p) -> double {
+            return v.empty() ? 0.0 : v[std::min(v.size() - 1, (size_t)(p * v.size()))];
+        };
+        r["ui_frame_ms"] = {{"p50", q(0.5)}, {"p95", q(0.95)},
+                            {"p99", q(0.99)},
+                            {"max", v.empty() ? 0.0 : v.back()},
+                            {"n", (int)v.size()}};
+    }
+    if (s_bench_kind == 0) {
+        r["seeks"] = (int)s_bench_lat.size();
+        r["correct_frame_ms"] = {{"p50", pct(s_bench_lat, 0.5)},
+                                 {"p95", pct(s_bench_lat, 0.95)},
+                                 {"n", (int)s_bench_lat.size()}};
+        state.pending_seek = -1.f;
+        state.scrub_active = false;
+    } else {
+        // Dropped frames: expected vs presented at ~60 fps.
+        double adv = (double)state.playhead - (double)state.bench_play_t0;
+        if (adv < 0.0) adv = 0.0;
+        double expect = wall * 60.0;
+        double shown = (double)state.bench_frames;
+        double dropped = expect - shown;
+        if (dropped < 0.0) dropped = 0.0;
+        r["playhead_advance_s"] = adv;
+        r["expected_frames"] = expect;
+        r["presented_frames"] = shown;
+        r["dropped_frames"] = dropped;
+        r["dropped_pct"] = expect > 0.0 ? 100.0 * dropped / expect : 0.0;
+        if (state.playing) { state.playing = false; audio_pause(); }
+    }
+    state.bench_running = false;
+    state.pending_seek = -1.f;
+    int fd = s_bench_fd;
+    std::string id = s_bench_id;
+    s_bench_fd = -1; s_bench_id.clear();
+    s_bench_seeks.clear();
+    send_ok_id(fd, id, r);
+    agent_done();
+    fd_mark_free(fd);
+}
+static void bench_tick(AppState& state) {
+    double now = now_s();
+    // Per-frame UI frame-time sample (main-loop cadence incl. vsync).
+    if (s_bench_last_frame_t > 0.0 && state.bench_running) {
+        double dt = (now - s_bench_last_frame_t) * 1000.0;
+        if (dt > 0.0 && dt < 5000.0) s_bench_frames.push_back(dt);
+    }
+    s_bench_last_frame_t = now;
+    if (!state.bench_running) return;
+    state.bench_frames++;
+    // Correct-frame tracking: the pending seek's target is "on screen" once
+    // the presented playhead reaches it (draw used the new playhead).
+    if (state.last_shown_playhead == state.last_seek_to && state.last_seek_t > 0.0 &&
+        !s_bench_lat.empty() && s_bench_lat.back() < 0.0) {
+        s_bench_lat.back() = (now - state.last_seek_t) * 1000.0;
+    }
+    if (s_bench_kind == 0) {
+        double t = now - state.bench_t0;
+        // Issue seeks at rate_hz; coalesce to one applied per UI frame.
+        while (s_bench_remaining > 0 && t >= s_bench_next) {
+            size_t idx = s_bench_seeks.size() - (size_t)s_bench_remaining;
+            float target = s_bench_seeks[idx];
+            state.pending_seek = target;  // applied pre-render (one per frame)
+            state.scrub_active = true;
+            state.last_seek_t = now;
+            state.last_seek_to = target;
+            s_bench_lat.push_back(-1.0);  // placeholder; filled when presented
+            s_bench_remaining--;
+            s_bench_next += s_bench_interval;
+        }
+        if (s_bench_remaining <= 0) {
+            // Settle: wait until the last seek presents (or 2 s cap), then finish.
+            bool last_shown = (!s_bench_lat.empty() && s_bench_lat.back() >= 0.0);
+            if (last_shown || (now - state.last_seek_t) > 2.0) {
+                // Drop unpresented placeholders (shouldn't happen past the cap).
+                s_bench_lat.erase(
+                    std::remove_if(s_bench_lat.begin(), s_bench_lat.end(),
+                                   [](double v) { return v < 0.0; }),
+                    s_bench_lat.end());
+                bench_finish(state);
+            }
+        }
+    } else {
+        if ((now - state.bench_t0) >= s_bench_interval) bench_finish(state);
+    }
 }
 
 void ipc_server_stop() {
