@@ -4,6 +4,8 @@
 #include "body_fx.h"
 #include "keyframe.h"
 #include "shape.h"
+#include "audio_analysis.h"
+#include <memory>
 #include <string>
 #include <vector>
 #include <deque>
@@ -768,6 +770,10 @@ struct AppState {
     float              envelope_fps  = 0.f;
     std::string        envelope_json_path;
     bool               envelope_running = false;
+
+    // audio analysis v2 of audio_path (docs/AUDIO_ANALYSIS.md). Immutable once
+    // published: workers build a fresh object and swap the pointer on the UI thread.
+    std::shared_ptr<const AudioAnalysis> audio_analysis;
 
     // pipeline
     PipelineStatus pipeline;

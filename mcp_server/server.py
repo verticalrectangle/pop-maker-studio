@@ -177,7 +177,8 @@ def tool_meta(name: str) -> dict:
 
 # ── IPC connection ─────────────────────────────────────────────────────────────
 
-SOCK_PATH = "/tmp/pop-maker-studio.sock"
+# PMS_SOCK isolates a test rig or a second instance (the app honours the same variable).
+SOCK_PATH = os.environ.get("PMS_SOCK") or "/tmp/pop-maker-studio.sock"
 
 _sock: socket.socket | None = None
 _sock_lock = threading.Lock()

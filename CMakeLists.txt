@@ -134,6 +134,7 @@ set(PMS_ENGINE_SOURCES
     src/proxy.cpp
     src/waveform.cpp
     src/beat_detect.cpp
+    src/audio_analysis.cpp
     src/blender_export.cpp
     src/bg_remove.cpp
     src/scene_detect.cpp
