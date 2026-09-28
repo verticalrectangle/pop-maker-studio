@@ -20,6 +20,11 @@ void render_tick_gl(AppState& state);
 // Starts the next pass (switching canvas + suffixed output) or restores the
 // original canvas when the queue drains. Defined in engine_runtime.cpp.
 void render_queue_advance(AppState& state);
+// Per-format output path for a multi-format export: `base` minus its
+// extension and any trailing _9x16/_16x9/_1x1 (so a base that is itself a
+// previous pass's output never stacks suffixes), plus the format's suffix
+// and ".mp4". Defined in engine_runtime.cpp.
+std::string export_format_path(const std::string& base, OutputFormat f);
 
 // Platform preset helpers (preset table lives in render.cpp).
 const char* render_platform_id(RenderPlatform p);

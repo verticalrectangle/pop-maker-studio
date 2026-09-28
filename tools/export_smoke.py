@@ -306,6 +306,12 @@ def main():
                         f"{tag}: flash for click {c}s at frame {on} "
                         f"(want {round(c * FPS)} +-1)")
 
+        # A repeat multi-format export without output_path derives its names
+        # from the last output (smoke_16x9.mp4); suffixes must not stack.
+        r2 = ipc(sock, "trigger_export", {"formats": ["9:16", "16:9"]})
+        if sorted(r2.get("outputs") or []) != sorted(exp.values()):
+            failures.append(f"repeat export outputs {r2.get('outputs')} != {sorted(exp.values())}")
+
         print("== export_smoke summary ==")
         for tag, st in results.items():
             vs = st.get("codec_name", [])

@@ -100,6 +100,22 @@ static void emit_state_events(AppState& state, double dt) {
 }
 
 // ── Multi-format export chain ─────────────────────────────────────────────────
+std::string export_format_path(const std::string& base, OutputFormat f) {
+    size_t dot = base.rfind('.');
+    size_t slash = base.rfind('/');
+    std::string stem = (dot != std::string::npos && (slash == std::string::npos || dot > slash))
+                           ? base.substr(0, dot) : base;
+    for (const char* s : {"_9x16", "_16x9", "_1x1"}) {
+        size_t sl = strlen(s);
+        if (stem.size() > sl && stem.compare(stem.size() - sl, sl, s) == 0) {
+            stem.resize(stem.size() - sl);
+            break;
+        }
+    }
+    return stem + (f == OutputFormat::Vertical   ? "_9x16" :
+                   f == OutputFormat::Horizontal ? "_16x9" : "_1x1") + ".mp4";
+}
+
 // render_tick_gl calls this on the GL thread when one queued pass finishes
 // (running=false). The pass that just finished was queue[queue_idx]: out_mp4
 // already holds its file. Advance past it: start the next pass (switching
@@ -111,23 +127,7 @@ void render_queue_advance(AppState& state) {
     state.export_queue_idx++;
     if (state.export_queue_idx < state.export_queue.size()) {
         state.format = state.export_queue[state.export_queue_idx];
-        // export_out_path ends with the previous pass's suffix — strip back
-        // to the bare stem first, then append the new suffix.
-        std::string base = state.export_out_path;
-        for (const char* s : {"_9x16", "_16x9", "_1x1"}) {
-            size_t sl = strlen(s);
-            size_t dot = base.rfind('.');
-            std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
-            if (stem.size() > sl && stem.compare(stem.size() - sl, sl, s) == 0) {
-                base = stem.substr(0, stem.size() - sl) + ".mp4";
-                break;
-            }
-        }
-        const char* suf = state.format == OutputFormat::Vertical ? "_9x16" :
-                          state.format == OutputFormat::Horizontal ? "_16x9" : "_1x1";
-        size_t dot = base.rfind('.');
-        std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
-        state.export_out_path = stem + suf + ".mp4";
+        state.export_out_path = export_format_path(state.export_out_path, state.format);
         state.out_mp4 = state.export_out_path;
         size_t d2 = state.out_mp4.rfind('.');
         state.out_gif = (d2 != std::string::npos ? state.out_mp4.substr(0, d2) : state.out_mp4) + ".gif";

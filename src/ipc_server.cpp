@@ -1661,20 +1661,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         if (params.contains("preset")) state.render_settings.preset       = params["preset"].get<std::string>();
         if (params.contains("gif"))    state.render_settings.gif_export   = params["gif"].get<bool>();
 
-        auto suffixed = [](const std::string& base, const char* suf) {
-            size_t dot = base.rfind('.');
-            std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
-            return stem + suf + ".mp4";
-        };
         std::string first_out = base_path;
         if (!formats.empty()) {
             state.export_saved_format = state.format;
             state.export_queue        = formats;
             state.export_queue_idx    = 0;
             state.format              = formats[0];
-            state.export_out_path     = suffixed(base_path,
-                formats[0] == OutputFormat::Vertical ? "_9x16" :
-                formats[0] == OutputFormat::Horizontal ? "_16x9" : "_1x1");
+            state.export_out_path     = export_format_path(base_path, formats[0]);
             first_out = state.export_out_path;
         } else {
             state.export_queue.clear();
@@ -1709,15 +1702,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             // Report every output, not just the first pass's.
             json outs = json::array();
             if (!formats.empty()) {
-                auto suf = [](const std::string& base, const char* s) {
-                    size_t dot = base.rfind('.');
-                    std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
-                    return stem + s + ".mp4";
-                };
-                for (auto f : formats)
-                    outs.push_back(suf(base_path,
-                        f == OutputFormat::Vertical ? "_9x16" :
-                        f == OutputFormat::Horizontal ? "_16x9" : "_1x1"));
+                for (auto f : formats) outs.push_back(export_format_path(base_path, f));
             } else {
                 outs.push_back(out_path);
             }
