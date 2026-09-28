@@ -26,3 +26,6 @@ bool face_cache_obs(const std::string& take_path, int rot_q,
 // Returns false on failure. progress is forwarded to the builder.
 bool face_cache_ensure_sync(const std::string& take_path, int rot_q,
                             const std::function<void(float)>& progress);
+// Frame count + fps for the ready cache (script runtime / FaceTrack dump).
+// Returns -1 when no ready cache exists for this rotation.
+int face_cache_frame_count(const std::string& take_path, int rot_q, float* fps_out);

@@ -194,3 +194,15 @@ bool face_cache_ensure_sync(const std::string& take_path, int rot_q,
         g_cv.wait_for(lk, std::chrono::milliseconds(200));
     }
 }
+
+// Frame count + fps for the ready cache (script runtime / FaceTrack dump).
+// Returns -1 / 0 when no ready cache exists for this rotation.
+int face_cache_frame_count(const std::string& take_path, int rot_q, float* fps_out) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    auto it = g_entries.find(take_path);
+    if (it == g_entries.end() || it->second.status != FaceCacheStatus::Ready ||
+        !it->second.data || it->second.data->rot_q != rot_q)
+        return -1;
+    if (fps_out) *fps_out = it->second.data->fps;
+    return it->second.data->count;
+}
