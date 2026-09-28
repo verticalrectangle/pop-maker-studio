@@ -188,3 +188,30 @@ ShapeGeometry shape_tessellate(const ShapePath& path,
 ShapeGeometry shape_radial_replicate(const ShapeGeometry& g,
                                      float cx, float cy,
                                      int fold, bool reflect);
+// ── Tessellation cache (th/perf-finish) ─────────────────────────────────────
+// Keyed on the evaluated (canvas-space) inputs to shape_tessellate +
+// shape_radial_replicate: re-tessellates only when inputs change, otherwise
+// returns the cached geometry. Single-entry LRU per call site (preview,
+// snapshot, export) is enough — the same shape renders many frames in a row.
+// Pass a per-call-site ShapeTessCache (static at the call site) so preview
+// and export never share (and thrash) one entry across different canvas sizes.
+struct ShapeTessCache {
+    // Full input key: quantised so float noise can't defeat the hit.
+    std::vector<float> key;
+    ShapeGeometry geom;   // post-replication geometry (ready to draw)
+    bool valid = false;
+};
+// Cached wrapper: key = (path pts/closed, stroke_length, width_mul,
+// base_stroke_width, canvas_w/h, cx/cy/hw/hh/cos/sin, fold, reflect).
+// On hit returns &cached.geom; on miss re-tessellates (+ replicates) into the
+// cache and returns it. fill_alpha_out always recomputed (cheap scalar).
+const ShapeGeometry* shape_tessellate_cached(ShapeTessCache& cache,
+                                             const ShapePath& path,
+                                             float stroke_length, float width_mul,
+                                             float base_stroke_width,
+                                             int canvas_w, int canvas_h,
+                                             float cx, float cy,
+                                             float hw, float hh,
+                                             float cos_r, float sin_r,
+                                             int fold, bool reflect,
+                                             float& fill_alpha_out);

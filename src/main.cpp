@@ -15,6 +15,7 @@
 #include "history.h"
 #include "ui/studio_shared.h"
 #include "ipc_server.h"
+#include "perf.h"
 #include "paths.h"
 #include "video.h"
 #include "fx_shader.h"
@@ -358,7 +359,18 @@ int main(int argc, char** argv) {
         // buffer now that the full frame is drawn (no-op unless armed).
         canvas_capture_after_render(state);
 
+        // th/perf-finish: swap timer + per-frame sample. frame_sample feeds
+        // get_perf_stats' ui_frame_ms ring every presented frame (not just
+        // during benches); S_SWAP covers the vsync-wait-inclusive present.
+        auto t0swap = std::chrono::steady_clock::now();
+        static auto s_prev_present = std::chrono::steady_clock::now();
         glfwSwapBuffers(window);
+        auto t1swap = std::chrono::steady_clock::now();
+        perf::record(perf::S_SWAP, std::chrono::duration<double, std::milli>(
+            t1swap - t0swap).count());
+        perf::frame_sample(std::chrono::duration<double, std::milli>(
+            t1swap - s_prev_present).count());
+        s_prev_present = t1swap;
     }
 
     app_shutdown(state);

@@ -683,3 +683,53 @@ ShapeGeometry shape_tessellate(const ShapePath& path,
 
     return g;
 }
+
+// ── Cached tessellation (th/perf-finish) ─────────────────────────────────────
+// The canvas scene pass re-tessellates every shape clip every frame (ear-clip
+// is O(n²)); static shapes re-emit identical triangles. Key on the evaluated
+// inputs so any visual change re-tessellates and anything else hits.
+const ShapeGeometry* shape_tessellate_cached(ShapeTessCache& cache,
+                                             const ShapePath& path,
+                                             float stroke_length, float width_mul,
+                                             float base_stroke_width,
+                                             int canvas_w, int canvas_h,
+                                             float cx, float cy,
+                                             float hw, float hh,
+                                             float cos_r, float sin_r,
+                                             int fold, bool reflect,
+                                             float& fill_alpha_out) {
+    fill_alpha_out = stroke_length >= 1.f ? 1.f
+                   : stroke_length <= 0.6f ? 0.f
+                   : (stroke_length - 0.6f) / 0.4f;
+    // Quantise floats to 1e-4 of value-or-unit so key compares are exact but
+    // visually-identical frames hit.
+    std::vector<float> key;
+    key.reserve(16 + path.pts.size() * 3);
+    auto qf = [](float v) { return std::round(v * 4096.f) / 4096.f; };
+    key.push_back(qf(stroke_length));
+    key.push_back(qf(width_mul));
+    key.push_back(qf(base_stroke_width));
+    key.push_back((float)canvas_w);
+    key.push_back((float)canvas_h);
+    key.push_back(qf(cx)); key.push_back(qf(cy));
+    key.push_back(qf(hw)); key.push_back(qf(hh));
+    key.push_back(qf(cos_r)); key.push_back(qf(sin_r));
+    key.push_back((float)fold); key.push_back(reflect ? 1.f : 0.f);
+    key.push_back(path.closed ? 1.f : 0.f);
+    key.push_back((float)path.pts.size());
+    for (auto& pt : path.pts) {
+        key.push_back(qf(pt.x)); key.push_back(qf(pt.y)); key.push_back(qf(pt.width));
+    }
+    if (cache.valid && cache.key.size() == key.size() &&
+        memcmp(cache.key.data(), key.data(), key.size() * sizeof(float)) == 0)
+        return &cache.geom;
+    ShapeGeometry g = shape_tessellate(path, stroke_length, width_mul,
+                                       base_stroke_width,
+                                       canvas_w, canvas_h, cx, cy, hw, hh,
+                                       cos_r, sin_r);
+    if (fold > 1) g = shape_radial_replicate(g, cx, cy, fold, reflect);
+    cache.key = std::move(key);
+    cache.geom = std::move(g);
+    cache.valid = true;
+    return &cache.geom;
+}
