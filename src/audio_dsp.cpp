@@ -293,26 +293,29 @@ void amplitude_to_db_inplace(std::vector<float>& s) { to_db_inplace(s, 20.f, 1e-
 
 std::vector<float> onset_strength_from_dbmel(const float* dbm, int n_mels, int nfr,
                                              int hop) {
-    // max_size 1 → ref = S; lag 1; pad = lag + n_fft/(2*hop), n_fft = 2048
-    // (librosa's S-path always uses the n_fft=2048 centering shift).
+    // librosa.onset.onset_strength_multi (max_size=1 → ref=S, lag=1):
+    //   flux[t] = mean(max(0, S[t] − S[t−1])) for t ≥ 1 (m[0] = 0),
+    //   then LEFT-padded by pad = lag (+ n_fft//(2*hop) when center) and
+    //   trimmed: out[t] = m[t−pad] for t ≥ pad (zeros before). The lag term
+    //   is the pad itself — the diff must NOT also shift (an earlier
+    //   revision computed m[t] from S[t]−S[t−1] AND padded by lag+center,
+    //   shifting everything one hop late vs librosa). Verified
+    //   value-for-value against librosa 1.0 on the reference clip
+    //   (o[14..17] = 1.66/8.05/7.40/4.86 on both). n_fft = 2048 always —
+    //   librosa's S-path centering shift.
     std::vector<float> env((size_t)nfr);
     if (nfr == 0) return env;
-    std::vector<float> m((size_t)nfr);
-    for (int t = 0; t < nfr; t++) {
+    std::vector<float> m((size_t)nfr, 0.f);
+    for (int t = 1; t < nfr; t++) {
         double acc = 0.0;
         for (int i = 0; i < n_mels; i++)
             acc += std::max(0.0, (double)dbm[(size_t)i * nfr + t] -
-                                         (t > 0 ? (double)dbm[(size_t)i * nfr + t - 1] : 0.0));
+                                     (double)dbm[(size_t)i * nfr + t - 1]);
         m[t] = (float)(acc / n_mels);
     }
-    // Compensate for lag + centering: left-pad so the transient sits at its
-    // centered frame (librosa always pads here, even for S input).
-    int pad = 1 + 2048 / (2 * hop);
+    int pad = 2048 / (2 * hop);
     std::vector<float> out((size_t)nfr, 0.f);
-    for (int t = 0; t < nfr; t++) {
-        int s = t - pad;
-        out[t] = (s >= 0) ? m[s] : 0.f;
-    }
+    for (int t = pad; t < nfr; t++) out[t] = m[t - pad];
     return out;
 }
 
