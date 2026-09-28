@@ -223,20 +223,25 @@ static void ispec_mono(const std::vector<std::vector<cx>>& spec, const std::vect
 
 // ── Main separation ─────────────────────────────────────────────────────────
 
-bool separate_stems4(const std::string& audio_path, const std::string& out_dir,
-                     std::array<std::string, 4>& out_paths,
-                     const std::function<void(float)>& progress, std::string* err) {
+// Core: separate interleaved stereo (N samples @ kRate) into out_dir stems.
+// span_t0/audio_path are only used for error messages.
+static bool separate_span_core(std::vector<float> interleaved, int N,
+                               double span_t0, const std::string& audio_path,
+                               const std::string& out_dir,
+                               std::array<std::string, 4>& out_paths,
+                               const std::function<void(float)>& progress, std::string* err) {
     auto fail = [&](const std::string& m) {
         if (err) *err = m;
         return false;
     };
     if (!separate4_available())
         return fail("Model not found: " + model_path() + "\nPlace the models/ folder next to the binary.");
+    (void)span_t0;
+    (void)audio_path;
 
     if (progress) progress(0.05f);
-    int N = 0;
-    auto interleaved = read_stereo(audio_path, N);
-    if (N == 0) return fail("Failed to decode audio: " + audio_path);
+    if (N == 0 || (int)interleaved.size() < 2 * N)
+        return fail("Failed to decode audio: " + audio_path);
     std::vector<float> L(N), R(N);
     for (int i = 0; i < N; i++) { L[i] = interleaved[2 * i]; R[i] = interleaved[2 * i + 1]; }
     interleaved.clear(); interleaved.shrink_to_fit();
@@ -420,6 +425,50 @@ bool separate_stems4(const std::string& audio_path, const std::string& out_dir,
     return true;
 }
 
+bool separate_stems4(const std::string& audio_path, const std::string& out_dir,
+                     std::array<std::string, 4>& out_paths,
+                     const std::function<void(float)>& progress, std::string* err) {
+    int N = 0;
+    auto interleaved = read_stereo(audio_path, N);
+    if (N == 0) {
+        if (err) *err = "Failed to decode audio: " + audio_path;
+        return false;
+    }
+    return separate_span_core(std::move(interleaved), N, 0.0, audio_path, out_dir,
+                              out_paths, progress, err);
+}
+
+bool separate_stems4_span(const std::string& audio_path, double t0, double t1,
+                          const std::string& out_dir, std::array<std::string, 4>& out_paths,
+                          const std::function<void(float)>& progress, std::string* err) {
+    auto fail = [&](const std::string& m) {
+        if (err) *err = m;
+        return false;
+    };
+    if (!separate4_available())
+        return fail("Model not found: " + model_path() + "\nPlace the models/ folder next to the binary.");
+    if (!(t1 > t0)) return fail("empty span");
+    // Sample-accurate span slice of the whole-file decode (same rationale as
+    // decode_mono_span): no resampler/seek phase drift vs the full-file path.
+    int Nfull = 0;
+    auto full = read_stereo(audio_path, Nfull);
+    if (Nfull == 0) return fail("Failed to decode audio: " + audio_path);
+    size_t s0 = (size_t)std::llround(t0 * kRate);
+    size_t s1 = (size_t)std::llround(t1 * kRate);
+    if (s0 >= (size_t)Nfull) return fail("span starts past end of file");
+    if (s1 > (size_t)Nfull) s1 = Nfull;
+    if (s1 <= s0) return fail("empty span");
+    std::vector<float> interleaved;
+    interleaved.reserve((s1 - s0) * 2);
+    for (size_t i = s0; i < s1; i++) {
+        interleaved.push_back(full[2 * i]);
+        interleaved.push_back(full[2 * i + 1]);
+    }
+    full.clear(); full.shrink_to_fit();
+    return separate_span_core(std::move(interleaved), (int)(s1 - s0), t0, audio_path,
+                              out_dir, out_paths, progress, err);
+}
+
 #else  // !PMS_HAS_FFTW — headless/iOS stub (platform.h)
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -427,6 +476,12 @@ static std::string model_path() { return (fs::path(app_models_dir()) / "htdemucs
 bool separate4_available() { return fs::exists(model_path()); }
 bool separate_stems4(const std::string&, const std::string&, std::array<std::string, 4>&,
                      const std::function<void(float)>&, std::string* err) {
+    if (err) *err = "4-stem separation needs the desktop build (no FFTW/process-spawn headless)";
+    return false;
+}
+bool separate_stems4_span(const std::string&, double, double, const std::string&,
+                          std::array<std::string, 4>&, const std::function<void(float)>&,
+                          std::string* err) {
     if (err) *err = "4-stem separation needs the desktop build (no FFTW/process-spawn headless)";
     return false;
 }

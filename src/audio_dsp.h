@@ -28,6 +28,13 @@ namespace aadsp {
 // the resampling/downmix). Returns false with err set on failure.
 bool decode_mono(const std::string& path, int out_sr, std::vector<float>& pcm,
                  std::string* err);
+// Decode only [t0, t1) (source seconds) to mono f32 at out_sr. Sample-accurate
+// to the resampled grid: span boundaries round to the nearest output sample
+// and times stay absolute (frame f ↔ (start_sample + f) / out_sr). Used by
+// analysis ranges so a segment analysis matches the full-file analysis
+// sample-for-sample inside the span.
+bool decode_mono_span(const std::string& path, int out_sr, double t0, double t1,
+                      std::vector<float>& pcm, std::string* err);
 
 // ── Windows / STFT ───────────────────────────────────────────────────────────
 std::vector<float> hann_periodic(int n);

@@ -1,9 +1,11 @@
 // analysis-parity: offline driver for audio_analysis_run (acceptance only).
 // Usage: analysis-parity <clip.wav> <out.json> [--stems-dir DIR] [--separate]
+//        [--range t0,t1]
 // Lyrics come from <out>.lyrics.json: a JSON list whose items are either
 // plain strings or {"text": ..., "t0": ..., "t1": ...} objects with a coarse
-// window in source seconds (written by tools/analysis_parity.py). Prints
-// progress + summary to stdout.
+// window in source seconds (written by tools/analysis_parity.py). --range
+// restricts decode/separate/analyse/normalise to [t0,t1) source seconds
+// (times stay absolute). Prints progress + summary to stdout.
 #include "audio_analysis.h"
 #include "json.hpp"
 
@@ -35,14 +37,25 @@ static void push_lyric(AudioAnalysisOptions& opt, const json& l) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <clip.wav> <out.json> [--stems-dir DIR] [--separate]\n", argv[0]);
+        fprintf(stderr, "usage: %s <clip.wav> <out.json> [--stems-dir DIR] [--separate] [--range t0,t1]\n", argv[0]);
         return 2;
     }
     std::string clip = argv[1], outp = argv[2], stems;
     bool separate = false;
+    bool has_range = false;
+    double range_t0 = 0.0, range_t1 = 0.0;
     for (int i = 3; i < argc; i++) {
         if (std::string(argv[i]) == "--stems-dir" && i + 1 < argc) stems = argv[++i];
         else if (std::string(argv[i]) == "--separate") separate = true;
+        else if (std::string(argv[i]) == "--range" && i + 1 < argc) {
+            std::string r = argv[++i];
+            size_t c = r.find(',');
+            if (c != std::string::npos) {
+                range_t0 = std::stod(r.substr(0, c));
+                range_t1 = std::stod(r.substr(c + 1));
+                has_range = range_t1 > range_t0 && range_t0 >= 0.0;
+            }
+        }
     }
 
     AudioAnalysisOptions opt;
@@ -50,6 +63,9 @@ int main(int argc, char** argv) {
     // forces the real C++ htdemucs path even when a stems dir exists.
     opt.separate_stems = separate || stems.empty();
     opt.stems_dir = separate ? std::string() : stems;
+    opt.has_range = has_range;
+    opt.range_t0 = range_t0;
+    opt.range_t1 = range_t1;
     std::string lpath = outp + ".lyrics.json";
     {
         std::ifstream f(lpath);
