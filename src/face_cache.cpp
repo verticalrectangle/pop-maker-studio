@@ -19,7 +19,7 @@ namespace {
 // eyeOpen (geometric ratio) + source presentation time (seconds into the
 // take, from the container's per-frame pts — VFR sources report real times).
 static constexpr size_t FC_REC = 1 + (size_t)FT_NPTS * 2 + FT_NBLEND + 2;
-static constexpr uint32_t FC_VERSION = 10;  // v10: eyeOpen + per-frame src times
+static constexpr uint32_t FC_VERSION = 11;  // v11: VFR passthrough decode (39 real frames, no ffmpeg dups)
 
 struct CacheData {
     int   rot_q = 0;
@@ -56,7 +56,7 @@ std::shared_ptr<CacheData> load_file(const std::string& take_path, int rot_q) {
                fread(&rq, 4, 1, f) == 1 && fread(&fps, 4, 1, f) == 1 &&
                fread(&rw, 4, 1, f) == 1 && fread(&rh, 4, 1, f) == 1 &&
                fread(&count, 4, 1, f) == 1;
-    // v10 = eyeOpen + per-frame source times; older caches are rebuilt.
+    // v11 = VFR passthrough decode; v10 sidecars (51 dup frames) are rebuilt.
     if (!hdr || magic != 0x46534D50 || version != FC_VERSION || rq != rot_q ||
         count == 0 || count > 1000000 || fps <= 0.f) {
         fclose(f);
