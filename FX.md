@@ -211,6 +211,18 @@ Channel dominance (`hi - lo`) serves as a matte: neon/saturated pixels (JPEG art
 
 **Fires when**: `cfx.datamosh_on && cfx.datamosh_spread > 0.01f`
 
+### Pixelate / Pixel Mosaic sampling
+
+`pixelate` (`size`) and `pixel_mosaic` (`block_size`, `color_steps`) share a block-sampling core (`shaders/pixelate.glsl`, `shaders/pixel_mosaic.glsl`):
+
+| `sampling` | Block colour | Use |
+|---|---|---|
+| 0 `center` (default) | the texel at the block centre | cheapest; shimmers on moving footage and drops thin detail |
+| 1 `mean` | mean of a 4×4 tap grid over the block | stable blocks on motion |
+| 2 `dark_bias` | ½ · mean + ½ · (mean of the two darkest taps) ≈ the block's 20th-percentile luma | keeps thin dark features (glasses rims, irises, lip line) readable at coarse block sizes |
+
+`palette_levels` (0 = off) hard-quantises each channel to N steps after sampling — flat inks, never blended. Both params arrived in project format v69; older projects load with the defaults, which render byte-identically to the pre-v69 shader.
+
 ---
 
 ## Adding a new effect
