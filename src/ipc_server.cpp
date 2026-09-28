@@ -81,6 +81,69 @@ static struct {
 static std::mutex s_aa_pub_mu;
 static std::shared_ptr<const AudioAnalysis> s_aa_pub;
 
+// Publish the cached analysis for (apath, opt) synchronously — returns true —
+// or start the background run (progress via get_audio_analysis; the result is
+// cached and handed to the UI thread through s_aa_pub).
+static bool analysis_start(AppState& state, const std::string& apath, const AudioAnalysisOptions& opt) {
+    const std::string cache = audio_analysis_cache_file(apath, opt);
+    {
+        AudioAnalysis cached;
+        std::string lerr;
+        if (audio_analysis_load_json(cache, cached, &lerr) &&
+            cached.source == std::filesystem::absolute(apath).string()) {
+            auto a = std::make_shared<AudioAnalysis>(std::move(cached));
+            state.audio_analysis = a;
+            state.beats.assign(a->beats.begin(), a->beats.end());
+            state.beat_bpm = a->bpm;
+            return true;
+        }
+    }
+    s_audio_analysis.running.store(true);
+    s_audio_analysis.done.store(false);
+    s_audio_analysis.progress.store(0.f);
+    {
+        std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+        s_audio_analysis.stage.clear();
+        s_audio_analysis.ok = false;
+        s_audio_analysis.error.clear();
+        s_audio_analysis.cache_path = cache;
+        s_audio_analysis.source = apath;
+    }
+    std::thread([apath, opt, cache]() {
+        AudioAnalysis a;
+        std::string aerr;
+        bool ok = audio_analysis_run(
+            apath, opt, a,
+            [](float p, const char* s) {
+                s_audio_analysis.progress.store(p);
+                std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+                s_audio_analysis.stage = s ? s : "";
+            },
+            &aerr);
+        {
+            std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
+            if (ok) {
+                audio_analysis_save_json(a, cache, nullptr);
+                s_audio_analysis.result = std::move(a);
+                s_audio_analysis.ok = true;
+            } else {
+                s_audio_analysis.error = aerr;
+                s_audio_analysis.ok = false;
+            }
+        }
+        // Hand to the UI thread for the AppState publish (never write AppState
+        // from this worker); ipc_server_poll drains it.
+        if (ok) {
+            std::lock_guard<std::mutex> lk(s_aa_pub_mu);
+            std::lock_guard<std::mutex> lk2(s_audio_analysis.mu);
+            s_aa_pub = std::make_shared<const AudioAnalysis>(s_audio_analysis.result);
+        }
+        s_audio_analysis.done.store(true);
+        s_audio_analysis.running.store(false);
+    }).detach();
+    return false;
+}
+
 static struct {
     std::atomic<bool> running{false};
     std::atomic<bool> done{false};
@@ -1846,10 +1909,10 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             else { err = "unknown format"; return {}; }
         }
         // Sync GL snapshot needs the draw thread (IPC runs on its own
-        // thread): route through the request flag serviced in draw_preview.
-        // `path` selects the output — render_snapshot_gl derives its name
-        // from media stems, so copy the result to `path` when done.
+        // thread): route through the request flag serviced in draw_preview,
+        // which renders straight to `path`.
         state.playhead = t;
+        state.snapshot_out_path = path;
         state.snapshot_done = false;
         state.snapshot_done_path.clear();
         state.snapshot_done_err.clear();
@@ -1861,7 +1924,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             // poll get_snapshot_status, then copy to `path`.
             fd_mark_busy(client_fd);
             AppState* stp = &state;
-            std::thread([path, client_fd, req_id, stp]() {
+            std::thread([client_fd, req_id, stp]() {
                 AppState& st = *stp;
                 for (int i = 0; i < 600; ++i) {
                     // snapshot_done is written by the GL thread; poll it.
@@ -1873,16 +1936,8 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                     if (!st.snapshot_done_err.empty()) {
                         send_err_id(client_fd, req_id, st.snapshot_done_err);
                     } else {
-                        std::string got = st.snapshot_done_path;
-                        if (!path.empty() && path != got) {
-                            std::error_code ec;
-                            std::filesystem::copy_file(got, path,
-                                std::filesystem::copy_options::overwrite_existing, ec);
-                            if (ec) send_err_id(client_fd, req_id, ec.message());
-                            else { r["path"] = path; send_ok_id(client_fd, req_id, r); }
-                        } else {
-                            r["path"] = got; send_ok_id(client_fd, req_id, r);
-                        }
+                        r["path"] = st.snapshot_done_path;
+                        send_ok_id(client_fd, req_id, r);
                     }
                     agent_done();
                     fd_mark_free(client_fd);
@@ -1949,96 +2004,13 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         state.audio_request.range_t1 = opt.range_t1;
         state.audio_request.separate = opt.separate_stems;
         state.audio_request.stems_dir = opt.stems_dir;
-        // Cache key: file path + size + mtime + lyrics hash (text + windows)
-        // + stems flag, so a changed file or changed lyrics re-analyse. The
-        // JSON lives in the media cache dir — never next to the user's file.
-        namespace fs = std::filesystem;
-        std::error_code ec;
-        uint64_t fsize = 0;
-        long long fmtime = 0;
-        {
-            auto st = fs::last_write_time(apath, ec);
-            if (!ec) fmtime = (long long)st.time_since_epoch().count();
-            ec.clear();
-            fsize = (uint64_t)fs::file_size(apath, ec);
+        if (analysis_start(state, apath, opt)) {
+            json r;
+            r["status"] = "done";
+            r["cached"] = true;
+            r["analysis"] = json::parse(audio_analysis_to_json(*state.audio_analysis));
+            return r;
         }
-        size_t lh = 1469598103934665603ull;
-        auto hash_str = [&](const std::string& s) {
-            for (unsigned char c : s) { lh ^= c; lh *= 1099511628211ull; }
-        };
-        for (auto& l : opt.lyrics) {
-            hash_str(l.text);
-            if (l.has_window) {
-                hash_str(std::to_string(l.w0));
-                hash_str(std::to_string(l.w1));
-            }
-        }
-        if (opt.has_range) {
-            hash_str("range" + std::to_string(opt.range_t0) + "-" + std::to_string(opt.range_t1));
-        }
-        char key[128];
-        snprintf(key, sizeof(key), "%llu_%lld_%zx_%d", (unsigned long long)fsize,
-                 fmtime, lh, opt.separate_stems ? 1 : 0);
-        std::string cache = cache_path(apath + '\n' + key, "_analysis.json");
-        // Cache hit: load + publish synchronously (fast path, no thread).
-        {
-            AudioAnalysis cached;
-            std::string lerr;
-            if (audio_analysis_load_json(cache, cached, &lerr) && cached.source == fs::absolute(apath).string()) {
-                auto a = std::make_shared<AudioAnalysis>(std::move(cached));
-                state.audio_analysis = a;
-                state.beats.assign(a->beats.begin(), a->beats.end());
-                state.beat_bpm = a->bpm;
-                json r;
-                r["status"] = "done";
-                r["cached"] = true;
-                r["analysis"] = json::parse(audio_analysis_to_json(*a));
-                return r;
-            }
-        }
-        s_audio_analysis.running.store(true);
-        s_audio_analysis.done.store(false);
-        s_audio_analysis.progress.store(0.f);
-        {
-            std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
-            s_audio_analysis.stage.clear();
-            s_audio_analysis.ok = false;
-            s_audio_analysis.error.clear();
-            s_audio_analysis.cache_path = cache;
-            s_audio_analysis.source = apath;
-        }
-        std::thread([apath, opt, cache]() {
-            AudioAnalysis a;
-            std::string aerr;
-            bool ok = audio_analysis_run(
-                apath, opt, a,
-                [](float p, const char* s) {
-                    s_audio_analysis.progress.store(p);
-                    std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
-                    s_audio_analysis.stage = s ? s : "";
-                },
-                &aerr);
-            {
-                std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
-                if (ok) {
-                    audio_analysis_save_json(a, cache, nullptr);
-                    s_audio_analysis.result = std::move(a);
-                    s_audio_analysis.ok = true;
-                } else {
-                    s_audio_analysis.error = aerr;
-                    s_audio_analysis.ok = false;
-                }
-            }
-            // Hand to the UI thread for AppState publish (never write
-            // AppState from this worker). The poll drains the queue.
-            if (ok) {
-                std::lock_guard<std::mutex> lk(s_aa_pub_mu);
-                std::lock_guard<std::mutex> lk2(s_audio_analysis.mu);
-                s_aa_pub = std::make_shared<const AudioAnalysis>(s_audio_analysis.result);
-            }
-            s_audio_analysis.done.store(true);
-            s_audio_analysis.running.store(false);
-        }).detach();
         if (client_fd >= 0) {
             // Streaming socket: hold the reply until the worker finishes
             // (matches the old beat_detect blocking behaviour MCP expects),
@@ -5088,88 +5060,7 @@ void audio_analysis_republish(AppState& state) {
     opt.range_t1 = rq.range_t1;
     opt.separate_stems = rq.separate;
     opt.stems_dir = rq.stems_dir;
-    // Same cache key as analyze_audio.
-    std::error_code ec;
-    uint64_t fsize = 0;
-    long long fmtime = 0;
-    {
-        auto st = std::filesystem::last_write_time(rq.audio_path, ec);
-        if (!ec) fmtime = (long long)st.time_since_epoch().count();
-        ec.clear();
-        fsize = (uint64_t)std::filesystem::file_size(rq.audio_path, ec);
-    }
-    size_t lh = 1469598103934665603ull;
-    auto hash_str = [&](const std::string& s) {
-        for (unsigned char c : s) { lh ^= c; lh *= 1099511628211ull; }
-    };
-    for (auto& l : opt.lyrics) {
-        hash_str(l.text);
-        if (l.has_window) {
-            hash_str(std::to_string(l.w0));
-            hash_str(std::to_string(l.w1));
-        }
-    }
-    if (opt.has_range) {
-        hash_str("range" + std::to_string(opt.range_t0) + "-" + std::to_string(opt.range_t1));
-    }
-    char key[128];
-    snprintf(key, sizeof(key), "%llu_%lld_%zx_%d", (unsigned long long)fsize,
-             fmtime, lh, opt.separate_stems ? 1 : 0);
-    std::string cache = cache_path(rq.audio_path + '\n' + key, "_analysis.json");
-    {
-        AudioAnalysis cached;
-        std::string lerr;
-        if (audio_analysis_load_json(cache, cached, &lerr) &&
-            cached.source == std::filesystem::absolute(rq.audio_path).string()) {
-            auto a = std::make_shared<AudioAnalysis>(std::move(cached));
-            state.audio_analysis = a;
-            state.beats.assign(a->beats.begin(), a->beats.end());
-            state.beat_bpm = a->bpm;
-            return;
-        }
-    }
-    std::string apath = rq.audio_path;
-    s_audio_analysis.running.store(true);
-    s_audio_analysis.done.store(false);
-    s_audio_analysis.progress.store(0.f);
-    {
-        std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
-        s_audio_analysis.stage.clear();
-        s_audio_analysis.ok = false;
-        s_audio_analysis.error.clear();
-        s_audio_analysis.cache_path = cache;
-        s_audio_analysis.source = apath;
-    }
-    std::thread([apath, opt, cache]() {
-        AudioAnalysis a;
-        std::string aerr;
-        bool ok = audio_analysis_run(
-            apath, opt, a,
-            [](float p, const char* s) {
-                s_audio_analysis.progress.store(p);
-                std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
-                s_audio_analysis.stage = s ? s : "";
-            },
-            &aerr);
-        {
-            std::lock_guard<std::mutex> lk(s_audio_analysis.mu);
-            if (ok) {
-                audio_analysis_save_json(a, cache, nullptr);
-                s_audio_analysis.result = std::move(a);
-                s_audio_analysis.ok = true;
-            } else {
-                s_audio_analysis.error = aerr;
-                s_audio_analysis.ok = false;
-            }
-        }
-        if (ok) {
-            std::lock_guard<std::mutex> lk(s_aa_pub_mu);
-            std::lock_guard<std::mutex> lk2(s_audio_analysis.mu);
-            s_aa_pub = std::make_shared<const AudioAnalysis>(s_audio_analysis.result);
-        }
-        s_audio_analysis.done.store(true);
-        s_audio_analysis.running.store(false);
-    }).detach();
+    analysis_start(state, rq.audio_path, opt);
 }
 
 void ipc_server_poll(AppState& state) {

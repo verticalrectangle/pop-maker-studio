@@ -9,8 +9,8 @@
 //
 //   - hann windows are PERIODIC (scipy get_window fftbins=True)
 //   - STFT magnitudes are raw FFT magnitudes (no 1/N scaling)
-//   - power_to_db: 10*log10(max(S,1e-10)), ref=max, top_db=80
-//   - amplitude_to_db: 20*log10(max(S,1e-5)), ref=max, top_db=80
+//   - power_to_db: 10*log10(max(S,1e-10)), ref=1.0 (librosa default), top_db=80 below the max
+//   - amplitude_to_db: 20*log10(max(S,1e-5)), ref=1.0, top_db=80 below the max
 //   - onset_strength (mel default): 128 mel bands, n_fft 2048, lag 1,
 //     max_size 1, pad lag + n_fft/(2*hop), trim to input frames
 //   - peak_pick greedy: exact edge-clamped slices, x[n]==max exact compare
@@ -54,8 +54,8 @@ struct MelFB {
 MelFB make_mel(int sr, int n_fft, int n_mels, float fmin, float fmax);
 // M = FB × power spectrum. M[m * nfr + t].
 void mel_power(const MelFB& fb, const float* mag, int nfr, std::vector<float>& m);
-void power_to_db_inplace(std::vector<float>& s);      // ref=max, top_db=80
-void amplitude_to_db_inplace(std::vector<float>& s);  // ref=max, top_db=80
+void power_to_db_inplace(std::vector<float>& s);      // ref=1.0, floor = max - 80 dB
+void amplitude_to_db_inplace(std::vector<float>& s);  // ref=1.0, floor = max - 80 dB
 
 // ── Onset envelopes ──────────────────────────────────────────────────────────
 // Default mel onset strength of a waveform (128 mel, n_fft 2048). Length nfr.

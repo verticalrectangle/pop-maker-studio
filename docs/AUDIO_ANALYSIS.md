@@ -21,7 +21,7 @@ audio clip playing the file: `timeline = source − in_point + clip.start`).
 `range: [t0, t1]` (source seconds) restricts decode, separation, analysis and normalisation to that
 span — like the reference, which analysed the 80–130 s segment of the song (SEG_START=80). Event
 times stay absolute (beats/hits/words carry source seconds; `duration` is the span end); `env` and
-`spectrum` stay span-local (frame 0 = span start), exactly like analysing a clipped file. The range
+`spectrum` stay span-local (frame 0 = span start, recorded as `env_start`), exactly like analysing a clipped file. The range
 is part of the cache key. Without `range` the whole file is analysed.
 
 ## JSON schema
@@ -43,6 +43,7 @@ is part of the cache key. Without `range` the whole file is analysed.
     "vocal": []                         // vocals stem onset strength
   },
   "fps": 60,                            // envelope + spectrum frame rate
+  "env_start": 0.0,                     // source seconds of env/spectrum frame 0 (range start for spans)
   "env": { "mix": [], "drums": [], "bass": [], "other": [], "vocals": [] },  // RMS per frame, 0..1
   "spectrum_bands": 32,
   "spectrum": [[0, 12, 99]],            // per frame: log-mel bands, 0..99
@@ -61,7 +62,7 @@ loader accepts it.
 
 | Field | Requirement |
 |---|---|
-| stems | 4-stem separation, C++ htdemucs (`separate_stems4`, ONNX, STFT/iSTFT in C++) by default; `stems_dir` reuses precomputed `{drums,bass,other,vocals}.wav` (a reuse feature, not the acceptance path). Without stems: hits fall back to band flux / onset strength on the instrumental (`original − vocals`) or the mix; the downbeat phase uses the same fallback and matches the stems path. |
+| stems | 4-stem separation, C++ htdemucs (`separate_stems4`, ONNX, STFT/iSTFT in C++) by default; `stems_dir` reuses precomputed `{drums,bass,other,vocals}.wav` covering the whole source file (a `range` analysis slices them like the mix). Separation is deterministic (the demucs CLI default `--shifts 1` applies a random time shift per run, so its stems differ from run to run by ~15–20 dB SNR; low-confidence word alignments and weak hits inherit that noise). Without stems: hits fall back to band flux / onset strength on the instrumental (`original − vocals`) or the mix; the downbeat phase uses the same fallback and matches the stems path. |
 | beats, bpm | Beat tracking on the **mix** (never the vocal stem). |
 | downbeats | Bar phase ∈ {0..3} maximising Σ over beats of (bass-stem onset strength at the beat / max) + (1 − cosine similarity of beat-synchronous chroma of bass+other between consecutive beats). Downbeats = beats at that phase. |
 | hits.kick/snare/hat | Half-wave-rectified spectral flux (dB) of the drums stem restricted to the band; peak picking with local max ±3 frames, local mean ±12 frames, delta = 0.5 × quantile(norm, q) with q = 0.90/0.90/0.80, minimum spacing 120/120/70 ms (10 ms hop). |

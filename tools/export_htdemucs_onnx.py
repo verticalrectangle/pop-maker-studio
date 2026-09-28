@@ -41,8 +41,7 @@ Usage:
         [--calib PATH] [--check-seconds S]
 
 Conversion command (reference; the committed htdemucs.onnx was built this way):
-    ~/Projects/seen-and-not-seen/.venv/bin/python tools/export_htdemucs_onnx.py \
-        --out /home/alexis/dev/pms-wt/shared-models/htdemucs.onnx
+    python tools/export_htdemucs_onnx.py --out models/htdemucs.onnx   # torch + demucs 4
 
 Source checkpoint: the `htdemucs` bag of the demucs 4.1.0 Python package
 (MIT licence), single model signature 955717e8, downloaded from

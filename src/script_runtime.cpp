@@ -451,7 +451,9 @@ static void ensure_audio_memo(ScriptRuntime::Impl* self) {
     }
     JS_DefinePropertyValueStr(ctx, o, "hits", hits, JS_PROP_C_W_E);
     int fps = a->fps > 0 ? a->fps : 60;
-    int drop = (int)std::round(off * fps);
+    // env/spectrum frame 0 sits at a->env_start (source seconds; a span analysis
+    // starts at its range start): re-index so frame 0 is timeline 0.
+    int drop = (int)std::round((off - a->env_start) * fps);
     JSValue env = JS_NewObject(ctx);
     for (int k = 0; k < (int)EnvKind::Count; ++k) {
         const auto& v = a->env[k];

@@ -28,7 +28,7 @@ Used for word-level transcription with DTW token timestamps via whisper.cpp. No 
 | **Size** | ~378 MB float / ~95 MB quantised |
 | **Path** | `models/` next to the binary (hard-linked from the shared-models store) |
 | **Source** | torchaudio pipeline `WAV2VEC2_ASR_BASE_960H` (facebook/wav2vec2-base-960h weights) |
-| **Conversion** | `~/Projects/seen-and-not-seen/.venv/bin/python tools/export_wav2vec2_onnx.py --out <dir>/wav2vec2_ctc_float.onnx --vocab <dir>/wav2vec2_vocab_float.json` (logits-only wrapper, opset 14, dynamic sequence length) |
+| **Conversion** | `python tools/export_wav2vec2_onnx.py --out <dir>/wav2vec2_ctc_float.onnx --vocab <dir>/wav2vec2_vocab_float.json` (Python with torch + torchaudio) (logits-only wrapper, opset 14, dynamic sequence length) |
 | **License** | [MIT](https://github.com/pytorch/fairseq/blob/main/LICENSE) (model weights: [CC-BY-NC-4.0 for LibriSpeech-derived fine-tune](https://huggingface.co/facebook/wav2vec2-base-960h) — local analysis use; check before redistributing) |
 | **When downloaded** | Must be placed manually — not auto-downloaded |
 
@@ -58,7 +58,7 @@ Aligns lyric lines to the vocal stem inside Whisper coarse windows (torchaudio s
 | **Size** | ~174 MB |
 | **Path** | `models/` next to the binary (hard-linked from the shared-models store) |
 | **Source** | Meta Demucs `htdemucs` checkpoint (demucs 4.1.0 `htdemucs` bag, single model signature `955717e8`), via torch.hub: `https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th` |
-| **Conversion** | `~/Projects/seen-and-not-seen/.venv/bin/python tools/export_htdemucs_onnx.py --out /home/alexis/dev/pms-wt/shared-models/htdemucs.onnx` (HTDemucs core as a real-valued ONNX graph — spectrogram front/back end in C++/FFTW; the committed file was built this way) |
+| **Conversion** | `python tools/export_htdemucs_onnx.py --out <dir>/htdemucs.onnx` (Python with torch + demucs 4) (HTDemucs core as a real-valued ONNX graph — spectrogram front/back end in C++/FFTW; the committed file was built this way) |
 | **License** | [MIT](https://github.com/facebookresearch/demucs/blob/main/LICENSE) |
 | **When downloaded** | Must be placed manually — not auto-downloaded |
 
