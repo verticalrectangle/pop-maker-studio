@@ -564,7 +564,17 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                             cell(t + 1, j) = std::max(stay, adv);
                         }
                     }
-                    // Backtrack.
+                    // Backtrack from the argmax end (best cell(t, L)): the
+                    // path must consume all L tokens; trailing words whose
+                    // emission is weak get truncated when the argmax sits
+                    // mid-window — the merge below then interpolates them.
+                    // Path entries record whether the frame EMITTED the
+                    // token (adv) or stayed on blank: merge_tokens drops
+                    // blanks, so only adv frames form a token's span and
+                    // conf. The old code attributed stayed-blank frames
+                    // (prob ≈ 1) to token j-1, stretching spans over
+                    // silence and inflating conf so parked words dodged
+                    // the low-conf whisper blend.
                     int t_start = 0;
                     float best = cell(0, L);
                     for (int t = 1; t <= Tw; t++)
@@ -575,6 +585,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                     struct PP {
                         int tok, fr;
                         float p;
+                        bool adv;
                     };
                     std::vector<PP> path;
                     int j = L;
@@ -584,12 +595,15 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                             cell(t - 1, j - 1) + lp[(size_t)(t - 1) * V + tgt[j - 1]];
                         bool adv = changed > stayed;
                         float pr = exp(lp[(size_t)(t - 1) * V + (adv ? tgt[j - 1] : vocab.blank)]);
-                        path.push_back({j - 1, t - 1, pr});
+                        path.push_back({j - 1, t - 1, pr, adv});
                         if (adv && --j == 0) break;
                     }
                     if (j != 0) continue;
                     std::reverse(path.begin(), path.end());
-                    // Merge repeats → char spans (frame indices, window-relative).
+                    // Merge → per-token spans from EMITTED frames only
+                    // (merge_tokens semantics). Tokens with no emitted
+                    // frame keep fmin/fmax at Tw/-1 below and are
+                    // interpolated after the loop.
                     std::vector<int> cs((size_t)L, 0), ce((size_t)L, 0);
                     std::vector<float> csc((size_t)L, 0.f);
                     {
@@ -597,6 +611,7 @@ bool audio_analysis_run(const std::string& audio_path, const AudioAnalysisOption
                         std::vector<int> fmin((size_t)L, Tw), fmax((size_t)L, -1);
                         std::vector<double> psum((size_t)L, 0.0);
                         for (auto& p : path) {
+                            if (!p.adv) continue;
                             int tk = p.tok;
                             if (tk < 0 || tk >= L) continue;
                             cnt[tk]++;
