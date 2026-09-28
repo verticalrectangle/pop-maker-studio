@@ -1573,7 +1573,9 @@ async def list_tools() -> list[Tool]:
                 "(docs/AUDIO_ANALYSIS.md) when finished. Optional lines: plain "
                 "strings (whisper coarse windows) or {text, t0, t1} objects with "
                 "a per-line coarse window in source seconds (reference-grade "
-                "alignment, skips the whisper pass). No polling needed."
+                "alignment, skips the whisper pass). Optional range [t0,t1] restricts "
+                "decode/separation/analysis/normalisation to that source-second span "
+                "(times stay absolute). No polling needed."
             ),
             inputSchema={
                 "type": "object",
@@ -1594,6 +1596,10 @@ async def list_tools() -> list[Tool]:
                                  "description": "Run 4-stem separation (default true when model present)"},
                     "stems_dir": {"type": "string",
                                   "description": "Reuse precomputed stems dir ({drums,bass,other,vocals}.wav)"},
+                    "range": {"type": "array", "items": {"type": "number"},
+                              "minItems": 2, "maxItems": 2,
+                              "description": "Source-second span [t0,t1): decode/separate/analyse/normalise "
+                                             "only that range (times stay absolute, like the reference 80-130 s segment)"},
                 },
                 "required": ["path"],
             },

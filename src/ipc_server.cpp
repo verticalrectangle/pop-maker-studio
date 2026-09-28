@@ -1904,6 +1904,14 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         AudioAnalysisOptions opt;
         opt.separate_stems = params.value("separate", true);
         opt.stems_dir = params.value("stems_dir", "");
+        if (params.contains("range") && params["range"].is_array() && params["range"].size() == 2) {
+            double rt0 = params["range"][0].get<double>(), rt1 = params["range"][1].get<double>();
+            if (rt1 > rt0 && rt0 >= 0.0) {
+                opt.has_range = true;
+                opt.range_t0 = rt0;
+                opt.range_t1 = rt1;
+            }
+        }
         if (params.contains("lyrics") && params["lyrics"].is_array())
             for (auto& l : params["lyrics"]) {
                 LyricLine ll;
@@ -1945,6 +1953,9 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 hash_str(std::to_string(l.w0));
                 hash_str(std::to_string(l.w1));
             }
+        }
+        if (opt.has_range) {
+            hash_str("range" + std::to_string(opt.range_t0) + "-" + std::to_string(opt.range_t1));
         }
         char key[128];
         snprintf(key, sizeof(key), "%llu_%lld_%zx_%d", (unsigned long long)fsize,
