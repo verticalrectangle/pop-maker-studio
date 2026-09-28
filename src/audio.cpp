@@ -1091,9 +1091,11 @@ void audio_source_ensure(const std::string& path) {
         g_src_bufs.push_back({path, {}, false});
     }
     std::thread([path]() {
-        // Use a path-derived temp file to avoid conflicts between concurrent loads.
+        // Path- and process-derived temp file: concurrent loads (and other
+        // running instances) never share one.
         std::string tmp = "/tmp/pms_ca_" +
-                          std::to_string(std::hash<std::string>{}(path)) + ".raw";
+                          std::to_string(std::hash<std::string>{}(path)) + "_" +
+                          std::to_string((long)getpid()) + ".raw";
         const char* args[] = {
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-y", "-i", path.c_str(),
@@ -1109,7 +1111,7 @@ void audio_source_ensure(const std::string& path) {
         }
         if (pid < 0) return;
         int st = 0; waitpid(pid, &st, 0);
-        if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) return;
+        if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) { unlink(tmp.c_str()); return; }
 
         FILE* f = fopen(tmp.c_str(), "rb");
         if (!f) return;
@@ -1121,6 +1123,8 @@ void audio_source_ensure(const std::string& path) {
             fread(buf->data(), sizeof(float), buf->size(), f);
         }
         fclose(f);
+        // The decode is held in memory from here on; /tmp is often tmpfs.
+        unlink(tmp.c_str());
 
         std::lock_guard<std::mutex> lk(g_clip_mutex);
         for (auto& b : g_src_bufs) {
