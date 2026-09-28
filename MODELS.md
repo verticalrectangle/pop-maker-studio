@@ -16,7 +16,23 @@ All ML models run locally. Most sit in `models/` next to the binary (see `app_mo
 | **License** | [MIT](https://github.com/openai/whisper/blob/main/LICENSE) |
 | **When downloaded** | Setup screen, or automatically on first transcription |
 
-Used for word-level transcription with DTW token timestamps via whisper.cpp. No external forced aligner — timestamps come from the model's own attention heads.
+Used for word-level transcription with DTW token timestamps via whisper.cpp. No external forced aligner — timestamps come from the model's own attention heads. Also provides the coarse pass for audio analysis v2 word alignment (per-line windows from an order-constrained fuzzy match onto the decoded word stream; see `src/audio_whisper_coarse.cpp`).
+
+---
+
+## wav2vec2 CTC — Word Forced Alignment
+
+| | |
+|---|---|
+| **File** | `wav2vec2_ctc_float.onnx` (float32; falls back to `wav2vec2_ctc.onnx` quantised when absent) + `wav2vec2_vocab_float.json` (`wav2vec2_vocab.json` for the quant model) |
+| **Size** | ~378 MB float / ~95 MB quantised |
+| **Path** | `models/` next to the binary (hard-linked from the shared-models store) |
+| **Source** | torchaudio pipeline `WAV2VEC2_ASR_BASE_960H` (facebook/wav2vec2-base-960h weights) |
+| **Conversion** | `~/Projects/seen-and-not-seen/.venv/bin/python tools/export_wav2vec2_onnx.py --out <dir>/wav2vec2_ctc_float.onnx --vocab <dir>/wav2vec2_vocab_float.json` (logits-only wrapper, opset 14, dynamic sequence length) |
+| **License** | [MIT](https://github.com/pytorch/fairseq/blob/main/LICENSE) (model weights: [CC-BY-NC-4.0 for LibriSpeech-derived fine-tune](https://huggingface.co/facebook/wav2vec2-base-960h) — local analysis use; check before redistributing) |
+| **When downloaded** | Must be placed manually — not auto-downloaded |
+
+Aligns lyric lines to the vocal stem inside Whisper coarse windows (torchaudio stay-advance trellis reimplemented in `src/audio_analysis_run.cpp`). The quantised export collapses first-word emissions on sung onsets, so the float model is preferred when installed (`wav2vec2_ctc_path()` in `src/paths.cpp`).
 
 ---
 
@@ -156,7 +172,8 @@ The detector runs sparse (re-detect on loss or every ~2 s), the landmark net den
 
 | Model | Size | Auto-download | Required for |
 |---|---|---|---|
-| Whisper ggml-large-v3-turbo-q5_0 | ~584 MB | Yes (Setup screen) | Transcription |
+| Whisper ggml-large-v3-turbo-q5_0 | ~584 MB | Yes (Setup screen) | Transcription + analysis coarse pass |
+| wav2vec2 CTC float (quant fallback) | ~378 MB (~95 MB) | **No — manual** | Word alignment |
 | Kim_Vocal_2 MDX-Net | ~64 MB | Yes (on first use) | Vocal separation |
 | htdemucs | ~174 MB | **No — manual** | 4-stem music separation |
 | u2net_human_seg | ~176 MB | Yes (Setup screen) | Background removal |

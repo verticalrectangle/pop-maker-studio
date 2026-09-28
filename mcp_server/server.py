@@ -1558,21 +1558,32 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="analyze_audio",
             description=(
-                "Run beat/RMS analysis on an audio file. Blocks until complete — "
-                "returns {status: 'done', bpm, duration, beats, rms} when finished. "
-                "No polling needed."
+                "Run audio analysis v2 (beats, downbeats, hits, envelopes, "
+                "spectrum, words) on an audio file. Blocks until complete — "
+                "returns {status: 'done', analysis} with the v2 JSON "
+                "(docs/AUDIO_ANALYSIS.md) when finished. Optional lyrics: "
+                "string[] force-aligned to the vocals. No polling needed."
             ),
             inputSchema={
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Absolute path to audio file"}},
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to audio file"},
+                    "lyrics": {"type": "array", "items": {"type": "string"},
+                               "description": "Optional lyric lines to force-align"},
+                    "separate": {"type": "boolean",
+                                 "description": "Run 4-stem separation (default true when model present)"},
+                    "stems_dir": {"type": "string",
+                                  "description": "Reuse precomputed stems dir ({drums,bass,other,vocals}.wav)"},
+                },
                 "required": ["path"],
             },
         ),
         Tool(
             name="get_audio_analysis",
             description=(
-                "Poll beat/RMS analysis started by analyze_audio. "
-                "Returns {status: 'idle'|'running'|'done'|'error', bpm?, duration?, beats?, rms?}. "
+                "Poll audio analysis v2 started by analyze_audio. "
+                "Returns {status: 'idle'|'running'|'done'|'error', progress?, stage?, analysis?} "
+                "with the v2 JSON (beats, downbeats, hits, env, spectrum, words). "
                 "Poll every 2s until status='done'."
             ),
             inputSchema={"type": "object", "properties": {}},
@@ -4555,10 +4566,33 @@ def _load_recipe(recipe_id: str) -> dict:
     return data
 
 
+def _v2_payload(analysis: dict | None) -> dict:
+    """Unwrap the v2 {status, analysis} envelope; {} when not done."""
+    if not analysis or analysis.get("status") != "done":
+        return {}
+    a = analysis.get("analysis") or {}
+    return a if isinstance(a, dict) else {}
+
+
+def _v2_rms(payload: dict, duration: float = 0.0) -> list[float]:
+    """Per-second energy from v2 env.mix (60 fps) for the style expander."""
+    env = (payload.get("env") or {}).get("mix") or []
+    fps = int(payload.get("fps") or 60)
+    if not env or fps <= 0:
+        return []
+    nsec = int(duration) if duration > 0 else len(env) // fps
+    out = []
+    for s in range(max(0, nsec)):
+        seg = env[s * fps:(s + 1) * fps]
+        out.append(sum(seg) / len(seg) if seg else 0.0)
+    return out
+
+
 async def _ensure_audio_analysis() -> tuple[dict | None, str | None]:
-    """Return (analysis, note). analysis has status 'done' with beats/rms when
-    available; otherwise None plus a note. Triggers analyze_audio once on the
-    project's audio and polls up to ~30s if it was already running."""
+    """Return (analysis, note). analysis has status 'done' with the v2
+    {analysis} payload when available; otherwise None plus a note. Triggers
+    analyze_audio once on the project's audio and polls up to ~30s if it was
+    already running."""
     proj = _call("get_project", {})
     audio = proj.get("audio_path") or ""
     analysis = _call("get_audio_analysis", {})
@@ -4603,15 +4637,18 @@ async def _get_song_structure(arguments: dict) -> dict:
         end = float(end_arg)
 
     analysis, note = await _ensure_audio_analysis()
+    payload = _v2_payload(analysis)
     # Project-state beats (get_beats) are only committed when beat detect runs
     # on the timeline audio; an explicit-path analyze_audio leaves them in the
-    # analysis cache only. Fall back to the cache so both routes work.
-    if not beats and analysis and analysis.get("beats"):
-        beats = [float(b) for b in analysis["beats"]]
-        bpm = float(analysis.get("bpm") or bpm)
-    rms = [float(x) for x in (analysis.get("rms") or [])] if analysis else []
+    # analysis cache only. Fall back to the v2 payload so both routes work.
+    if not beats and payload.get("beats"):
+        beats = [float(b) for b in payload["beats"]]
+        bpm = float(payload.get("bpm") or bpm)
+    downs = [float(d) for d in (payload.get("downbeats") or [])]
+    rms = _v2_rms(payload, end) if payload else []
     bars_raw = style_expander._build_bars(beats, start, end, bpb,
-                                          style_expander._normalize_rms(rms, start, end))
+                                          style_expander._normalize_rms(rms, start, end),
+                                          downbeats=downs or None)
     bars = [{"index": b["index"], "start": b["start"], "end": b["end"],
              "energy": b["energy"] if analysis else None,
              "downbeat": b["downbeat"]}
@@ -4675,20 +4712,22 @@ async def _animate_section(arguments: dict) -> dict:
     beats_resp = _call("get_beats", {})
     beats = [float(b) for b in (beats_resp.get("beats") or [])]
     analysis, note = await _ensure_audio_analysis()
+    payload = _v2_payload(analysis)
     if analysis and analysis.get("status") == "done":
         beats_resp = _call("get_beats", {})
         beats = [float(b) for b in (beats_resp.get("beats") or [])]
-    # Fall back to the analysis cache: explicit-path analyze_audio stores
+    # Fall back to the v2 payload: explicit-path analyze_audio stores
     # beats there without committing them to project state (see
     # _get_song_structure).
-    if not beats and analysis and analysis.get("beats"):
-        beats = [float(b) for b in analysis["beats"]]
+    if not beats and payload.get("beats"):
+        beats = [float(b) for b in payload["beats"]]
     if not beats:
         raise ValueError(
             "no beat data for the project — call analyze_audio on the project audio "
             "first (add an audio clip to the timeline, then analyze_audio), then retry "
             "animate_section")
-    rms = [float(x) for x in (analysis.get("rms") or [])] if analysis else []
+    downs = [float(d) for d in (payload.get("downbeats") or [])]
+    rms = _v2_rms(payload, end) if payload else []
 
     proj = _call("get_project", {})
     fps = float(proj.get("fps") or 30.0)
@@ -4712,6 +4751,7 @@ async def _animate_section(arguments: dict) -> dict:
         recipe, {"start": start, "end": end}, beats, rms,
         fps=fps, density=density, seed=seed, palette=palette,
         track=ti, clip_base=clip_base, track_name=track_name,
+        downbeats=downs or None,
     )
     ops = list(result["ops"])
     if not any(op["method"] == "add_shape" for op in ops):
