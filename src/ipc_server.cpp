@@ -1367,11 +1367,28 @@ static json dispatch(AppState& state, const std::string& method, const json& par
     if (method == "trigger_export") {
         if (state.render.running) { err = "export already running"; return {}; }
 
-        // Resolve output path
+        // Single-format default: the current canvas. Multi-format: render each
+        // requested canvas in sequence ("9:16" -> <name>_9x16.mp4, "16:9" ->
+        // <name>_16x9.mp4, "1:1" -> <name>_1x1.mp4), then restore the canvas.
+        // Script clips lay themselves out from the canvas size each pass, so
+        // they reflow per format; ordinary clips keep canvas-fraction positions.
+        std::vector<OutputFormat> formats;
+        if (params.contains("formats") && params["formats"].is_array()) {
+            for (auto& f : params["formats"]) {
+                std::string fs = f.is_string() ? f.get<std::string>() : "";
+                if      (fs == "vertical"   || fs == "9:16") formats.push_back(OutputFormat::Vertical);
+                else if (fs == "horizontal" || fs == "16:9") formats.push_back(OutputFormat::Horizontal);
+                else if (fs == "square"     || fs == "1:1")  formats.push_back(OutputFormat::Square);
+                else { err = "unknown format in formats: " + fs +
+                             " (use vertical/9:16, horizontal/16:9, square/1:1)"; return {}; }
+            }
+        }
+        // Resolve output path (base name; per-format suffixes derive from it)
+        std::string base_path;
         if (params.contains("output_path") && !params["output_path"].get<std::string>().empty()) {
-            state.export_out_path = params["output_path"].get<std::string>();
+            base_path = params["output_path"].get<std::string>();
         } else if (!state.out_mp4.empty()) {
-            state.export_out_path = state.out_mp4;
+            base_path = state.out_mp4;
         } else {
             // Default: {project_dir}/{stem}.mp4 or ~/Videos/pop_maker_export.mp4
             std::string base;
@@ -1385,24 +1402,61 @@ static json dispatch(AppState& state, const std::string& method, const json& par
                 const char* h = std::getenv("HOME");
                 base = std::string(h ? h : ".") + "/Videos/pop_maker_export";
             }
-            state.export_out_path = base + ".mp4";
+            base_path = base + ".mp4";
         }
 
-        // Optional render settings
+        // Optional render settings. platform= selects a validated CRF /
+        // maxrate-cap / profile / audio recipe, which then governs the export
+        // (manual crf applies when platform=custom). Canvas mismatches warn.
+        RenderPlatform plat = state.render_settings.platform;
+        if (params.contains("platform") && params["platform"].is_string()) {
+            if (!render_platform_from_id(params["platform"].get<std::string>(), plat)) {
+                err = "unknown platform (use custom, x, tiktok, instagram_reels, youtube_shorts, youtube)";
+                return {};
+            }
+            state.render_settings.platform = plat;
+        }
         if (params.contains("crf"))    state.render_settings.crf          = params["crf"].get<int>();
         if (params.contains("preset")) state.render_settings.preset       = params["preset"].get<std::string>();
         if (params.contains("gif"))    state.render_settings.gif_export   = params["gif"].get<bool>();
 
+        auto suffixed = [](const std::string& base, const char* suf) {
+            size_t dot = base.rfind('.');
+            std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
+            return stem + suf + ".mp4";
+        };
+        std::string first_out = base_path;
+        if (!formats.empty()) {
+            state.export_saved_format = state.format;
+            state.export_queue        = formats;
+            state.export_queue_idx    = 0;
+            state.format              = formats[0];
+            state.export_out_path     = suffixed(base_path,
+                formats[0] == OutputFormat::Vertical ? "_9x16" :
+                formats[0] == OutputFormat::Horizontal ? "_16x9" : "_1x1");
+            first_out = state.export_out_path;
+        } else {
+            state.export_queue.clear();
+            state.export_queue_idx = 0;
+            state.export_out_path = base_path;
+        }
+        if (std::string w = render_platform_check(state); !w.empty())
+            fprintf(stderr, "[export] platform warning: %s\n", w.c_str());
+
         state.export_request = true;
 
-        if (client_fd < 0) { json r; r["output"] = state.export_out_path; return r; }
+        if (client_fd < 0) { json r; r["output"] = first_out; return r; }
         fd_mark_busy(client_fd);
-        std::string out_path = state.export_out_path;
-        std::thread([client_fd, req_id, out_path, &state]() {
+        std::string out_path = first_out;
+        std::thread([client_fd, req_id, out_path, base_path, formats, &state]() {
             // Wait for GL thread to pick up the request and start rendering
             for (int i = 0; i < 100 && !state.render.running; ++i)
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            while (state.render.running) {
+            // Multi-format: passes run back-to-back on the GL thread; wait
+            // until the queue drains (not just the first pass stopping).
+            for (;;) {
+                bool busy = state.render.running || !state.export_queue.empty();
+                if (!busy) break;
                 send_progress(client_fd, req_id, state.render.progress, state.render.stage);
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
@@ -1411,8 +1465,24 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             bool ok = !stage.empty() &&
                       stage.rfind("Error", 0) == std::string::npos &&
                       stage != "Building\xe2\x80\xa6";   // UTF-8 ellipsis
+            // Report every output, not just the first pass's.
+            json outs = json::array();
+            if (!formats.empty()) {
+                auto suf = [](const std::string& base, const char* s) {
+                    size_t dot = base.rfind('.');
+                    std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
+                    return stem + s + ".mp4";
+                };
+                for (auto f : formats)
+                    outs.push_back(suf(base_path,
+                        f == OutputFormat::Vertical ? "_9x16" :
+                        f == OutputFormat::Horizontal ? "_16x9" : "_1x1"));
+            } else {
+                outs.push_back(out_path);
+            }
             r["done"]    = true;
-            r["output"]  = out_path;
+            r["output"]  = outs.size() == 1 ? outs[0] : outs;
+            r["outputs"] = outs;
             r["stage"]   = stage;
             r["success"] = ok;
             send_ok_id(client_fd, req_id, r);

@@ -608,9 +608,16 @@ async def list_tools() -> list[Tool]:
             name="trigger_export",
             description=(
                 "Render and export the project to MP4 (or GIF). Blocks until complete — "
-                "returns {done, success, output, stage} when finished. No batch needed.\n\n"
+                "returns {done, success, output, outputs, stage} when finished. No batch needed.\n\n"
                 "output_path: override default path (defaults to {project_dir}/{name}.mp4).\n"
-                "crf: quality 0–51, lower = better (default 23).\n"
+                "platform: validated upload recipe — custom (manual crf), x (H.264 High, 25 Mbps cap, AAC 48 kHz 320k), "
+                "tiktok (9:16, 12 Mbps cap, AAC 48 kHz 192k), instagram_reels (9:16, 10 Mbps cap, AAC 48 kHz 256k), "
+                "youtube_shorts (9:16, 8/12 Mbps by fps, AAC 48 kHz 192k), youtube (16:9, 8/12 Mbps by fps, AAC 48 kHz 192k). "
+                "Canvas mismatches warn but still export.\n"
+                "formats: render several canvases in one request, e.g. [\"9:16\",\"16:9\"] → "
+                "<name>_9x16.mp4 + <name>_16x9.mp4 (\"1:1\" → <name>_1x1.mp4); canvas restored after. "
+                "Script clips reflow per format; ordinary clips keep canvas-fraction positions.\n"
+                "crf: quality 0–51, lower = better (default 23, or the platform preset's CRF).\n"
                 "preset: ultrafast|fast|medium|slow (default medium).\n"
                 "gif: true to export animated GIF instead of MP4."
             ),
@@ -618,6 +625,8 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "output_path": {"type": "string", "description": "Override output file path"},
+                    "platform": {"type": "string", "enum": ["custom", "x", "tiktok", "instagram_reels", "youtube_shorts", "youtube"]},
+                    "formats": {"type": "array", "items": {"type": "string", "enum": ["9:16", "16:9", "1:1", "vertical", "horizontal", "square"]}, "description": "Render several canvases in sequence"},
                     "crf":    {"type": "integer", "description": "Quality 0–51 (default 23)"},
                     "preset": {"type": "string", "enum": ["ultrafast", "fast", "medium", "slow"]},
                     "gif":    {"type": "boolean", "description": "Export GIF instead of MP4"},

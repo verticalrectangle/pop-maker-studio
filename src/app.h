@@ -94,6 +94,20 @@ enum class TransitionType { None, Dissolve, FadeBlack, DipWhite, Shake };
 
 enum class OutputFormat { Vertical, Horizontal, Square };
 
+// ── Platform export preset ────────────────────────────────────────────────────
+// Selects a validated CRF / bitrate-cap / profile / audio recipe for an upload
+// target. `Custom` = the user's manual CRF/preset/audio_bitrate/high_profile.
+// Detailed per-platform rationale (official upload specs consulted Sep 2026)
+// lives on `platform_preset()` in src/render.cpp.
+enum class RenderPlatform {
+    Custom = 0,
+    X = 1,             // x / twitter — landscape-or-portrait H.264
+    TikTok = 2,        // tiktok — 9:16 H.264
+    InstagramReels = 3,// instagram_reels — 9:16 H.264
+    YouTubeShorts = 4, // youtube_shorts — 9:16 H.264
+    YouTube = 5        // youtube — landscape H.264
+};
+
 // ── Track / clip data model ───────────────────────────────────────────────────
 
 // Each clip carries its own type so any track can hold mixed content.
@@ -654,6 +668,7 @@ struct RenderSettings {
     int         audio_bitrate = 192;      // kbps: 128 / 192 / 320
     std::string preset        = "medium"; // ultrafast/fast/medium/slow/veryslow
     bool        high_profile  = false;    // false=Main, true=High
+    RenderPlatform platform   = RenderPlatform::Custom; // platform upload preset
     bool        use_vaapi     = true;     // use VAAPI HW encoder when available (AMD/Intel on Linux)
     bool        advanced_open = false;    // UI collapsible state
     bool        gif_export    = false;    // output animated GIF instead of MP4
@@ -968,6 +983,12 @@ struct AppState {
     // IPC-requested export (ipc_server sets; GL thread calls render_start_gl)
     bool        export_request  = false;
     std::string export_out_path;
+    // Multi-format queue: one request renders several canvas formats in
+    // sequence (e.g. ["9:16","16:9"] -> <name>_9x16.mp4, <name>_16x9.mp4),
+    // restoring the original format after. idx == queue.size() means idle.
+    std::vector<OutputFormat> export_queue;
+    size_t                    export_queue_idx = 0;
+    OutputFormat              export_saved_format = OutputFormat::Vertical;
 
     // noise reduction
     bool        noise_reduce_running  = false;

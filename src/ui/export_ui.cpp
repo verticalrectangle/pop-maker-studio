@@ -198,6 +198,38 @@ void draw_export_modal(AppState& state) {
             }
             ImGui::NewLine();
 
+            // Platform preset (CRF / bitrate-cap / audio recipe). Custom =
+            // manual CRF buttons below. Canvas mismatches warn, still export.
+            ImGui::Dummy({0.f, 8.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);
+            ImGui::TextUnformatted("Platform");
+            ImGui::PopStyleColor();
+            ImGui::Dummy({0.f, 6.f});
+            ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+            struct PPM { RenderPlatform p; const char* lbl; };
+            static constexpr PPM kPPM[] = {
+                {RenderPlatform::Custom, "Custom"},
+                {RenderPlatform::X, "X"},
+                {RenderPlatform::TikTok, "TikTok"},
+                {RenderPlatform::InstagramReels, "Reels"},
+                {RenderPlatform::YouTubeShorts, "Shorts"},
+                {RenderPlatform::YouTube, "YouTube"},
+            };
+            for (auto& ppm : kPPM) {
+                char id[32]; snprintf(id, sizeof(id), "%s##pfm", ppm.lbl);
+                if (ui_btn(id, state.render_settings.platform == ppm.p, true))
+                    state.render_settings.platform = ppm.p;
+                ImGui::SameLine(0.f, 4.f);
+            }
+            ImGui::NewLine();
+            if (std::string pw = render_platform_check(state); !pw.empty()) {
+                ImGui::SetCursorPosX(ImGui::GetStyle().WindowPadding.x + 8.f);
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(235, 200, 90, 255));
+                ImGui::TextWrapped("%s", pw.c_str());
+                ImGui::PopStyleColor();
+            }
+
             // Encode speed (libx264 preset). The VAAPI HW encoder ignores
             // -preset entirely — encoding runs at a fixed silicon rate
             // regardless — so grey the buttons out when VAAPI is the active
@@ -509,6 +541,31 @@ void panel_export(AppState& state, float w) {
     }
 
     ImGui::Dummy({0.f, 8.f});
+
+    // Platform preset — selects a validated CRF / bitrate-cap / audio recipe.
+    // Custom = manual CRF below. Canvas mismatches warn but still export.
+    ui_label("Platform"); ImGui::Dummy({0.f, 4.f});
+    struct PP { RenderPlatform p; const char* lbl; };
+    static constexpr PP kPP[] = {
+        {RenderPlatform::Custom, "Custom"},
+        {RenderPlatform::X, "X"},
+        {RenderPlatform::TikTok, "TikTok"},
+        {RenderPlatform::InstagramReels, "Reels"},
+        {RenderPlatform::YouTubeShorts, "Shorts"},
+        {RenderPlatform::YouTube, "YouTube"},
+    };
+    for (auto& pp : kPP) {
+        char id[32]; snprintf(id, sizeof(id), "%s##pfp", pp.lbl);
+        if (ui_btn(id, state.render_settings.platform == pp.p, true))
+            state.render_settings.platform = pp.p;
+        ImGui::SameLine(0.f, 4.f);
+    }
+    ImGui::NewLine();
+    if (std::string pw = render_platform_check(state); !pw.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(235, 200, 90, 255));
+        ImGui::TextWrapped("%s", pw.c_str());
+        ImGui::PopStyleColor();
+    }
 
     // Advanced settings (collapsible)
     ImGui::PushStyleColor(ImGuiCol_Text, Col::muted);

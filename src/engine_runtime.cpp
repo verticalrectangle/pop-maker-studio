@@ -99,6 +99,47 @@ static void emit_state_events(AppState& state, double dt) {
     }
 }
 
+// ── Multi-format export chain ─────────────────────────────────────────────────
+// render_tick_gl calls this on the GL thread when one queued pass finishes
+// (running=false). The pass that just finished was queue[queue_idx]: out_mp4
+// already holds its file. Advance past it: start the next pass (switching
+// canvas + suffixed output) or restore the user's canvas when drained.
+void render_queue_advance(AppState& state) {
+    if (state.export_queue.empty() ||
+        state.export_queue_idx >= state.export_queue.size())
+        return;
+    state.export_queue_idx++;
+    if (state.export_queue_idx < state.export_queue.size()) {
+        state.format = state.export_queue[state.export_queue_idx];
+        // export_out_path ends with the previous pass's suffix — strip back
+        // to the bare stem first, then append the new suffix.
+        std::string base = state.export_out_path;
+        for (const char* s : {"_9x16", "_16x9", "_1x1"}) {
+            size_t sl = strlen(s);
+            size_t dot = base.rfind('.');
+            std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
+            if (stem.size() > sl && stem.compare(stem.size() - sl, sl, s) == 0) {
+                base = stem.substr(0, stem.size() - sl) + ".mp4";
+                break;
+            }
+        }
+        const char* suf = state.format == OutputFormat::Vertical ? "_9x16" :
+                          state.format == OutputFormat::Horizontal ? "_16x9" : "_1x1";
+        size_t dot = base.rfind('.');
+        std::string stem = (dot != std::string::npos) ? base.substr(0, dot) : base;
+        state.export_out_path = stem + suf + ".mp4";
+        state.out_mp4 = state.export_out_path;
+        size_t d2 = state.out_mp4.rfind('.');
+        state.out_gif = (d2 != std::string::npos ? state.out_mp4.substr(0, d2) : state.out_mp4) + ".gif";
+        render_start_gl(state);
+    } else {
+        // Queue drained: restore the canvas the user had.
+        state.format = state.export_saved_format;
+        state.export_queue.clear();
+        state.export_queue_idx = 0;
+    }
+}
+
 // ── The heartbeat ─────────────────────────────────────────────────────────────
 void engine_tick(AppState& state, double dt, bool gl_ready) {
     // Coupled FX bricks track their host every frame — drags, trims, splits
@@ -137,7 +178,6 @@ void engine_tick(AppState& state, double dt, bool gl_ready) {
             render_start_gl(state);
         }
         render_tick_gl(state);
-
         // Project open in progress: open a few decoder slots per tick (GL
         // texture uploads) — the UI shows the progress banner off the queue.
         if (!state.slot_open_queue.empty())
