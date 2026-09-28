@@ -361,6 +361,49 @@ export function render(f) {
         sm.check("env re-indexed to timeline 0", m.get("env") == 720 - 120, m)
         sm.check("pms.audio identity-stable", m.get("same") is True, m)
 
+        print("pms.words transcript fallback + pms:fonts")
+        nowords = os.path.join(work, "analysis_nowords.json")
+        with open(nowords, "w") as f:
+            json.dump({"version": 2, "source": wav, "duration": 12.0, "bpm": 120, "fps": 60,
+                       "beats": [2.5, 3.0, 3.5], "downbeats": [2.5],
+                       "hits": {"kick": [{"t": 3.0, "s": 1.0}]}, "env": {"mix": [0.0] * 720},
+                       "lines": [], "words": []}, f)
+        sm.call("load_audio_analysis", {"path": nowords})
+        sm.call("set_audio_path", {"path": wav})
+        sm.call("set_transcript", {"words": [
+            {"word": "hello", "start": 4.0, "end": 4.4},
+            {"word": "world", "start": 4.6, "end": 5.0},
+        ]})
+        run("wordsfb.js", """
+export function render(f) {
+  const ws = pms.words;
+  pms.log(JSON.stringify({n: ws.length, w0: ws.length ? ws[0].w : null,
+                          t0: ws.length ? ws[0].t0 : null, same: ws === pms.words}));
+  pms.canvas.fillStyle = '#000'; pms.canvas.fillRect(0, 0, f.width, f.height);
+}
+""")
+        log = sm.errors("0:0")["log"]
+        m = json.loads(log[-1]) if log else {}
+        # audio clip trims 2 s off the head and sits at 0: offset = 2, so the
+        # source-4.0 word lands at timeline 2.0.
+        sm.check("words fallback count/text", m.get("n") == 2 and m.get("w0") == "hello", m)
+        sm.check("words fallback timeline-mapped", abs(m.get("t0", -1) - 2.0) < 1e-6, m)
+        sm.check("words fallback identity-stable", m.get("same") is True, m)
+        run("fonts.js", """
+try { pms.font("AntonTest", "pms:fonts/anton.ttf"); } catch (e) { pms.log("FONTT_ERR " + e.message); }
+export function render(f) {
+  const g = pms.canvas;
+  g.fillStyle = '#000'; g.fillRect(0, 0, f.width, f.height);
+  g.font = '400 120px AntonTest, Inter, sans-serif';
+  g.fillStyle = '#fff'; g.fillText('Hi', 100, 500);
+  pms.log("FONT_OK " + g.measureText('Hi').width.toFixed(1));
+}
+""")
+        log = sm.errors("0:0")["log"]
+        errs = sm.errors("0:0")["errors"]
+        sm.check("pms:fonts resolves bundled face", not errs and any(
+            l.startswith("FONT_OK") for l in log), (errs, log[-1:]))
+
         if sm.failures:
             print(f"FAIL: {len(sm.failures)}/{sm.n} checks")
             for f in sm.failures:
