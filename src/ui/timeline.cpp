@@ -2508,6 +2508,23 @@ void draw_timeline(AppState& state, ImVec2 origin, float total_w, float total_h)
                     dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ltcol, lbl);
                 }
                 ImGui::PopClipRect();
+            } else if (clip.clip_type == ClipType::Script) {
+                // Script brick: copper-orange with a JS filename + duration label.
+                ImU32 sc_fill   = sel ? IM_COL32(230,140, 40,255) : IM_COL32( 90, 50, 15,255);
+                ImU32 sc_border = sel ? IM_COL32(255,200,130,255) : IM_COL32(220,140, 60,200);
+                dl->AddRectFilled({vis_x0,cy0},{vis_x1,cy1}, sc_fill, 2.f);
+                dl->AddRect({vis_x0,cy0},{vis_x1,cy1}, sc_border, 2.f, 0, 1.5f);
+                ImGui::PushClipRect({vis_x0,cy0},{vis_x1,cy1},true);
+                {
+                    std::string sc_fname = clip.script_path.empty() ? "Script"
+                        : fs::path(clip.script_path).filename().string();
+                    char lbl[256];
+                    float dur = clip.end - clip.start;
+                    snprintf(lbl, sizeof(lbl), "JS %s  %.1fs", sc_fname.c_str(), dur);
+                    ImU32 ltcol = sel ? IM_COL32(40,20,0,255) : IM_COL32(255,210,150,255);
+                    dl->AddText({vis_x0+4.f, cy0+(cy1-cy0-13.f)*0.5f}, ltcol, lbl);
+                }
+                ImGui::PopClipRect();
             } else if (clip.clip_type == ClipType::BodyFX) {
                 // Solid BodyFX brick: teal/cyan accent
                 ImU32 bfx_fill   = sel ? IM_COL32( 20,180,160,255) : IM_COL32(10, 80, 75, 255);

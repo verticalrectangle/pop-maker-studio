@@ -163,6 +163,26 @@ set(PMS_ENGINE_SOURCES
     src/perf.cpp
     src/skin_segment.cpp
     src/skin_mask_cache.cpp
+    src/script_runtime.cpp
+    src/script_canvas.cpp
+    src/script_clip.cpp
+    src/script_face.cpp
+    vendor/quickjs-ng/cutils.c
+    vendor/quickjs-ng/libbf.c
+    vendor/quickjs-ng/libregexp.c
+    vendor/quickjs-ng/libunicode.c
+    vendor/quickjs-ng/quickjs.c
+    vendor/nanovg/src/nanovg.c
+)
+
+# Vendored C sources: keep warnings quiet (upstream code, -Wall is on).
+set_source_files_properties(src/script_runtime.cpp src/script_canvas.cpp
+    PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/vendor/quickjs-ng;${CMAKE_SOURCE_DIR}/vendor/nanovg/src")
+set_source_files_properties(
+    vendor/quickjs-ng/cutils.c vendor/quickjs-ng/libbf.c
+    vendor/quickjs-ng/libregexp.c vendor/quickjs-ng/libunicode.c
+    vendor/quickjs-ng/quickjs.c vendor/nanovg/src/nanovg.c
+    PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-unused-variable;-Wno-sign-compare;-Wno-maybe-uninitialized;-Wno-array-bounds;-Wno-stringop-overflow"
 )
 
 
