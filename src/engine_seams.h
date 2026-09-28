@@ -108,13 +108,9 @@ bool lay_typography_script(AppState& state, const std::string& preset,
                            const std::string& params_json, std::string& err);
 std::string active_typography_preset(const AppState& state);
 
-// ── Typography (impl: ui/panel_animation.cpp) ────────────────────────────────
-void    generate_typography(AppState& state);          // impl: typography_core.cpp (engine)
-void    apply_typo_style(Clip& c, const struct TypographyPreset& pr,
-                         const AppState& state);        // impl: typography_core.cpp (engine)
 void    app_focus_typography_panel();                   // engine-owned; no-op unless the app registers
 void    set_focus_typography_hook(void (*fn)());        // app registers its panel flip here
-ImFont* typo_font_get(const char* id);           // impl: text_renderer.cpp (engine)
+ImFont* typo_font_get(const char* id);           // impl: ui/theme.cpp (app)
 void    typo_font_clear();                        // theme_apply() calls these
 void    typo_font_register(const char* name, ImFont* font);
 

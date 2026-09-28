@@ -208,7 +208,7 @@ struct Clip {
 
     // ── Typography face + kinetic params ─────────────────────────────────────
     std::string sub_font;          // typography face id ("" = default Inter Black)
-    int   ease         = 0;        // easing curve id (text_anim.h EASE_*)
+    int   ease         = 0;        // easing curve id (EASE_* in SCRIPT_API/power)
     float tracking     = 0.f;      // extra letter-spacing, fraction of font size
     int   anim_unit    = 0;        // 0=block 1=word 2=letter (per-element motion)
     float anim_stagger = 0.06f;    // per-element delay step (seconds)
@@ -720,48 +720,6 @@ struct Marker {
     bool        chapter = false;
 };
 
-// ── Typography tweaks (per-field overrides + "hold" pins) ─────────────────────
-// User adjustments layered over the active typography preset. Each field can be
-// "active" (its value overrides the preset's) and "held" (the sticky/pin —
-// survives switching to a different preset). held ⊆ active. Editing a control
-// makes a field active; the pin toggles held. Switching presets keeps only the
-// held fields (keep_held), so an unpinned tweak resets to the new preset's look
-// while pinned ones carry over. Values are plain PODs so this serialises cleanly.
-enum TypoField {
-    TF_FontSize = 0, TF_Color, TF_Case, TF_AnchorH,
-    TF_Tracking, TF_Wrap, TF_PosV,
-    TF_PosX, TF_PosY, TF_TextStyle, TF_FadeIn, TF_FadeOut,
-    TF_Grouping,   // override the preset's grouping; value lives in state.subtitle_mode/_n
-    TF_KaraokeHi,  // override the preset's karaoke highlight colour (karaoke_hi)
-    TF_COUNT
-};
-struct TypoTweaks {
-    unsigned  active = 0;   // bit per TypoField: overrides the preset
-    unsigned  held   = 0;   // bit per TypoField: survives a preset switch
-    float     font_size = 0.09f;
-    float     color[4]  = {1.f, 1.f, 1.f, 1.f};
-    int       text_case = 0;     // 0=as-typed 1=UPPER 2=lower
-    int       anchor_h  = 1;     // 0=left 1=center 2=right
-    float     tracking  = 0.f;
-    float     wrap_w    = 0.85f;
-    int       pos_v     = 1;     // 0=bottom 1=center 2=top
-    float     pos_x     = 0.5f;  // 0=left 1=right
-    float     pos_y     = 0.85f; // custom Y fraction from top
-    TextStyle ts;                // shadow/stroke/glow/box
-    float     fade_in   = 0.f;
-    float     fade_out  = 0.f;
-    float     karaoke_hi[4] = {1.f, 0.85f, 0.1f, 1.f};  // TF_KaraokeHi: karaoke highlight colour
-
-    bool on(TypoField f)     const { return (active & (1u << f)) != 0; }
-    bool pinned(TypoField f) const { return (held   & (1u << f)) != 0; }
-    void tweak(TypoField f)        { active |= (1u << f); }            // mark edited
-    void pin(TypoField f, bool on) {
-        if (on) { held |= (1u << f); active |= (1u << f); }
-        else      held &= ~(1u << f);
-    }
-    void keep_held() { active &= held; }   // call on preset switch
-};
-
 // ── Central app state ─────────────────────────────────────────────────────────
 
 struct AppState {
@@ -1020,12 +978,6 @@ struct AppState {
     PipelineMode                       last_pipeline_mode = PipelineMode::Both;
     std::function<void(AppState&)>     pipeline_on_done;
 
-    // typography
-    std::string  typo_preset_id  = "flash";     // active preset id
-    // Per-field tune overrides + "hold" pins layered over the active preset.
-    TypoTweaks   typo;
-    SubtitleMode typo_grouping   = SubtitleMode::Word; // mirrors preset until overridden
-    int          typo_custom_n   = 3;
 
     // right panel active tab: 0=Clip, 1=Animation, 2=Export, 3=History, 4=Lyrics, 5=FX Library
     int panel_tab = 0;

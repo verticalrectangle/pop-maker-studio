@@ -156,7 +156,7 @@ void draw_text_overlays(ImDrawList* dl, const AppState& state, float t,
         AnimStyle eff_style = (active->clip_style != AnimStyle::None)
                               ? active->clip_style : state.style;
 
-        // Shared with the live canvas (text_anim.cpp) so preview == export.
+        // Shared block-anim helper (mirrored in the JS typography renderer) so preview == export.
         // Per-element clips animate inside render_text_block — keep the block
         // transform identity here so motion isn't applied twice.
         if (active->anim_unit == 0) {

@@ -109,8 +109,9 @@ set(PMS_ENGINE_SOURCES
     src/pipeline_core.cpp
     src/app_state.cpp
     src/project_meta.cpp
-    src/typography_core.cpp
     src/typography_script.cpp
+    src/text_anim.cpp
+    src/text_renderer.cpp
     src/stb_impl.cpp
     src/pms_engine.cpp
     src/engine_runtime.cpp
@@ -127,7 +128,6 @@ set(PMS_ENGINE_SOURCES
     src/video_recorder.cpp
     src/av_sync.cpp
     src/av_measure.cpp
-    src/text_anim.cpp
     src/transcribe.cpp
     src/render.cpp
     src/history.cpp
@@ -161,7 +161,6 @@ set(PMS_ENGINE_SOURCES
     src/fx_shader.cpp
     src/presets.cpp
     src/overlay_renderer.cpp
-    src/text_renderer.cpp
     src/shape.cpp
     src/perf.cpp
     src/skin_segment.cpp

@@ -11,7 +11,7 @@
 // ── Binary serialization helpers ──────────────────────────────────────────────
 
 static const uint32_t MAGIC   = 0x534D5001u; // "PMS\x01"
-static const uint32_t VERSION = 70u;  // v70: script clip path + params; v69: pixelate sampling + palette_levels; v67: render platform preset
+static const uint32_t VERSION = 71u;  // v71: typography is Script clips (preset/tweak store removed); v70: script clip path + params; v69: pixelate sampling + palette_levels; v67: render platform preset
 extern "C" uint32_t pms_project_version() { return VERSION; }  // C ABI (pms_engine.h)
 
 // Version used to gate the registry-effect read block (generated/fx_project_read.h).
@@ -788,38 +788,9 @@ bool project_save(const AppState& state, const std::string& path) {
     w.pod(state.loop_in);
     w.pod(state.loop_out);
 
-    // v53: typography active preset + per-field tweak/hold (pin) store, so a
-    // tweaked-and-pinned look survives a reload (the styled clips already carry
-    // baked values; this restores which fields stay pinned across preset switches).
-    w.str(state.typo_preset_id);
-    w.pod(state.typo.active);
-    w.pod(state.typo.held);
-    w.pod(state.typo.font_size);
-    for (int i = 0; i < 4; ++i) w.pod(state.typo.color[i]);
-    w.pod(state.typo.text_case);
-    w.pod(state.typo.anchor_h);
-    w.pod(state.typo.tracking);
-    w.pod(state.typo.wrap_w);
-    w.pod(state.typo.pos_v);
-
-    // v54: extra typography tweak fields — X/Y offset, fade, text style.
-    {
-        const TextStyle& t = state.typo.ts;
-        w.pod(state.typo.pos_x);   w.pod(state.typo.pos_y);
-        w.pod(state.typo.fade_in); w.pod(state.typo.fade_out);
-        w.pod((uint8_t)t.shadow_enabled); w.pod(t.shadow_ox); w.pod(t.shadow_oy);
-        for (int i=0;i<4;++i) w.pod(t.shadow_col[i]);
-        w.pod((uint8_t)t.stroke_enabled); w.pod(t.stroke_w);
-        for (int i=0;i<4;++i) w.pod(t.stroke_col[i]);
-        w.pod((uint8_t)t.glow_enabled); w.pod(t.glow_r);
-        for (int i=0;i<4;++i) w.pod(t.glow_col[i]);
-        w.pod((uint8_t)t.bg_enabled);
-        for (int i=0;i<4;++i) w.pod(t.bg_col[i]);
-        w.pod(t.bg_pad_x); w.pod(t.bg_pad_y); w.pod(t.bg_corner);
-    }
-
-    // v56: karaoke highlight-colour tweak (TF_KaraokeHi override).
-    for (int i = 0; i < 4; ++i) w.pod(state.typo.karaoke_hi[i]);
+    // v71: the v53/v54/v56 preset + tweak/hold store is gone (typography is
+    // a Script clip now; per-layer Tune lives in its script_params). Nothing
+    // written; the loader still skips the old bytes for version < 71u.
 
     return w.ok;
 }
@@ -984,40 +955,38 @@ static bool project_load_pass(AppState& state, const std::string& path, int fx_o
         }
     }
 
-    // v53: typography active preset + tweak/hold (pin) store
-    if (version >= 53u) {
-        state.typo_preset_id = r.str();
-        state.typo.active    = r.pod<unsigned>();
-        state.typo.held      = r.pod<unsigned>();
-        state.typo.font_size = r.pod<float>();
-        for (int i = 0; i < 4; ++i) state.typo.color[i] = r.pod<float>();
-        state.typo.text_case = r.pod<int>();
-        state.typo.anchor_h  = r.pod<int>();
-        state.typo.tracking  = r.pod<float>();
-        state.typo.wrap_w    = r.pod<float>();
-        state.typo.pos_v     = r.pod<int>();
+    // v53/v54 (removed v71): preset + tweak/hold store — skip the bytes.
+    if (version >= 53u && version < 71u) {
+        (void)r.str();
+        (void)r.pod<unsigned>();
+        (void)r.pod<unsigned>();
+        (void)r.pod<float>();
+        for (int i = 0; i < 4; ++i) (void)r.pod<float>();
+        (void)r.pod<int>();
+        (void)r.pod<int>();
+        (void)r.pod<float>();
+        (void)r.pod<float>();
+        (void)r.pod<int>();
     }
 
-    // v54: extra typography tweak fields — X/Y offset, fade, text style.
-    if (version >= 54u) {
-        TextStyle& t = state.typo.ts;
-        state.typo.pos_x   = r.pod<float>(); state.typo.pos_y   = r.pod<float>();
-        state.typo.fade_in = r.pod<float>(); state.typo.fade_out = r.pod<float>();
-        t.shadow_enabled = (bool)r.pod<uint8_t>(); t.shadow_ox = r.pod<float>(); t.shadow_oy = r.pod<float>();
-        for (int i=0;i<4;++i) t.shadow_col[i] = r.pod<float>();
-        t.stroke_enabled = (bool)r.pod<uint8_t>(); t.stroke_w = r.pod<float>();
-        for (int i=0;i<4;++i) t.stroke_col[i] = r.pod<float>();
-        t.glow_enabled = (bool)r.pod<uint8_t>(); t.glow_r = r.pod<float>();
-        for (int i=0;i<4;++i) t.glow_col[i] = r.pod<float>();
-        t.bg_enabled = (bool)r.pod<uint8_t>();
-        for (int i=0;i<4;++i) t.bg_col[i] = r.pod<float>();
-        t.bg_pad_x = r.pod<float>(); t.bg_pad_y = r.pod<float>(); t.bg_corner = r.pod<float>();
+    // v54 (removed v71): extra tweak fields — skip the bytes.
+    if (version >= 54u && version < 71u) {
+        (void)r.pod<float>(); (void)r.pod<float>();
+        (void)r.pod<float>(); (void)r.pod<float>();
+        (void)r.pod<uint8_t>(); (void)r.pod<float>(); (void)r.pod<float>();
+        for (int i=0;i<4;++i) (void)r.pod<float>();
+        (void)r.pod<uint8_t>(); (void)r.pod<float>();
+        for (int i=0;i<4;++i) (void)r.pod<float>();
+        (void)r.pod<uint8_t>(); (void)r.pod<float>();
+        for (int i=0;i<4;++i) (void)r.pod<float>();
+        (void)r.pod<uint8_t>();
+        for (int i=0;i<4;++i) (void)r.pod<float>();
+        (void)r.pod<float>(); (void)r.pod<float>(); (void)r.pod<float>();
     }
 
-    // v56: karaoke highlight-colour tweak. Older files don't carry it — keep the
-    // default (and TF_KaraokeHi is unset in their bitmask, so it stays inert).
-    if (version >= 56u) {
-        for (int i = 0; i < 4; ++i) state.typo.karaoke_hi[i] = r.pod<float>();
+    // v56 (removed v71): karaoke highlight-colour tweak — skip the bytes.
+    if (version >= 56u && version < 71u) {
+        for (int i = 0; i < 4; ++i) (void)r.pod<float>();
     }
 
     return r.ok;

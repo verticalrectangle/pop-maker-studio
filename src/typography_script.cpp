@@ -1,6 +1,12 @@
 // Typography-as-Script-clips: lay/replace the ONE Script clip
 // (`pms:typography/<id>`) that renders the transcript words.
 #include "typography_script.h"
+
+// App hook: surface the Typography tab after laying the layer. Registered by
+// the desktop app; headless/iOS engine builds leave it null (no-op).
+static void (*g_focus_typography_hook)() = nullptr;
+void set_focus_typography_hook(void (*fn)()) { g_focus_typography_hook = fn; }
+void app_focus_typography_panel() { if (g_focus_typography_hook) g_focus_typography_hook(); }
 #include "app.h"
 #include "engine_seams.h"
 #include "history.h"
@@ -84,6 +90,7 @@ bool lay_typography_script(AppState& state, const std::string& preset,
     state.selected_track = typo_ti;
     state.selected_clip = ci;
     script_clip_invalidate(script_clip_key(typo_ti, ci));
+    app_focus_typography_panel();
     history_push(state, std::string("Typography — ") + preset);
     return true;
 }
