@@ -50,6 +50,7 @@ struct Entry {
     bool faces_waiting = false;  // a pms.face() returned null: re-render when ready
     std::vector<ScriptError> errors;
     double render_ms = 0.0, flush_ms = 0.0;
+    int builds = 0;
 };
 
 std::map<std::string, std::unique_ptr<Entry>> g_entries;
@@ -129,6 +130,7 @@ unsigned script_clip_texture(const AppState& state, const Clip& clip, const std:
         e.script_params = clip.script_params;
         e.force_build = false;
         e.built = true;
+        e.builds++;
         e.build_errors.clear();
         e.build_ok = e.rt.build(state, clip, canvas_w, canvas_h, e.build_errors);
     }
@@ -228,7 +230,7 @@ std::vector<ScriptClipReport> script_clip_reports(const AppState& state) {
             auto it = g_entries.find(key);
             if (it == g_entries.end()) continue;
             const Entry& e = *it->second;
-            out.push_back({key, e.errors, e.rt.log_tail(), e.render_ms, e.flush_ms});
+            out.push_back({key, e.errors, e.rt.log_tail(), e.render_ms, e.flush_ms, e.builds});
         }
     }
     return out;

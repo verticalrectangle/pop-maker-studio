@@ -60,7 +60,7 @@ export function render(f) {}      // required; once per frame the clip is visibl
 | `pms.words` | `Word[]` | `{w, t0, t1, line, i, conf}` in timeline seconds (from `pms.audio.words`, empty if none) |
 | `pms.lines` | `string[]` | lyric lines |
 | `pms.json(path)` | any | parse a JSON file (relative to the script file); cached; watched for reload |
-| `pms.image(path)` | `Image` | `{width, height}`; decoded synchronously on first call (stb_image, RGBA, alpha kept), cached per runtime; relative paths resolve against the script file |
+| `pms.image(path)` | `Image` | `{width, height}`; decoded synchronously on first call (stb_image, RGBA, alpha kept), cached per runtime; relative paths resolve against the script file. Call it at module top level for every image a scene uses: decoding then happens once at load instead of stalling the first frame that needs it while scrubbing |
 | `pms.face(path)` | `FaceTrack \| null` | per-frame face data for a media file (§3.1). `null` while tracking; the host starts tracking on first request; export blocks until every requested track is ready. |
 | `pms.font(family, path)` | void | add a TTF/OTF face to a family (idempotent; several files under one family are matched by weight/style like CSS; a bold request on a regular-only family is synthesised). Built-in families: `"Inter"` (400/700/900; also `sans-serif`, `system-ui`), `"Mono"` (JetBrains Mono 400; also `monospace`) |
 | `pms.post(frag, uniforms)` | void | set this frame's post shader (§5). Call inside `render`; if not called, no post pass. |
@@ -188,7 +188,8 @@ function hash(a, b = 0, c = 0) {
 - IPC / MCP: `add_script_clip {track, start, duration, path, params?}`,
   `set_script_clip {track, clip, path?, params?}`,
   `get_script_errors {track?, clip?}` → `{clips: [{clip: "track:clip", errors: [{message,
-  file, line}], log, render_ms, flush_ms}]}`, `render_still {t, path, format?}` (the full
+  file, line}], log, render_ms, flush_ms, builds}]}` (`builds` counts runtime (re)builds:
+  1 + hot reloads/edits), `render_still {t, path, format?}` (the full
   composite at time `t`, rendered like export: face tracks are waited for),
   `set_fps {fps}` (the frame grid `f.frame` counts on).
 - Export treats a script error as fatal: the render stops with

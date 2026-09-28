@@ -2964,7 +2964,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Read Script clip diagnostics (docs/SCRIPT_API.md §8): {clips: [{clip: "
                 "'track:clip', errors: [{message, file, line}], log: [pms.log lines], "
-                "render_ms, flush_ms}]} for every Script clip rendered so far. Pass track "
+                "render_ms, flush_ms, builds}]} for every Script clip rendered so far (builds = "
+                "runtime (re)builds: 1 + hot reloads). Pass track "
                 "and clip together to report one clip. Errors come from the last build "
                 "or render; an empty list means the clip renders cleanly. Read-only."
             ),

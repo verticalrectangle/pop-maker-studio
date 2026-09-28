@@ -40,6 +40,7 @@ struct ScriptClipReport {
     std::vector<std::string> log;  // pms.log / console.* tail
     double render_ms = 0.0;        // last render: JS + Skia recording (CPU)
     double flush_ms = 0.0;         // last render: Skia flush + post/unpremultiply submit (CPU)
+    int builds = 0;                // runtime (re)builds so far: 1 + hot reloads / edits
 };
 
 // One report per Script clip on the timeline that has been rendered.

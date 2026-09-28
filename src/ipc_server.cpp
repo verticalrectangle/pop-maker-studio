@@ -1755,6 +1755,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
             e["log"] = rep.log;
             e["render_ms"] = rep.render_ms;
             e["flush_ms"] = rep.flush_ms;
+            e["builds"] = rep.builds;
             return e;
         };
         std::string only;
