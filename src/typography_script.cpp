@@ -17,6 +17,140 @@ void app_focus_typography_panel() { if (g_focus_typography_hook) g_focus_typogra
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <fstream>
+
+// ── Preset FX as global Effect bricks ─────────────────────────────────────
+// Presets with FX entries (VHS/FilmGrain/Scanlines/ChromaticAberration) lay
+// real Effect bricks that affect everything below the lyrics track — the same
+// bricks typography_core.cpp laid (same types, params, beat sync, track
+// placement/tagging). The Script clip itself applies no post pass, so nothing
+// is applied twice.
+constexpr const char* TYPO_FX_TAG = "__typo_fx__";
+
+struct TypoFXDesc {
+    FXType type;
+    float  beat_intensity = 0.f;
+};
+
+// Read the preset's "fx" array from its shipped JS module config. Returns
+// false only when the module can't be read (unknown preset is reported by the
+// caller); a missing/empty fx array yields zero entries.
+static bool typo_fx_for_preset(const std::string& preset, std::vector<TypoFXDesc>& out) {
+    out.clear();
+    std::string resolved = script_resolve_spec("pms:typography/" + preset, "", "");
+    if (resolved.empty()) return false;
+    std::ifstream f(resolved, std::ios::binary);
+    if (!f) return false;
+    std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    size_t k = src.find("\"fx\"");
+    if (k == std::string::npos) return true;
+    k = src.find('[', k);
+    if (k == std::string::npos) return true;
+    int depth = 0;
+    size_t e = k;
+    for (; e < src.size(); ++e) {
+        if (src[e] == '[') ++depth;
+        else if (src[e] == ']') { if (--depth == 0) break; }
+    }
+    std::string arr = src.substr(k, e - k + 1);
+    size_t p = 0;
+    while ((p = arr.find("\"type\"", p)) != std::string::npos) {
+        size_t c = arr.find(':', p);
+        size_t q1 = arr.find('"', c);
+        if (q1 == std::string::npos) break;
+        size_t q2 = arr.find('"', q1 + 1);
+        if (q2 == std::string::npos) break;
+        std::string type = arr.substr(q1 + 1, q2 - q1 - 1);
+        // The beat value belongs to this object only (bounded by the next
+        // "type" so a missing beat can't steal the next object's).
+        size_t nt = arr.find("\"type\"", q2 + 1);
+        float beat = 0.f;
+        size_t b = arr.find("\"beat\"", q2);
+        if (b != std::string::npos && (nt == std::string::npos || b < nt)) {
+            size_t bc = arr.find(':', b);
+            if (bc != std::string::npos) beat = (float)atof(arr.c_str() + bc + 1);
+        }
+        TypoFXDesc d;
+        if (type == "VHS") d.type = FXType::VHS;
+        else if (type == "FilmGrain") d.type = FXType::FilmGrain;
+        else if (type == "Scanlines") d.type = FXType::Scanlines;
+        else if (type == "ChromaticAberration") d.type = FXType::ChromaticAberration;
+        else { p = q2 + 1; continue; }  // unknown entry: skip, don't fail
+        d.beat_intensity = beat;
+        out.push_back(d);
+        p = q2 + 1;
+    }
+    return true;
+}
+
+// Lay (or clear) the preset's global FX bricks on a managed LyricsFX track
+// directly above the lyrics track. Re-applying a preset replaces its bricks;
+// a preset without FX clears any previously laid ones so no stale global
+// effect survives a preset swap.
+static void lay_typo_fx_clips(AppState& state, const std::vector<TypoFXDesc>& fx,
+                              int typo_ti, float t1) {
+    const std::string fx_tag = std::string(TYPO_FX_TAG) + state.audio_path;
+    for (auto& t : state.tracks)
+        t.clips.erase(std::remove_if(t.clips.begin(), t.clips.end(),
+            [&](const Clip& c) { return c.source_id == fx_tag; }), t.clips.end());
+    if (fx.empty()) return;
+
+    // Beat source: first clip with analyzed beats (same rule as native).
+    int beat_ti = -1, beat_ci = -1;
+    for (int ti = 0; ti < (int)state.tracks.size() && beat_ti < 0; ++ti)
+        for (int ci = 0; ci < (int)state.tracks[ti].clips.size() && beat_ti < 0; ++ci) {
+            auto& cl = state.tracks[ti].clips[ci];
+            if (!cl.beats.empty()) { beat_ti = ti; beat_ci = ci; }
+        }
+
+    int fx_ti = -1;
+    if (typo_ti + 1 < (int)state.tracks.size() &&
+        state.tracks[typo_ti + 1].kind == TrackKind::LyricsFX)
+        fx_ti = typo_ti + 1;
+    else {
+        Track ft; ft.name = "Lyrics FX"; ft.managed = true; ft.kind = TrackKind::LyricsFX;
+        state.tracks.insert(state.tracks.begin() + typo_ti + 1, std::move(ft));
+        fx_ti = typo_ti + 1;
+        if (beat_ti > typo_ti) beat_ti++;  // insert shifted tracks below
+    }
+
+    for (auto& fd : fx) {
+        Clip fc;
+        fc.clip_type = ClipType::Effect;
+        fc.fx_type   = fd.type;
+        fc.source_id = fx_tag;
+        fc.start     = 0.f;
+        fc.end       = fmaxf(t1, 10.f);
+        fc.beat_src_track = beat_ti;
+        fc.beat_src_clip  = beat_ci;
+        switch (fd.type) {
+            case FXType::ChromaticAberration:
+                fc.fx_chromatic_aberration_amount = 0.6f;
+                break;
+            case FXType::FilmGrain:
+                fc.fx_film_grain_amount    = 1.f;
+                fc.fx_film_grain_intensity = fd.beat_intensity > 0.001f ? 0.8f : 0.35f;
+                fc.fx_film_grain_size      = 1.2f;
+                if (fd.beat_intensity > 0.001f)
+                    fc.fx_film_grain_intensity_beat = fd.beat_intensity;
+                break;
+            case FXType::Scanlines:
+                fc.fx_scanlines_amount  = 0.5f;
+                fc.fx_scanlines_density = 0.5f;
+                if (fd.beat_intensity > 0.001f)
+                    fc.fx_scanlines_density_beat = fd.beat_intensity;
+                break;
+            case FXType::VHS:
+                fc.fx_vhs_noise    = 0.35f;
+                fc.fx_vhs_bleed    = 4.f;
+                fc.fx_vhs_tracking = 0.15f;
+                break;
+            default: break;
+        }
+        state.tracks[fx_ti].clips.push_back(std::move(fc));
+    }
+}
+
 
 bool lay_typography_script(AppState& state, const std::string& preset,
                            const std::string& params_json, std::string& err) {
@@ -98,6 +232,9 @@ bool lay_typography_script(AppState& state, const std::string& preset,
             track.clips[i].script_path == "pms:typography/" + preset) ci = i;
     state.selected_track = typo_ti;
     state.selected_clip = ci;
+    std::vector<TypoFXDesc> fx;
+    typo_fx_for_preset(preset, fx);
+    lay_typo_fx_clips(state, fx, typo_ti, t1);
     script_clip_invalidate(script_clip_key(typo_ti, ci));
     app_focus_typography_panel();
     history_push(state, std::string("Typography — ") + preset);

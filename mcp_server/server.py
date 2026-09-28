@@ -159,6 +159,9 @@ MCP_IPC_ALIASES: dict[str, str] = {
     "get_chapter_markers":   "get_markers",
     "remove_background":     "start_bg_remove",
     "process_body_fx_masks": "start_body_fx_process",
+    # `set_typography_preset` also serves the legacy `generate_typography`
+    # IPC method (same behaviour, current-or-given preset).
+    "set_typography_preset": "generate_typography",
 }
 
 # IPC methods deliberately NOT exposed to any agent: the agent's own loop, debug

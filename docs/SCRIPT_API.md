@@ -171,8 +171,11 @@ the preview framebuffer is smaller than `u_res`.
   (the entry resolver accepts `pms:` specifiers so projects stay portable) and whose
   `script_params` JSON carries the per-layer Tune overrides. Each preset module exports
   `meta = {id, name, category}` and `render(f)`; the shared renderer is
-  `assets/scripts/typography/lib/typography.js` (config generated from the old
-  `src/typography_presets.h` by `tools/gen_typography_presets.py`).
+  `assets/scripts/typography/lib/typography.js`. Presets with an `fx` config array
+  (VHS/FilmGrain/Scanlines/ChromaticAberration) additionally lay global Effect
+  bricks on a managed LyricsFX track (same bricks the native generator laid), so
+  the effect covers everything below the lyrics track; the Script clip itself
+  applies no post pass.
   Params (all optional): `fontSize` (fraction of canvas height), `pos` (0 bottom /
   1 center / 2 top), `posX`, `posY`, `anchorH` (0 left / 1 center / 2 right), `wrapW`
   (fraction of canvas width), `color`/`karaokeHi`/`gradCol2` (`[r,g,b,a]` 0..1),
