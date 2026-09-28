@@ -139,5 +139,11 @@ std::string app_models_dir() {
 }
 
 std::string wav2vec2_ctc_path() {
-    return (fs::path(app_models_dir()) / "wav2vec2_ctc.onnx").string();
+    // Float export first (the quantised wav2vec2_ctc.onnx collapses
+    // first-word emissions on sung onsets; see tools/export_wav2vec2_onnx.py).
+    // Falls back to the quant model when the float one is not installed.
+    fs::path dir(app_models_dir());
+    std::error_code ec;
+    if (fs::exists(dir / "wav2vec2_ctc_float.onnx", ec)) return (dir / "wav2vec2_ctc_float.onnx").string();
+    return (dir / "wav2vec2_ctc.onnx").string();
 }

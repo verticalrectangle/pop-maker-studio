@@ -119,7 +119,10 @@ struct CtcVocab {
 };
 CtcVocab load_ctc_vocab(const std::string& model_path) {
     CtcVocab v;
-    fs::path vp = fs::path(model_path).parent_path() / "wav2vec2_vocab.json";
+    fs::path mp(model_path);
+    fs::path vp = mp.parent_path() / (mp.stem().string() == "wav2vec2_ctc_float"
+                                           ? "wav2vec2_vocab_float.json"
+                                           : "wav2vec2_vocab.json");
     std::ifstream f(vp.string());
     if (!f) return v;
     try {
@@ -130,7 +133,7 @@ CtcVocab load_ctc_vocab(const std::string& model_path) {
         for (auto& kv : j.items()) {
             const std::string& kk = kv.key();
             int id = kv.value().get<int>();
-            if (kk == "<pad>") v.blank = id;
+            if (kk == "<pad>" || kk == "-") v.blank = id;
             else if (kk == "|" || kk == "'") v.id2tok[id] = kk;
             else if (kk.size() == 1 && std::isalpha((unsigned char)kk[0]))
                 v.id2tok[id] = std::string(1, (char)std::toupper((unsigned char)kk[0]));

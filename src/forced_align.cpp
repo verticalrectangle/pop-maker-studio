@@ -25,14 +25,17 @@ struct AlignVocab {
 
 static AlignVocab load_vocab(const std::string& model_path) {
     AlignVocab v;
-    fs::path vp = fs::path(model_path).parent_path() / "wav2vec2_vocab.json";
+    fs::path mp(model_path);
+    fs::path vp = mp.parent_path() / (mp.stem().string() == "wav2vec2_ctc_float"
+                                           ? "wav2vec2_vocab_float.json"
+                                           : "wav2vec2_vocab.json");
     std::ifstream f(vp.string());
     if (!f) return v;
     try {
         auto j = nlohmann::json::parse(f);
         for (auto& [key, val] : j.items()) {
             int idx = val.get<int>();
-            if (key == "<pad>" || key == "[PAD]") v.blank = idx;
+            if (key == "<pad>" || key == "[PAD]" || key == "-") v.blank = idx;
             else if (key == "|")  { v.wordsep = idx; v.c2i[' '] = idx; }
             else if (key == "'")    v.c2i['\''] = idx;
             else if (key.size() == 1 && std::isalpha((unsigned char)key[0]))
