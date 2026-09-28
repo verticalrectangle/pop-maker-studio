@@ -4744,17 +4744,29 @@ static void bench_finish(AppState& state) {
         state.scrub_active = false;
     } else {
         // Dropped frames: expected vs presented at ~60 fps.
+        // th/perf-finish: headless rigs often have no audio device, so the
+        // audio clock never advances and the playhead (wall-clock fallback in
+        // app.cpp) is the only valid progress signal. When neither advanced
+        // (adv < 1 frame), the drop metric is INVALID, not zero — report
+        // explicitly instead of a meaningless 0.06%.
         double adv = (double)state.playhead - (double)state.bench_play_t0;
         if (adv < 0.0) adv = 0.0;
         double expect = wall * 60.0;
         double shown = (double)state.bench_frames;
-        double dropped = expect - shown;
-        if (dropped < 0.0) dropped = 0.0;
         r["playhead_advance_s"] = adv;
         r["expected_frames"] = expect;
         r["presented_frames"] = shown;
-        r["dropped_frames"] = dropped;
-        r["dropped_pct"] = expect > 0.0 ? 100.0 * dropped / expect : 0.0;
+        if (adv < 1.0 / 60.0 && shown <= expect) {
+            r["dropped_frames"] = nullptr;
+            r["dropped_pct"] = nullptr;
+            r["dropped_note"] = "audio clock did not advance headless (no audio device); "
+                "playhead fallback also stalled — drop metric invalid, use ui_frame_ms + presented_frames";
+        } else {
+            double dropped = expect - shown;
+            if (dropped < 0.0) dropped = 0.0;
+            r["dropped_frames"] = dropped;
+            r["dropped_pct"] = expect > 0.0 ? 100.0 * dropped / expect : 0.0;
+        }
         if (state.playing) { state.playing = false; audio_pause(); }
     }
     state.bench_running = false;
