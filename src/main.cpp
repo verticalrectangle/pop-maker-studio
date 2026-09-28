@@ -256,16 +256,21 @@ int main(int argc, char** argv) {
     state.models_ready = models_detect();
 
     // --new: skip the home/launcher and drop straight into a blank project.
+    // --open <path>: load a project immediately (same path as a Home click).
+    // Both are test-rig / automation entry points (headless IPC runs): they also
+    // bypass the first-run model-download screen, which would otherwise hold the
+    // app out of the studio — no preview draw, so snapshots/render_still/bench
+    // requests never get serviced when the Whisper model isn't installed.
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--new") {
             state.in_studio = true;
+            state.models_skipped = true;
             break;
         }
     }
-    // --open <path>: load a project immediately (same path as a Home click) —
-    // measurement/test rig companion to PMS_NO_IPC.
     for (int i = 1; i < argc - 1; ++i) {
         if (std::string(argv[i]) == "--open") {
+            state.models_skipped = true;
             open_project_path(state, argv[i + 1]);
             break;
         }
