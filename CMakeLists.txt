@@ -155,6 +155,7 @@ set(PMS_ENGINE_SOURCES
     src/hubert_onnx.cpp
     src/separate.cpp
     src/forced_align.cpp
+    src/audio_whisper_coarse.cpp
     src/agent_harness.cpp
     src/project.cpp
     src/fx_shader.cpp
@@ -641,6 +642,7 @@ add_executable(analysis-parity
     src/audio_analysis_run.cpp
     src/audio_analysis.cpp
     src/audio_dsp.cpp
+    src/audio_whisper_coarse.cpp
     src/paths.cpp
     src/separate4.cpp
 )
@@ -656,6 +658,7 @@ else()
 endif()
 target_link_libraries(analysis-parity PRIVATE
     onnxruntime fftw3f
+    $<IF:$<TARGET_EXISTS:whisper::whisper>,whisper::whisper,whisper>
     ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES} ${SWRESAMPLE_LIBRARIES}
     dl pthread
 )
