@@ -65,9 +65,13 @@ target_link_libraries(pms_skia INTERFACE
     "${_skia_libdir}/libskunicode_core.a"
     "${_skia_libdir}/libicu.a"
     "${_skia_libdir}/libskia.a"
+    # AFTER libskia.a: its GrGLMakeGLXInterface.o needs glXGetProcAddress /
+    # glXGetCurrentContext. Order matters for --as-needed linkers (Ubuntu):
+    # a GLX appearing only before libskia.a gets dropped before the archive
+    # that needs it is seen. (Locally OpenGL::GL dragged GLX in late by luck.)
+    $<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:OpenGL::GLX>
     ${HARFBUZZ_LIBRARIES}
     ${FREETYPE_LIBRARIES}
-    $<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:OpenGL::GLX>
     ${CMAKE_DL_LIBS})
 target_link_directories(pms_skia INTERFACE ${HARFBUZZ_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS})
 # Must match the flags the prebuilt was compiled with (SkUserConfig defaults +
