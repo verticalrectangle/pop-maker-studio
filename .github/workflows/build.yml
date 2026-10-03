@@ -28,6 +28,7 @@ jobs:
             libaubio-dev \
             libfftw3-dev \
             libvterm-dev \
+            libharfbuzz-dev \
             libturbojpeg0-dev \
             libwayland-dev libxkbcommon-dev wayland-protocols \
             xorg-dev \
