@@ -53,10 +53,11 @@ add_library(pms_skia INTERFACE)
 target_include_directories(pms_skia SYSTEM INTERFACE "${PMS_SKIA_DIR}")
 # Link order matters for static archives: users before providers.
 # On Linux the prebuilt's GrGLMakeGLXInterface.o references glXGetProcAddress /
-# glXGetCurrentContext. GLX must come AFTER libskia.a (Ubuntu links
-# --as-needed: an early GLX with no pending undefined GLX symbols gets dropped
-# before the archive that needs it is seen). One occurrence, late, wrapped
-# --no-as-needed so it cannot be dropped even without other pending refs.
+# glXGetCurrentContext. GLX must come AFTER libskia.a — Ubuntu links
+# --as-needed, so the early GLX from OpenGL::GL's dependency chain (no pending
+# undefined GLX symbols yet) is dropped before the archive needing it is seen.
+# $<TARGET_FILE:> emits the plain .so path, which CMake does NOT dedup against
+# the earlier OpenGL::GLX target reference — the late .so survives.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(OpenGL REQUIRED COMPONENTS OpenGL GLX)
 endif()
@@ -69,7 +70,7 @@ target_link_libraries(pms_skia INTERFACE
     # Raw -Wl, flags (not LINKER:) — CI ships cmake 3.28 (LINKER: needs 3.31+
     # generator-expression support in this position; 3.28 passed it as -l...).
     "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:-Wl,--no-as-needed>"
-    "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:OpenGL::GLX>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:$<TARGET_FILE:OpenGL::GLX>>"
     "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:-Wl,--as-needed>"
     ${HARFBUZZ_LIBRARIES}
     ${FREETYPE_LIBRARIES}
