@@ -52,6 +52,13 @@ pkg_check_modules(HARFBUZZ REQUIRED harfbuzz)
 add_library(pms_skia INTERFACE)
 target_include_directories(pms_skia SYSTEM INTERFACE "${PMS_SKIA_DIR}")
 # Link order matters for static archives: users before providers.
+# On Linux the prebuilt's GrGLMakeGLXInterface.o references glXGetProcAddress /
+# glXGetCurrentContext; GLX lives in libGL (already linked via OpenGL::GL on
+# desktop targets), but pms_skia must carry it so static-only consumers
+# (engine-smoke, headless) also resolve it.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(OpenGL REQUIRED COMPONENTS OpenGL GLX)
+endif()
 target_link_libraries(pms_skia INTERFACE
     "${_skia_libdir}/libskshaper.a"
     "${_skia_libdir}/libskunicode_icu.a"
@@ -60,6 +67,7 @@ target_link_libraries(pms_skia INTERFACE
     "${_skia_libdir}/libskia.a"
     ${HARFBUZZ_LIBRARIES}
     ${FREETYPE_LIBRARIES}
+    $<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:OpenGL::GLX>
     ${CMAKE_DL_LIBS})
 target_link_directories(pms_skia INTERFACE ${HARFBUZZ_LIBRARY_DIRS} ${FREETYPE_LIBRARY_DIRS})
 # Must match the flags the prebuilt was compiled with (SkUserConfig defaults +
