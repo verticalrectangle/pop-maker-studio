@@ -66,9 +66,11 @@ target_link_libraries(pms_skia INTERFACE
     "${_skia_libdir}/libskunicode_core.a"
     "${_skia_libdir}/libicu.a"
     "${_skia_libdir}/libskia.a"
-    "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:LINKER:--no-as-needed>"
+    # Raw -Wl, flags (not LINKER:) — CI ships cmake 3.28 (LINKER: needs 3.31+
+    # generator-expression support in this position; 3.28 passed it as -l...).
+    "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:-Wl,--no-as-needed>"
     "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:OpenGL::GLX>"
-    "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:LINKER:--as-needed>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_NAME},Linux>:-Wl,--as-needed>"
     ${HARFBUZZ_LIBRARIES}
     ${FREETYPE_LIBRARIES}
     ${CMAKE_DL_LIBS})
