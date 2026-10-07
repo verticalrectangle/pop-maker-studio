@@ -7,21 +7,21 @@ so placement rides the topology the device mesh shares:
 
   * the eye-hole rims are the lash lines (liner + lashes are drawn live from
     them by the engine; masks here only place the shadow around them);
-  * the concentric 36-vertex loops around the mouth are the lip anatomy —
-    loop 3 traces the vermilion border (its upper half carries the cupid's
-    bow and is the lip's most protruding ridge), so the lip SDF is defined on
-    the loop field and follows every wearer's fitted lips.
+  * the concentric 36-vertex loops around the mouth bound the lips — loop 3
+    traces the canonical head's vermilion border. Real lips vary against the
+    loops, so the engine reads the lip edge from the camera inside this
+    region; the SDF bounds it (border + 3 mm) and marks the lip core.
 
 The engine (src/arkit_makeup.mm) samples two RGBA atlases per look:
 
-  <id>_a.png  1024²  r skin (smoothing region)  g blush  b eyeshadow  a brow region
+  <id>_a.png  1024²  r skin (smoothing region)  g blush  b eyeshadow  a unused
   <id>_b.png  2048²  r lip SDF  g freckles  b gloss/highlighter  a inner-corner light
 
-Lip SDF = 0.5 + d/16, d = signed distance (mm) to the vermilion border,
-negative inside the lips; the engine shifts the border by the look's
-`overline_mm`. Colors and amounts live in the look JSON next to the masks
-(models/face/arkit/<id>.json); this tool owns geometry only. Masks are padded
-past their UV islands so GPU mipmaps never pull in the empty atlas background.
+Lip SDF = 0.5 + d/16, d = signed distance (mm) to the canonical vermilion
+border, negative inside the lips. Colors and amounts live in the look JSON
+next to the masks (models/face/arkit/<id>.json); this tool owns geometry only.
+Masks are padded past their UV islands so GPU mipmaps never pull in the empty
+atlas background.
 
 Usage: tools/gen_arkit_makeup.py [--assets <pms-ios Engine/EngineAssets>] [--only id ...]
 """
@@ -315,9 +315,10 @@ class Masks:
         return np.clip(d, -8.0, 8.0)
 
     def egirl(self):
-        """The E-Girl look: big saturated apples + nose flush, faint freckles
+        """The E-Girl look: soft saturated apples + nose flush, faint freckles
         across the nose and upper cheeks, soft warm-brown crease and outer
-        smudge, nose-tip highlight, glossy full lips, brown brows."""
+        smudge, nose-tip highlight, glossy lips. Brows stay natural (their
+        region only keeps skin smoothing off the hair)."""
         h = self.head
         out = {}
 
@@ -365,27 +366,27 @@ class Masks:
                 d2 = np.minimum(d2, np.linalg.norm(P[:, :2] - (a + t[:, None] * e), axis=1))
             brow = np.maximum(brow, (1.0 - smooth(3.6, 6.8, d2)) * (r.Nrm[:, 2] > 0.1))
 
-        # blush: round apples under the outer half of the eye at nose-tip
-        # height, plus the flush band across the nose (lighter on the bridge)
+        # blush: soft round apples under the outer half of the eye at
+        # nose-tip height (a plain Gaussian — a flattened top reads as a
+        # painted disc), plus the flush band across the nose
         apples = np.zeros(len(P))
         for sx in (-1.0, 1.0):
-            c = h.surface_point(33.0 * sx, -3.0)
-            d2 = (((P[:, 0] - c[0]) / 10.5) ** 2 + ((P[:, 1] - c[1]) / 9.5) ** 2
-                  + ((P[:, 2] - c[2]) / 10.5) ** 2)
-            g = np.exp(-0.5 * d2)
-            apples = soft_union(apples, 1.0 - (1.0 - g) ** 1.6)
+            c = h.surface_point(34.0 * sx, -4.0)
+            d2 = (((P[:, 0] - c[0]) / 12.5) ** 2 + ((P[:, 1] - c[1]) / 11.0) ** 2
+                  + ((P[:, 2] - c[2]) / 12.5) ** 2)
+            apples = soft_union(apples, np.exp(-0.5 * d2))
         band = (np.exp(-0.5 * ((P[:, 1] - 3.0) / 5.5) ** 2)
                 * (0.5 + 0.5 * smooth(5.0, 18.0, np.abs(P[:, 0])))
                 * (1.0 - smooth(26.0, 36.0, np.abs(P[:, 0])))
                 * (r.Nrm[:, 2] > 0.0))
-        blush = soft_union(apples, 0.8 * band)
+        blush = soft_union(apples, 0.7 * band)
 
         lip_a = self.lip_sdf(r)
         boundary = h.V[h.outer_ring + h.outer_ring[:1]]
         d_edge, _, _ = polyline_dist(P, boundary)
         skin = (smooth(3.0, 12.0, d_edge) * eye_excl * smooth(0.5, 2.0, lip_a)
                 * (1.0 - 0.9 * brow))
-        out["a"] = r.image([skin, blush, shadow, brow])
+        out["a"] = r.image([skin, blush, shadow, np.zeros(len(P))])
 
         # ── atlas B (2048²) ──
         r = self.rb
@@ -393,29 +394,30 @@ class Masks:
         lip = r.smooth_uv(self.lip_sdf(r), sigma=4.0)
         rng = np.random.default_rng(20261007)
 
-        # freckles: sparse, small, warm — nose bridge and the upper cheeks
+        # freckles: few, small, faint — nose bridge and the cheek tops, kept
+        # clear of the lower lids
         zone = np.maximum(
-            ((np.abs(P[:, 0]) < 13.0) & (P[:, 1] > -3.0) & (P[:, 1] < 16.0)).astype(float),
-            np.maximum(1.0 - smooth(8.0, 16.0, np.hypot(P[:, 0] - 27.0, P[:, 1] - 6.0)),
-                       1.0 - smooth(8.0, 16.0, np.hypot(P[:, 0] + 27.0, P[:, 1] - 6.0))))
+            ((np.abs(P[:, 0]) < 12.0) & (P[:, 1] > -3.0) & (P[:, 1] < 12.0)).astype(float),
+            np.maximum(1.0 - smooth(6.0, 13.0, np.hypot(P[:, 0] - 27.0, P[:, 1] - 2.0)),
+                       1.0 - smooth(6.0, 13.0, np.hypot(P[:, 0] + 27.0, P[:, 1] - 2.0))))
         zone *= (r.Nrm[:, 2] > 0.15)
         freck = np.zeros(len(P))
         centers = []
         cand = rng.permutation(np.nonzero(zone > 0.05)[0])
         for i in cand:
-            if len(centers) >= 72:
+            if len(centers) >= 40:
                 break
             if rng.random() > zone[i]:
                 continue
             p = P[i]
-            if centers and np.min(np.linalg.norm(np.asarray(centers) - p, axis=1)) < 2.3:
+            if centers and np.min(np.linalg.norm(np.asarray(centers) - p, axis=1)) < 3.0:
                 continue
             centers.append(p)
         texel_of = np.full((r.size, r.size), -1, np.int64)
         texel_of[r.iy, r.ix] = np.arange(len(P))
         for p in centers:
-            rad = 0.33 + 0.45 * rng.random() ** 2
-            op = 0.4 + 0.5 * rng.random()
+            rad = 0.25 + 0.30 * rng.random() ** 2
+            op = 0.3 + 0.45 * rng.random()
             i0 = int(np.argmin(np.linalg.norm(P - p, axis=1)))
             y, x = r.iy[i0], r.ix[i0]
             win = texel_of[max(y - 14, 0):y + 15, max(x - 14, 0):x + 15].ravel()
@@ -423,18 +425,20 @@ class Masks:
             d = np.linalg.norm(P[win] - p, axis=1)
             freck[win] = np.maximum(freck[win], op * (1.0 - smooth(rad - 0.15, rad + 0.25, d)))
 
-        # gloss on the lip centers (lower lip fuller), highlighter on the nose
-        # tip (the look's signature shine), bridge, cheekbone tops, cupid's bow
+        # gloss on the lip centers (lower lip fuller), faded only right at the
+        # mouth slit (its normals catch the light along the whole seam);
+        # highlighter on the nose tip (the look's signature shine), bridge and
+        # cheekbone tops
         xn = np.abs(P[:, 0] - h.mouth_c[0]) / MOUTH_HALF_W
         upper_w = smooth(-1.5, 1.5, P[:, 1] - h.mouth_c[1])
+        seam = smooth(0.3, 1.0, r.interp(h.loop))
         gloss = (smooth(-0.5, -1.7, lip) * (1.0 - 0.5 * smooth(0.3, 0.9, xn))
-                 * (1.0 - 0.3 * upper_w))
+                 * (1.0 - 0.3 * upper_w) * seam)
         tip = h.nose_tip + np.array([0.0, 1.5, -0.6])
         hl = soft_union(gauss(P, tip, 2.8),
                         0.45 * gauss(P, h.surface_point(0.0, 14.0), 2.4),
                         0.30 * gauss(P, h.surface_point(-40.0, 13.0), 5.0),
-                        0.30 * gauss(P, h.surface_point(40.0, 13.0), 5.0),
-                        0.40 * gauss(P, h.surface_point(0.0, h.mouth_c[1] + 8.8), 1.6))
+                        0.30 * gauss(P, h.surface_point(40.0, 13.0), 5.0))
         gloss_hl = np.maximum(gloss, hl * smooth(0.4, 1.4, lip))
 
         inner = np.zeros(len(P))

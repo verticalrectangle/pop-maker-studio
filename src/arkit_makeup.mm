@@ -3,21 +3,26 @@
 // Everything renders on ARKit's own 1220-vertex face mesh, drawn with ARKit's
 // own camera matrices from the same ARFrame as the pixels, so alignment,
 // blinks and expressions are carried by the surface itself. Per frame:
-//   1. prep   (half res, mesh)   linear camera color × skin mask, premultiplied
+//   1. prep   (half res, mesh)   linear camera color × skin mask, premultiplied;
+//                                second target: the lip core (mean lip color)
 //   2. blur   (half res, 2× 1-D) mask-normalized bilateral → the local skin
 //                                color; its 1×1 mip = the face-mean skin color
+//   2b. lipev (half res, mesh)   lip evidence: redness over the local skin
 //   3. face   (full res, mesh)   skin finish, pigment layers, lips, analytic
 //                                3D liner, gloss/highlight from ARKit's light
 //   4. lashes (full res)         depth-tested strands, premultiplied over
 //
-// Pigment model (linear light): each color in a look is authored as "how it
-// reads on the look's reference skin" (sampled from the reference photo), so
-// a layer is the per-channel transmittance T = lin(color) / lin(reference)
-// applied Beer–Lambert style, c *= T^(coverage · amount). The camera's own
-// lighting, pores and shading survive because pigment only filters the light
-// already there, and every skin tone keeps its own depth. Lip cream and liner
-// ink use the same ratio over the local skin color; gloss and highlighter add
-// light (GGX specular from ARKit's primary light on the mesh normals).
+// Pigment model (linear light): each translucent color in a look is authored
+// as "how it reads on the look's reference skin" (sampled from the reference
+// photo), so a layer is the per-channel transmittance T = lin(color) /
+// lin(reference) applied Beer–Lambert style, c *= T^(coverage · amount). The
+// camera's own lighting, pores and shading survive because pigment only
+// filters the light already there, and every skin tone keeps its own depth.
+// Liner ink uses the same ratio over the local skin color. Lipstick is opaque:
+// the product color, re-lit by the lips' own shading; where the lips are is
+// read from the camera image inside the mesh's mouth region (lip tissue is
+// redder than skin — the canonical lip loops are not every wearer's lips).
+// Gloss and highlighter add light (GGX specular from ARKit's primary light).
 //
 // A look is data — models/face/arkit/<id>.json + the two mask atlases it names
 // (tools/gen_arkit_makeup.py) — documented in pms-ios docs/ARKIT_NATIVE_PLAN.md.
@@ -57,6 +62,34 @@ static float3 to_srgb(float3 c) {
 }
 static float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 static float3 tint(float3 t, float k) { return pow(t, float3(k)); }
+static float redness(float3 c) { return (c.r - c.g) / max(c.r + c.g, 1e-4); }
+// Lip tissue is redder than the skin around it, whatever the light.
+static float lip_evidence(float3 c, float skin_red) {
+    return smoothstep(0.04, 0.11, redness(c) - skin_red);
+}
+// Local skin color at screen point sp (mask-normalized blur; the face mean
+// where no skin is near) and the face-mean skin color (the blur's 1×1 mip).
+static float3 local_skin(texture2d<float> blur, float2 sp, float mean_level, float3 fallback,
+                         thread float3& mean_skin, thread float& support) {
+    constexpr sampler ls(filter::linear, address::clamp_to_edge);
+    constexpr sampler mean_s(filter::linear, mip_filter::nearest, address::clamp_to_edge);
+    float4 bl = blur.sample(ls, sp);
+    float4 m4 = blur.sample(mean_s, float2(0.5), level(mean_level));
+    mean_skin = m4.a > 1e-6 ? m4.rgb / m4.a : fallback;
+    support = smoothstep(0.02, 0.25, bl.a);
+    return mix(mean_skin, bl.rgb / max(bl.a, 1e-4), support);
+}
+
+// GGX specular (normalized, Schlick Fresnel at F0 = 0.04) for unit vectors.
+static float ggx_spec(float3 N, float3 V, float3 L, float rough) {
+    float3 H = normalize(L + V);
+    float ndl = saturate(dot(N, L)), ndh = saturate(dot(N, H)), vdh = saturate(dot(V, H));
+    float a2 = rough * rough * rough * rough;
+    float dd = ndh * ndh * (a2 - 1.0) + 1.0;
+    float D = a2 / (3.14159265 * dd * dd);
+    float F = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
+    return D * F * 0.25 * ndl;
+}
 
 // ── face mesh ──
 struct MeshUni { float4x4 mvp; float4x4 mv; float2 inv_target; float2 pad; };
@@ -82,16 +115,25 @@ vertex MeshOut mk_mesh_v(uint vid [[vertex_id]],
     return o;
 }
 
-// 1. prep: premultiplied (linear rgb · w, w), w = skin mask × facing.
-fragment float4 mk_prep_f(MeshOut in [[stage_in]],
-                          constant MeshUni& u [[buffer(0)]],
-                          texture2d<float> src [[texture(0)]],
-                          texture2d<float> mask_a [[texture(1)]]) {
+// 1. prep: premultiplied (linear rgb · w, w), w = skin mask × facing; the lip
+// target accumulates the lip core (deep inside the mouth loops — lips on
+// every face), whose 1×1 mip is the wearer's mean lip color.
+struct PrepOut { float4 skin [[color(0)]]; float4 lip [[color(1)]]; };
+fragment PrepOut mk_prep_f(MeshOut in [[stage_in]],
+                           constant MeshUni& u [[buffer(0)]],
+                           texture2d<float> src [[texture(0)]],
+                           texture2d<float> mask_a [[texture(1)]],
+                           texture2d<float> mask_b [[texture(2)]]) {
     constexpr sampler ls(filter::linear, mip_filter::linear, address::clamp_to_edge);
     float face = smoothstep(0.08, 0.32, dot(normalize(in.vnrm), normalize(-in.vpos)));
-    float w = mask_a.sample(ls, in.uv).r * face;
     float3 c = to_lin(src.sample(ls, in.pos.xy * u.inv_target).rgb);
-    return float4(c * w, w);
+    float w = mask_a.sample(ls, in.uv).r * face;
+    float d_mm = (mask_b.sample(ls, in.uv).r - 0.5) * 16.0;
+    float wl = (1.0 - smoothstep(-6.0, -4.5, d_mm)) * face;
+    PrepOut o;
+    o.skin = float4(c * w, w);
+    o.lip = float4(c * wl, wl);
+    return o;
 }
 
 // 2. blur: mask-normalized separable bilateral. Non-skin texels (eyes, brows,
@@ -126,6 +168,34 @@ fragment float4 mk_blur_f(FsOut in [[stage_in]], constant BlurUni& u [[buffer(0)
     return acc / max(wsum, 1e-6);
 }
 
+// 2b. lip evidence (half res, mesh): how lip-like each point of the mouth
+// region is — redness over the local skin of a ~6 px averaged color, so
+// camera chroma subsampling and JPEG blocks never reach the edge. The face
+// pass samples it bilinearly (smooth edges) and dilates it for the overline.
+struct EvUni { float2 inv_src; float mean_level; float pad; };
+fragment float4 mk_lipev_f(MeshOut in [[stage_in]],
+                           constant MeshUni& mu [[buffer(0)]],
+                           constant EvUni& u [[buffer(1)]],
+                           texture2d<float> src [[texture(0)]],
+                           texture2d<float> blur [[texture(1)]],
+                           texture2d<float> mask_b [[texture(2)]]) {
+    constexpr sampler ls(filter::linear, address::clamp_to_edge);
+    constexpr sampler ms(filter::linear, mip_filter::linear, address::clamp_to_edge);
+    float d_mm = (mask_b.sample(ms, in.uv).r - 0.5) * 16.0;
+    if (d_mm > 3.0) return float4(0.0);
+    float2 sp = in.pos.xy * mu.inv_target;
+    float3 acc = 0.0;
+    for (int j = 0; j < 9; ++j) {
+        float2 o = float2(float(j % 3) - 1.0, float(j / 3) - 1.0) * 2.0;   // full-res px
+        acc += to_lin(src.sample(ls, sp + o * u.inv_src).rgb);
+    }
+    acc *= 1.0 / 9.0;
+    float3 mean_skin;
+    float support;
+    float3 lo = local_skin(blur, sp, u.mean_level, acc, mean_skin, support);
+    return float4(lip_evidence(acc, redness(lo)));
+}
+
 // 3. face composite.
 struct FaceUni {
     float2 inv_target; float amount; float overlay;
@@ -133,58 +203,34 @@ struct FaceUni {
     float4 blush;       // rgb transmittance, a amount
     float4 shadow;
     float4 freckle;
-    float4 brow;
-    float4 misc;        // x brow fill, y inner-corner light
-    float4 lip_cream;   // rgb ratio over the local skin, a cover
-    float4 lip_shape;   // x overline mm, y edge softness mm, z gloss, w gloss roughness
+    float4 misc;        // x inner-corner light, y reference skin luma (linear)
+    float4 lip_cream;   // rgb lipstick (linear, as on the reference face), a cover
+    float4 lip_shape;   // x overline mm, y luminance match, z gloss, w gloss roughness
     float4 hl;          // x highlight amount, y roughness, z sheen
     float4 ink;         // rgb liner ratio over the local skin, a amount
-    float4 liner;       // x inner width m, y outer width m, z rim offset m
     float4 light_dir;   // xyz view-space direction to the light, w gain
     float4 light_col;   // rgb, luma 1
-    float4 rim[24];     // per eye (0: person's right, x < 0): lash line, outer → inner
-    float4 wing[6];     // per eye: corner, tip, corner surface normal
+    float4 stroke[32];  // per eye (0: person's right, x < 0): liner centerline from
+                        // the inner corner — 10 lash-line + 6 wing points, w = width (m)
+    float4 corner_n[2]; // per eye: outer-corner surface normal
 };
 
-// Liner coverage at anchor-space point p: a band of width w(t) on the lid side
-// of the live lash-line polyline plus a tapered wing stroke projected onto the
-// outer corner's tangent plane. Distances are true millimetres on the face;
-// `px_m` is the fragment's footprint in meters (antialiasing width).
+// Liner coverage at anchor-space point p: signed distance to one
+// variable-width stroke. The lash-line part is measured in 3D on the lid; the
+// wing leaves the eye's curvature, so it is measured in the outer corner's
+// tangent plane. `px_m` is the fragment's footprint in meters (antialiasing).
 static float liner_cover(constant FaceUni& u, float3 p, float px_m) {
     int e = p.x < 0.0 ? 0 : 1;
-    float best = 1e9, best_t = 0.0, side = 0.0;
-    for (int k = 0; k < 11; ++k) {
-        float3 p0 = u.rim[e * 12 + k].xyz, p1 = u.rim[e * 12 + k + 1].xyz;
-        float3 ed = p1 - p0;
-        float t = saturate(dot(p - p0, ed) / max(dot(ed, ed), 1e-12));
-        float3 q = p0 + ed * t;
-        float d = length(p - q);
-        if (d < best) {
-            best = d;
-            best_t = (float(k) + t) / 11.0;
-            float3 up = cross(float3(0.0, 0.0, 1.0), normalize(ed));
-            up = up.y < 0.0 ? -up : up;
-            side = dot(p - q, normalize(up));
-        }
+    float3 n = u.corner_n[e].xyz;
+    float sd = 1e9;
+    for (int k = 0; k < 15; ++k) {
+        float4 a = u.stroke[e * 16 + k], b = u.stroke[e * 16 + k + 1];
+        float3 pa = p - a.xyz, ab = b.xyz - a.xyz;
+        if (k >= 9) { pa -= n * dot(pa, n); ab -= n * dot(ab, n); }
+        float t = saturate(dot(pa, ab) / max(dot(ab, ab), 1e-12));
+        sd = min(sd, length(pa - ab * t) - 0.5 * mix(a.w, b.w, t));
     }
-    float w = mix(u.liner.y, u.liner.x, best_t) * (1.0 - 0.6 * smoothstep(0.8, 1.0, best_t));
-    float s = side - u.liner.z;
-    float aa = px_m;
-    float band = smoothstep(-aa, aa, s) * (1.0 - smoothstep(w - aa, w + aa, s))
-               * (1.0 - smoothstep(w - aa, w + aa, best));
-    float wing = 0.0;
-    float3 O = u.wing[e * 3 + 0].xyz, T = u.wing[e * 3 + 1].xyz, n = u.wing[e * 3 + 2].xyz;
-    float3 ed = T - O; ed -= n * dot(ed, n);
-    float L2 = dot(ed, ed);
-    if (L2 > 1e-10) {
-        float3 q = p - O; q -= n * dot(q, n);
-        float t = saturate(dot(q, ed) / L2);
-        float dw = length(q - ed * t);
-        float ww = u.liner.y * pow(1.0 - t, 0.9);
-        float aa2 = px_m;
-        wing = 1.0 - smoothstep(ww - aa2, ww + aa2, dw);
-    }
-    return max(band, wing);
+    return 1.0 - smoothstep(-px_m, px_m, sd);
 }
 
 fragment float4 mk_face_f(MeshOut in [[stage_in]],
@@ -192,7 +238,9 @@ fragment float4 mk_face_f(MeshOut in [[stage_in]],
                           texture2d<float> src [[texture(0)]],
                           texture2d<float> blur [[texture(1)]],
                           texture2d<float> mask_a [[texture(2)]],
-                          texture2d<float> mask_b [[texture(3)]]) {
+                          texture2d<float> mask_b [[texture(3)]],
+                          texture2d<float> lipm [[texture(4)]],
+                          texture2d<float> lipev [[texture(5)]]) {
     constexpr sampler ls(filter::linear, address::clamp_to_edge);
     constexpr sampler ms(filter::linear, mip_filter::linear, address::clamp_to_edge,
                          max_anisotropy(8));
@@ -200,24 +248,21 @@ fragment float4 mk_face_f(MeshOut in [[stage_in]],
     float2 sp = in.pos.xy * u.inv_target;
     float3 c0 = to_lin(src.sample(ls, sp).rgb);
     float3 c = c0;
-    float4 A = mask_a.sample(ms, in.uv);   // r skin, g blush, b shadow, a brow
+    float4 A = mask_a.sample(ms, in.uv);   // r skin, g blush, b shadow
     float4 B = mask_b.sample(ms, in.uv);   // r lip SDF, g freckles, b gloss/highlight, a inner light
     float3 N = normalize(in.vnrm), V = normalize(-in.vpos);
     float ndv = saturate(dot(N, V));
     float face = smoothstep(0.08, 0.32, ndv);
     float amt = u.amount, amt1 = min(amt, 1.0);
 
-    // Local skin color (mask-normalized blur) and the face-mean skin color.
-    float4 bl = blur.sample(ls, sp);
-    float4 m4 = blur.sample(mean_s, float2(0.5), level(u.skin.w));
-    float3 mean_skin = m4.a > 1e-6 ? m4.rgb / m4.a : c0;
-    float support = smoothstep(0.02, 0.25, bl.a);
-    float3 lo = mix(mean_skin, bl.rgb / max(bl.a, 1e-4), support);
+    float3 mean_skin;
+    float support;
+    float3 lo = local_skin(blur, sp, u.skin.w, c0, mean_skin, support);
 
     float px_m = max(0.7 * length(fwidth(in.mpos)), 2e-5);
     float ink = liner_cover(u, in.mpos, px_m);
 
-    if (u.overlay > 0.5) {               // alignment QA: UV checker + lash line
+    if (u.overlay > 0.5) {               // alignment QA: UV checker + liner
         float2 cell = floor(in.uv * 48.0);
         float chk = fmod(cell.x + cell.y, 2.0);
         float3 dbg = mix(float3(0.85, 0.15, 0.55), float3(0.15, 0.85, 0.35), chk);
@@ -237,37 +282,64 @@ fragment float4 mk_face_f(MeshOut in [[stage_in]],
     c *= tint(u.blush.rgb,   A.g * u.blush.a   * k);
     c *= tint(u.freckle.rgb, B.g * u.freckle.a * k);
     c *= tint(u.shadow.rgb,  A.b * u.shadow.a  * k);
-    c *= 1.0 + B.a * u.misc.y * k;                                  // inner-corner light
-    // hair = clearly darker than the surrounding skin (skin texture is not)
-    float hair = smoothstep(0.10, 0.30, (luma(lo) - luma(c0)) / max(luma(lo), 1e-4));
-    c *= tint(u.brow.rgb, A.a * u.brow.a * k * mix(u.misc.x, 1.0, hair));
+    c *= 1.0 + B.a * u.misc.x * k;                                  // inner-corner light
 
-    // 3. lips: SDF edge (overline is a parameter), opaque cream that keeps the
-    // lip's own shading.
-    float d_mm = (B.r - 0.5) * 16.0 - u.lip_shape.x;
-    float aa = max(fwidth(d_mm), u.lip_shape.y);
-    float lip = (1.0 - smoothstep(-aa, aa, d_mm)) * face;
-    float shading = clamp(luma(c) / max(0.78 * luma(lo), 1e-4), 0.45, 1.6);
-    c = mix(c, u.lip_cream.rgb * lo * shading, saturate(lip * u.lip_cream.a * amt));
+    // 3. lips: the mesh bounds a generous mouth region (canonical border +
+    // 3 mm); the camera decides where the lips are, grown by the overline,
+    // and the deep lip core always counts (low-contrast lips still get
+    // color). The cream is the product color re-lit by the lips' own
+    // shading relative to their mean, so volume, creases and real
+    // highlights survive; on overlined skin it is flat product color.
+    float d_mm = (B.r - 0.5) * 16.0;
+    float prior = (1.0 - smoothstep(0.5, 3.0, d_mm)) * face;
+    float lip = 0.0, lip_tex = 1.0;
+    if (prior > 0.002) {
+        float ev = lipev.sample(ls, sp).r;
+        float r_px = u.lip_shape.x * 1e-3 / px_m;      // overline radius, px
+        float grown = 0.0;                               // dilation by the overline
+        for (int j = 0; j < 8; ++j) {
+            float ang = float(j) * 0.7853982;
+            float2 o = float2(cos(ang), sin(ang)) * r_px;
+            grown = max(grown, lipev.sample(ls, sp + o * u.inv_target).r);
+        }
+        float core = 1.0 - smoothstep(-6.0, -4.5, d_mm);
+        lip = prior * max(max(ev, grown), core);
+
+        float4 lm = lipm.sample(mean_s, float2(0.5), level(u.skin.w));
+        float lip_mean = lm.a > 1e-6 ? luma(lm.rgb / lm.a) : 0.8 * luma(lo);
+        float adapt = sqrt(clamp(luma(mean_skin) / max(u.misc.y, 1e-4), 0.5, 1.6));
+        float3 P = u.lip_cream.rgb * adapt;
+        float lp = max(luma(P), 1e-4);
+        float target = mix(lip_mean, lp, u.lip_shape.y);
+        float shade = mix(1.0, clamp(luma(c) / max(lip_mean, 1e-4), 0.35, 2.5), ev);
+        c = mix(c, P * (target / lp) * shade, saturate(lip * u.lip_cream.a * amt));
+        lip_tex = shade;
+    }
 
     // 4. liner: opaque ink over the local skin (stays visible near grazing).
     float ink_face = smoothstep(0.02, 0.12, ndv);
     c = mix(c, u.ink.rgb * lo, saturate(ink * u.ink.a * amt1 * ink_face));
 
-    // 5. gloss + highlighter: GGX specular from ARKit's primary light.
+    // 5. gloss + highlighter: GGX specular. Shine on a selfie mostly mirrors
+    // what faces the face — the screen, a ring light, the room in front — so
+    // a soft frontal key above the camera joins ARKit's primary light. The
+    // highlighter never touches the mouth region; on the lips the gloss is
+    // broken up by their own texture (ridges catch it, creases don't)
+    // instead of a smooth blob on ARKit's coarse normals.
+    float on_lip = saturate(lip * u.lip_cream.a);
+    float off_lip = smoothstep(0.0, 1.5, d_mm);
     float3 L = normalize(u.light_dir.xyz);
-    float3 H = normalize(L + V);
-    float ndl = saturate(dot(N, L)), ndh = saturate(dot(N, H)), vdh = saturate(dot(V, H));
-    float rough = mix(u.hl.y, u.lip_shape.w, lip);
-    float a2 = rough * rough * rough * rough;
-    float dd = ndh * ndh * (a2 - 1.0) + 1.0;
-    float D = a2 / (3.14159265 * dd * dd);
-    float F = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
-    float spec = D * F * 0.25 * ndl * u.light_dir.w;
+    const float3 L_front = normalize(float3(0.0, 0.35, 1.0));
     float E = luma(lo) / 0.45;                       // irradiance vs. a 0.45-albedo skin
-    float g = B.b * mix(u.hl.x, u.lip_shape.z, lip) * amt * face;
-    c += u.light_col.rgb * spec * E * g;
-    c += lo * u.hl.z * B.b * (1.0 - lip) * amt * face;              // highlighter sheen
+    float hl_spec = ggx_spec(N, V, L, u.hl.y) * u.light_dir.w + 0.7 * ggx_spec(N, V, L_front, u.hl.y);
+    c += u.light_col.rgb * hl_spec * E * B.b * u.hl.x * off_lip * amt * face;
+    c += lo * u.hl.z * B.b * off_lip * amt * face;                  // highlighter sheen
+    if (on_lip > 0.0) {
+        float rough = u.lip_shape.w;
+        float lip_spec = ggx_spec(N, V, L, rough) * u.light_dir.w + 0.7 * ggx_spec(N, V, L_front, rough);
+        float ridges = pow(clamp(lip_tex, 0.5, 1.8), 2.0);
+        c += u.light_col.rgb * lip_spec * E * ridges * B.b * u.lip_shape.z * on_lip * amt * face;
+    }
 
     return float4(to_srgb(c), 1.0);
 }
@@ -390,11 +462,10 @@ struct LashRow {
 struct Look {
     id<MTLTexture> mask_a = nil, mask_b = nil;
     float smooth = 0.f, smooth_mm = 2.f, even = 0.f, lift = 0.f;
-    float blush[4] = {1, 1, 1, 0}, shadow[4] = {1, 1, 1, 0};
-    float freckle[4] = {1, 1, 1, 0}, brow[4] = {1, 1, 1, 0};
-    float brow_fill = 0.f, inner_light = 0.f;
-    float lip_cream[4] = {1, 1, 1, 0};
-    float overline_mm = 0.f, lip_edge_mm = 0.25f, gloss = 0.f, gloss_rough = 0.3f;
+    float blush[4] = {1, 1, 1, 0}, shadow[4] = {1, 1, 1, 0}, freckle[4] = {1, 1, 1, 0};
+    float inner_light = 0.f, ref_luma = 0.5f;
+    float lip_cream[4] = {1, 1, 1, 0};   // linear product color, cover
+    float overline_mm = 0.f, lip_match = 0.85f, gloss = 0.f, gloss_rough = 0.3f;
     float hl_amt = 0.f, hl_rough = 0.4f, hl_sheen = 0.f;
     float ink[4] = {0, 0, 0, 0};
     float liner_in_mm = 0.3f, liner_out_mm = 1.f, wing_mm = 0.f, wing_lift_deg = 15.f;
@@ -482,6 +553,7 @@ std::unique_ptr<Look> load_look(id<MTLDevice> dev, id<MTLCommandQueue> q, const 
     float ref_lin[3];
     parse_hex(j.value("reference_skin", std::string("#deb7ae")), ref);
     for (int i = 0; i < 3; ++i) ref_lin[i] = srgb_to_lin(ref[i]);
+    L->ref_luma = 0.2126f * ref_lin[0] + 0.7152f * ref_lin[1] + 0.0722f * ref_lin[2];
 
     const json skin = j.value("skin", json::object());
     L->smooth = jf(skin, "smooth", 0.f);
@@ -491,15 +563,18 @@ std::unique_ptr<Look> load_look(id<MTLDevice> dev, id<MTLCommandQueue> q, const 
     ratio_layer(j, "blush", ref_lin, L->blush);
     ratio_layer(j, "shadow", ref_lin, L->shadow);
     ratio_layer(j, "freckles", ref_lin, L->freckle);
-    ratio_layer(j, "brows", ref_lin, L->brow);
-    L->brow_fill = jf(j.value("brows", json::object()), "fill", 0.f);
     L->inner_light = jf(j, "inner_light", 0.f);
 
+    // Lipstick is opaque: its color is absolute (as it reads on the
+    // reference face), not a ratio over the wearer's lips.
     const json lips = j.value("lips", json::object());
-    ratio_layer(j, "lips", ref_lin, L->lip_cream);
-    L->lip_cream[3] = jf(lips, "cover", 0.f);
+    float lip_srgb[3];
+    if (parse_hex(lips.value("color", std::string()), lip_srgb)) {
+        for (int i = 0; i < 3; ++i) L->lip_cream[i] = srgb_to_lin(lip_srgb[i]);
+        L->lip_cream[3] = jf(lips, "cover", 0.f);
+    }
     L->overline_mm = jf(lips, "overline_mm", 0.f);
-    L->lip_edge_mm = jf(lips, "edge_mm", 0.25f);
+    L->lip_match = jf(lips, "match", 0.85f);
     L->gloss = jf(lips, "gloss", 0.f);
     L->gloss_rough = jf(lips, "roughness", 0.3f);
 
@@ -530,13 +605,14 @@ constexpr int kMaxLashVerts = 2 * (160 + 60) * 6 * 6;
 
 struct MeshUniC { float mvp[16]; float mv[16]; float inv_target[2]; float pad[2]; };
 struct BlurUniC { float step[2]; float range; float pad; };
+struct EvUniC { float inv_src[2]; float mean_level; float pad; };
 struct FaceUniC {
     float inv_target[2]; float amount; float overlay;
-    float skin[4], blush[4], shadow[4], freckle[4], brow[4], misc[4];
-    float lip_cream[4], lip_shape[4], hl[4], ink[4], liner[4];
+    float skin[4], blush[4], shadow[4], freckle[4], misc[4];
+    float lip_cream[4], lip_shape[4], hl[4], ink[4];
     float light_dir[4], light_col[4];
-    float rim[24][4];
-    float wing[6][4];
+    float stroke[32][4];
+    float corner_n[2][4];
 };
 struct LashVtx { float p0[3]; float p1[3]; float w0, w1, side, end, shade, pad; };
 struct LashUniC { float mvp[16]; float half_target[2]; float px_per_m; float alpha; float color[4]; };
@@ -546,24 +622,27 @@ struct Ctx {
     bool tried = false, ok = false;
     id<MTLDevice> dev = nil;
     id<MTLCommandQueue> upload_q = nil;
-    id<MTLRenderPipelineState> prep = nil, blur = nil, face = nil, lash = nil;
+    id<MTLRenderPipelineState> prep = nil, blur = nil, lipev = nil, face = nil, lash = nil;
     id<MTLDepthStencilState> dss_face = nil, dss_lash = nil;
     id<MTLBuffer> uv = nil, idx = nil;
     id<MTLBuffer> pos[kRing] = {}, nrm[kRing] = {}, lashv[kRing] = {};
     int ring = 0;
     int tw = 0, th = 0;                                   // full-res target size
     id<MTLTexture> half0 = nil, half1 = nil, half2 = nil;  // prep, blur tmp, blur out (mips)
+    id<MTLTexture> half_lip = nil;                         // prep lip core (mips → mean lip)
+    id<MTLTexture> half_ev = nil;                          // lip evidence
     id<MTLTexture> depth = nil;
     std::map<std::string, std::unique_ptr<Look>> looks;   // nullptr = known missing
 };
 Ctx g;
 
 id<MTLRenderPipelineState> make_pso(id<MTLLibrary> lib, NSString* vfn, NSString* ffn,
-                                    MTLPixelFormat color, bool depth, bool premul) {
+                                    MTLPixelFormat color, bool depth, bool premul,
+                                    int targets = 1) {
     MTLRenderPipelineDescriptor* rd = [MTLRenderPipelineDescriptor new];
     rd.vertexFunction = [lib newFunctionWithName:vfn];
     rd.fragmentFunction = [lib newFunctionWithName:ffn];
-    rd.colorAttachments[0].pixelFormat = color;
+    for (int i = 0; i < targets; ++i) rd.colorAttachments[i].pixelFormat = color;
     if (depth) rd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
     if (premul) {
         auto* ca = rd.colorAttachments[0];
@@ -587,8 +666,9 @@ bool init_ctx(id<MTLDevice> dev) {
     NSError* err = nil;
     id<MTLLibrary> lib = [dev newLibraryWithSource:kMakeupSrc options:nil error:&err];
     if (!lib) { NSLog(@"[arkit_makeup] library: %@", err); return false; }
-    g.prep = make_pso(lib, @"mk_mesh_v", @"mk_prep_f", MTLPixelFormatRGBA16Float, false, false);
+    g.prep = make_pso(lib, @"mk_mesh_v", @"mk_prep_f", MTLPixelFormatRGBA16Float, false, false, 2);
     g.blur = make_pso(lib, @"mk_fs_v", @"mk_blur_f", MTLPixelFormatRGBA16Float, false, false);
+    g.lipev = make_pso(lib, @"mk_mesh_v", @"mk_lipev_f", MTLPixelFormatR16Float, false, false);
     g.face = make_pso(lib, @"mk_mesh_v", @"mk_face_f", MTLPixelFormatBGRA8Unorm, true, false);
     g.lash = make_pso(lib, @"mk_lash_v", @"mk_lash_f", MTLPixelFormatBGRA8Unorm, true, true);
     MTLDepthStencilDescriptor* d = [MTLDepthStencilDescriptor new];
@@ -609,7 +689,7 @@ bool init_ctx(id<MTLDevice> dev) {
                                       options:MTLResourceStorageModeShared];
     }
     g.upload_q = [dev newCommandQueue];
-    g.ok = g.prep && g.blur && g.face && g.lash && g.dss_face && g.dss_lash;
+    g.ok = g.prep && g.blur && g.lipev && g.face && g.lash && g.dss_face && g.dss_lash;
     return g.ok;
 }
 
@@ -628,6 +708,8 @@ void ensure_targets(int w, int h) {
     g.half0 = rt(hw, hh, MTLPixelFormatRGBA16Float, false);
     g.half1 = rt(hw, hh, MTLPixelFormatRGBA16Float, false);
     g.half2 = rt(hw, hh, MTLPixelFormatRGBA16Float, true);
+    g.half_lip = rt(hw, hh, MTLPixelFormatRGBA16Float, true);
+    g.half_ev = rt(hw, hh, MTLPixelFormatR16Float, false);
     g.depth = rt(w, h, MTLPixelFormatDepth32Float, false);
 }
 
@@ -822,7 +904,10 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
     if (!L) { *status = "look_missing"; return false; }
     const int W = (int)dst.width, H = (int)dst.height;
     ensure_targets(W, H);
-    if (!g.half0 || !g.half1 || !g.half2 || !g.depth) { *status = "pso_failed"; return false; }
+    if (!g.half0 || !g.half1 || !g.half2 || !g.half_lip || !g.half_ev || !g.depth) {
+        *status = "pso_failed";
+        return false;
+    }
 
     filter_vertices(f.verts, time_s);
     static float nrm[ARKIT_NPTS][3];
@@ -860,16 +945,20 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
     };
     {
         MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
-        rp.colorAttachments[0].texture = g.half0;
-        rp.colorAttachments[0].loadAction = MTLLoadActionClear;
-        rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
-        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLTexture> targets[2] = {g.half0, g.half_lip};
+        for (int i = 0; i < 2; ++i) {
+            rp.colorAttachments[i].texture = targets[i];
+            rp.colorAttachments[i].loadAction = MTLLoadActionClear;
+            rp.colorAttachments[i].clearColor = MTLClearColorMake(0, 0, 0, 0);
+            rp.colorAttachments[i].storeAction = MTLStoreActionStore;
+        }
         id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
         [e setRenderPipelineState:g.prep];
         bind_mesh(e);
         [e setFragmentBytes:&mu length:sizeof(mu) atIndex:0];
         [e setFragmentTexture:src atIndex:0];
         [e setFragmentTexture:L->mask_a atIndex:1];
+        [e setFragmentTexture:L->mask_b atIndex:2];
         draw_mesh(e);
         [e endEncoding];
     }
@@ -896,11 +985,35 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
         pass(g.half1, g.half2, 0.f, tap / (float)g.half0.height);
         id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
         [bl generateMipmapsForTexture:g.half2];            // 1×1 level = face-mean skin
+        [bl generateMipmapsForTexture:g.half_lip];         // 1×1 level = mean lip color
         [bl copyFromTexture:src sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
                  sourceSize:MTLSizeMake((NSUInteger)W, (NSUInteger)H, 1)
                   toTexture:dst destinationSlice:0 destinationLevel:0
           destinationOrigin:MTLOriginMake(0, 0, 0)];
         [bl endEncoding];
+    }
+
+    // ── 2b. lip evidence (half res) ──
+    {
+        MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = g.half_ev;
+        rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+        rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
+        [e setRenderPipelineState:g.lipev];
+        bind_mesh(e);
+        EvUniC eu{};
+        eu.inv_src[0] = 1.f / (float)W;
+        eu.inv_src[1] = 1.f / (float)H;
+        eu.mean_level = (float)(g.half2.mipmapLevelCount - 1);
+        [e setFragmentBytes:&mu length:sizeof(mu) atIndex:0];
+        [e setFragmentBytes:&eu length:sizeof(eu) atIndex:1];
+        [e setFragmentTexture:src atIndex:0];
+        [e setFragmentTexture:g.half2 atIndex:1];
+        [e setFragmentTexture:L->mask_b atIndex:2];
+        draw_mesh(e);
+        [e endEncoding];
     }
 
     // ── 3. face composite (full res) ──
@@ -920,16 +1033,12 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
     std::memcpy(fu.blush, L->blush, sizeof(fu.blush));
     std::memcpy(fu.shadow, L->shadow, sizeof(fu.shadow));
     std::memcpy(fu.freckle, L->freckle, sizeof(fu.freckle));
-    std::memcpy(fu.brow, L->brow, sizeof(fu.brow));
-    fu.misc[0] = L->brow_fill; fu.misc[1] = L->inner_light;
+    fu.misc[0] = L->inner_light; fu.misc[1] = L->ref_luma;
     std::memcpy(fu.lip_cream, L->lip_cream, sizeof(fu.lip_cream));
-    fu.lip_shape[0] = L->overline_mm; fu.lip_shape[1] = L->lip_edge_mm;
+    fu.lip_shape[0] = L->overline_mm; fu.lip_shape[1] = L->lip_match;
     fu.lip_shape[2] = L->gloss;       fu.lip_shape[3] = L->gloss_rough;
     fu.hl[0] = L->hl_amt; fu.hl[1] = L->hl_rough; fu.hl[2] = L->hl_sheen;
     std::memcpy(fu.ink, L->ink, sizeof(fu.ink));
-    fu.liner[0] = L->liner_in_mm * 1e-3f;
-    fu.liner[1] = L->liner_out_mm * 1e-3f;
-    fu.liner[2] = L->liner_offset_mm * 1e-3f;
 
     // Light: ARKit's primary direction is world space and points the way the
     // light travels; the shader wants the view-space direction TO the light.
@@ -944,43 +1053,68 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
     fu.light_dir[3] = gain;
     kelvin_rgb(f.light.kelvin, fu.light_col);
 
+    // Eye centers (rim means) orient "up the lid" for liner and lashes.
     const Poly* uppers[2] = {&upR, &upL};
+    const Poly* lowers[2] = {&loR, &loL};
+    V3 eye_c[2] = {v3(0, 0, 0), v3(0, 0, 0)};
+    for (int e = 0; e < 2; ++e) {
+        for (const V3& p : uppers[e]->p) eye_c[e] = eye_c[e] + p;
+        for (const V3& p : lowers[e]->p) eye_c[e] = eye_c[e] + p;
+        eye_c[e] = eye_c[e] * (1.f / (float)(uppers[e]->p.size() + lowers[e]->p.size()));
+    }
+
+    // Liner: one centerline per eye. Along the lash line from the inner
+    // corner to just short of the outer corner (where ARKit's rim turns down
+    // into the lower lid), lifted half a stroke onto the lid so the ink's
+    // lower edge sits on the lash line; then a quadratic wing that leaves in
+    // the lash line's own direction and bends to the look's wing angle — one
+    // stroke, so band and wing never cross.
+    const float w_in = L->liner_in_mm * 1e-3f, w_out = L->liner_out_mm * 1e-3f;
+    const float off = L->liner_offset_mm * 1e-3f, wing_len = L->wing_mm * 1e-3f;
+    const float t_end = 0.12f;
+    const float lift = L->wing_lift_deg * 3.14159265f / 180.f;
     for (int e = 0; e < 2; ++e) {
         const Poly& P = *uppers[e];
-        for (int k = 0; k < 12; ++k) {
-            fu.rim[e * 12 + k][0] = P.p[(size_t)k].x;
-            fu.rim[e * 12 + k][1] = P.p[(size_t)k].y;
-            fu.rim[e * 12 + k][2] = P.p[(size_t)k].z;
+        float (*S)[4] = &fu.stroke[e * 16];
+        V3 pos, n, tan;
+        for (int i = 0; i < 10; ++i) {
+            const float t = 1.f - (1.f - t_end) * (float)i / 9.f;    // inner → outer
+            P.eval(t, pos, n, tan);
+            V3 U = normalize(cross(n, tan));
+            if (dot(U, pos - eye_c[e]) < 0.f) U = U * -1.f;
+            const float w = mixf(w_out, w_in, smooth01(t))
+                          * (1.f - 0.6f * smooth01((t - 0.8f) / 0.2f));
+            const V3 c = pos + U * (0.5f * w + off);
+            S[i][0] = c.x; S[i][1] = c.y; S[i][2] = c.z; S[i][3] = w;
         }
-        // Wing: from the outer corner along the corner-to-corner axis, lifted
-        // toward the brow, flattened onto the corner's tangent plane.
-        V3 O = P.p.front(), I = P.p.back(), n = P.n.front();
-        V3 axis = normalize(O - I);
-        float lift = L->wing_lift_deg * 3.14159265f / 180.f;
+        // `tan` is the lash line's direction at t_end (toward the inner corner).
+        const V3 nO = P.n.front();
+        const V3 axis = normalize(P.p.front() - P.p.back());        // inner → outer corner
+        V3 lead = normalize(tan * -1.f + axis);
+        lead = normalize(lead - nO * dot(lead, nO));
         V3 d = normalize(axis * std::cos(lift) + v3(0, 1, 0) * std::sin(lift));
-        d = normalize(d - n * dot(d, n));
-        V3 T = O + d * (L->wing_mm * 1e-3f);
-        float* wc = fu.wing[e * 3 + 0]; wc[0] = O.x; wc[1] = O.y; wc[2] = O.z;
-        float* wt = fu.wing[e * 3 + 1]; wt[0] = T.x; wt[1] = T.y; wt[2] = T.z;
-        float* wn = fu.wing[e * 3 + 2]; wn[0] = n.x; wn[1] = n.y; wn[2] = n.z;
+        d = normalize(d - nO * dot(d, nO));
+        const V3 A = v3(S[9][0], S[9][1], S[9][2]);
+        const V3 C = A + lead * (0.35f * wing_len), T = A + d * wing_len;
+        for (int j = 1; j <= 6; ++j) {
+            const float s = (float)j / 6.f;
+            const V3 q = A * ((1.f - s) * (1.f - s)) + C * (2.f * (1.f - s) * s) + T * (s * s);
+            S[9 + j][0] = q.x; S[9 + j][1] = q.y; S[9 + j][2] = q.z;
+            S[9 + j][3] = w_out * std::pow(1.f - s, 0.9f);
+        }
+        fu.corner_n[e][0] = nO.x; fu.corner_n[e][1] = nO.y; fu.corner_n[e][2] = nO.z;
     }
 
     // Lash strands (anchor space).
     static std::vector<LashVtx> lv;
     lv.clear();
     if (L->lash_amt > 0.f) {
-        V3 cR = v3(0, 0, 0), cL = v3(0, 0, 0);
-        for (const V3& p : upR.p) cR = cR + p;
-        for (const V3& p : loR.p) cR = cR + p;
-        for (const V3& p : upL.p) cL = cL + p;
-        for (const V3& p : loL.p) cL = cL + p;
-        cR = cR * (1.f / 26.f); cL = cL * (1.f / 26.f);
         const float bR = f.has_blend ? f.blend[kBlinkR] : 0.f;
         const float bL = f.has_blend ? f.blend[kBlinkL] : 0.f;
-        build_row(lv, upR, loR, cR, L->upper, bR, 11u);
-        build_row(lv, upL, loL, cL, L->upper, bL, 12u);
-        build_row(lv, loR, upR, cR, L->lower, bR, 21u);
-        build_row(lv, loL, upL, cL, L->lower, bL, 22u);
+        build_row(lv, upR, loR, eye_c[0], L->upper, bR, 11u);
+        build_row(lv, upL, loL, eye_c[1], L->upper, bL, 12u);
+        build_row(lv, loR, upR, eye_c[0], L->lower, bR, 21u);
+        build_row(lv, loL, upL, eye_c[1], L->lower, bL, 22u);
         if (!lv.empty()) std::memcpy(g.lashv[r].contents, lv.data(), sizeof(LashVtx) * lv.size());
     }
 
@@ -1004,6 +1138,8 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
         [e setFragmentTexture:g.half2 atIndex:1];
         [e setFragmentTexture:L->mask_a atIndex:2];
         [e setFragmentTexture:L->mask_b atIndex:3];
+        [e setFragmentTexture:g.half_lip atIndex:4];
+        [e setFragmentTexture:g.half_ev atIndex:5];
         draw_mesh(e);
         if (!lv.empty() && !g_face_overlay) {
             LashUniC lu{};

@@ -55,20 +55,23 @@ tool fails if the look does not report `applied` on a picked frame.
 - Colors, amounts, liner/lash shape: edit the look JSON in pms-ios
   `Engine/EngineAssets/models/face/arkit/<id>.json` and re-run the replay —
   no rebuild.
-- Mask geometry (blush/shadow/brow placement, lip border, freckles,
-  highlights): `tools/gen_arkit_makeup.py --assets <pms-ios>/Engine/EngineAssets`
+- Mask geometry (blush/shadow placement, lip region, freckles, highlights):
+  `tools/gen_arkit_makeup.py --assets <pms-ios>/Engine/EngineAssets`
   (numpy + Pillow; runs on Linux), then replay.
 - Renderer: `src/arkit_makeup.mm`; `ninja -C build-mac arkit-native-replay`.
 
 ## 5. What to look for
 
-- **Placement**: liner hugs the upper lash line through blink frames; lash
-  roots sit on the lid margin and the fringe moves with the lid; lips fill
-  to the vermilion border and never paint teeth or the inner mouth; blush
-  sits on the apples; brows darken real hair, no painted shape.
+- **Placement**: liner hugs the upper lash line through blink frames and
+  flows into the wing as one stroke; lash roots sit on the lid margin and
+  the fringe moves with the lid; lipstick follows the wearer's real lip edge
+  (plus the look's overline, smooth, no JPEG-block steps) and never paints
+  teeth, tongue or the skin around a small mouth; blush sits on the apples;
+  brows untouched.
 - **Skin**: pores and shading visible through blush and smoothing; no seam
   at the mesh edge; eyes, brows and lips are never smoothed.
-- **Light**: gloss and the nose-tip highlight sit where the real shine is.
+- **Light**: lip gloss is broken up by the lips' texture (no white sticker),
+  never a stripe along the mouth seam; the nose tip catches the shine.
 - **Hard frames**: yaw (no pigment past the silhouette), smile (lips and
   blush stretch with the skin), blink.
 
