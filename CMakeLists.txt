@@ -90,6 +90,12 @@ set(IMGUI_APP_SOURCES
 # tools/check_engine_deps.sh enforces the boundary at build time. This is the
 # set that becomes pms_engine.xcframework for iOS (docs/IOS_PORT_PLAN.md).
 # PipeWire backend is Linux-desktop-only (excluded on Apple + headless/iOS).
+# Headless (PMS_HEADLESS / iOS): every file in the list below still compiles.
+# The ones that need ffmpeg/GL/fftw keep their public API and swap the
+# capability for a stub branch (`#if PMS_HAS_*`, src/platform.h) because other
+# engine sources call into them — gating a file out here would only move the
+# undefined references. The script runtime is the exception (see below); its
+# headless surface lives in script_clip.cpp.
 if(NOT APPLE AND NOT PMS_HEADLESS)
     list(APPEND PMS_PLATFORM_ENGINE_SOURCES src/audio_pw.cpp)
 endif()

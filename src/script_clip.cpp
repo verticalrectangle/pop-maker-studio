@@ -238,6 +238,14 @@ std::vector<ScriptClipReport> script_clip_reports(const AppState& state) {
 
 #else  // !PMS_HAS_GL — Script clips need the GL renderer (Skia on GL).
 
+// script_runtime.cpp (QuickJS + Skia) is not built here, so no `pms:` module
+// can be resolved: "" = unresolvable (script_runtime.h). lay_typography_script
+// uses this to validate the preset id, so headless reports it as unknown rather
+// than laying a layer that nothing can render.
+std::string script_resolve_spec(const std::string&, const std::string&, const std::string&) {
+    return {};
+}
+
 unsigned script_clip_texture(const AppState&, const Clip&, const std::string&, float, int, int,
                              int, int, bool, std::vector<ScriptError>&) {
     return 0;

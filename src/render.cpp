@@ -12,6 +12,72 @@
 #include "face_cache.h"
 #include "script_clip.h"
 
+// ── Platform upload presets ───────────────────────────────────────────────────
+// Pure table logic (no ffmpeg/GL), so it sits outside PMS_HAS_FFMPEG: the IPC
+// export lever (ipc_server.cpp) validates `platform` through render_platform_*
+// in headless builds too.
+// Official upload specs consulted Sep 2026 (values baked in; re-check yearly):
+//   X/Twitter  — help.x.com video specs via Clideo/SocialKit summaries:
+//                H.264 + AAC, ≤1920x1200, ≤140 s / 512 MB free, ≤60 fps;
+//                8–12 Mbps good for 1080p30. Cap 25 Mbps (High, AAC-LC 48 kHz 320k).
+//   TikTok     — tiktok.com upload + postrsocial/puritano summaries:
+//                9:16 ≥1080x1920, H.264 + AAC, 23–60 fps, ≥4 Mbps,
+//                8–12 Mbps sweet spot at 1080p30. Cap 12 Mbps. AAC 48 kHz 192k.
+//   Reels      — Meta help.instagram.com/1038071743007909 + sendcove summary:
+//                9:16 1080x1920, H.264 + AAC, 30 fps (60 only for sport),
+//                ≥3.5 Mbps, 5–10 Mbps optimal. Cap 10 Mbps. AAC 48 kHz 256k.
+//   YT Shorts  — support.google.com/youtube/answer/1722171 (Shorts same codec
+//                recipe as YouTube, 9:16 canvas): H.264 High + AAC-LC 48 kHz,
+//                1080p SDR 8 Mbps @≤30 fps / 12 Mbps @60 fps. Cap by fps.
+//   YouTube    — same YouTube help page, landscape: H.264 High + AAC-LC 48 kHz,
+//                1080p SDR 8 Mbps @≤30 fps / 12 Mbps @48–60 fps, +faststart,
+//                progressive, 4:2:0. Cap by fps.
+struct PlatformPreset {
+    const char* id;        // RenderSettings::platform string form
+    int         crf;       // quality target (x264 CRF / VAAPI global_quality)
+    int         maxrate_k; // 0 = no cap; else -maxrate/-bufsize (2x) cap
+    int         audio_k;   // AAC bitrate kbps
+    OutputFormat want_fmt; // canvas the platform expects
+    bool        want_fmt_strict; // true = warn when canvas differs
+};
+static const PlatformPreset kPlatformPresets[] = {
+    {"custom",          23,     0, 192, OutputFormat::Vertical,   false},
+    {"x",               18, 25000, 320, OutputFormat::Horizontal, false},
+    {"tiktok",          18, 12000, 192, OutputFormat::Vertical,   true},
+    {"instagram_reels", 18, 10000, 256, OutputFormat::Vertical,   true},
+    {"youtube_shorts",  18,     0, 192, OutputFormat::Vertical,   true}, // cap set by fps below
+    {"youtube",         18,     0, 192, OutputFormat::Horizontal, true}, // cap set by fps below
+};
+static const PlatformPreset& platform_preset(const RenderSettings& rs) {
+    int i = (int)rs.platform;
+    if (i < 0 || i > 5) i = 0;
+    return kPlatformPresets[i];
+}
+const char* render_platform_id(RenderPlatform p) {
+    int i = (int)p;
+    if (i < 0 || i > 5) i = 0;
+    return kPlatformPresets[i].id;
+}
+bool render_platform_from_id(const std::string& id, RenderPlatform& out) {
+    for (int i = 0; i < 6; ++i)
+        if (id == kPlatformPresets[i].id) { out = (RenderPlatform)i; return true; }
+    return false;
+}
+// Human-readable canvas/fps validation against the active platform preset.
+// Empty = OK. Warnings only — the export still runs on the current canvas.
+std::string render_platform_check(const AppState& state) {
+    const PlatformPreset& pp = platform_preset(state.render_settings);
+    if (state.render_settings.platform == RenderPlatform::Custom) return "";
+    if (!pp.want_fmt_strict) return "";
+    if (state.format != pp.want_fmt) {
+        const char* want = pp.want_fmt == OutputFormat::Vertical ? "9:16 vertical"
+                         : pp.want_fmt == OutputFormat::Horizontal ? "16:9 horizontal" : "1:1 square";
+        return std::string(render_platform_id(state.render_settings.platform)) +
+               " expects a " + want + " canvas — switch format or pass formats=[...]";
+    }
+    return "";
+}
+
 #if PMS_HAS_FFMPEG
 #include "gl_compat.h"
 #include <imgui_impl_opengl3.h>
@@ -880,55 +946,7 @@ void render_snapshot_gl(AppState& state, float snap_t, bool open_folder) {
 // on the main/GL thread. Each frame is decoded from the original source files via
 // libavcodec, composited via ImDrawList into an offscreen FBO, read back with
 // glReadPixels, and piped as rawvideo RGBA to ffmpeg for H.264 encoding.
-//
-// ── Platform upload presets ───────────────────────────────────────────────────
-// Official upload specs consulted Sep 2026 (values baked in; re-check yearly):
-//   X/Twitter  — help.x.com video specs via Clideo/SocialKit summaries:
-//                H.264 + AAC, ≤1920x1200, ≤140 s / 512 MB free, ≤60 fps;
-//                8–12 Mbps good for 1080p30. Cap 25 Mbps (High, AAC-LC 48 kHz 320k).
-//   TikTok     — tiktok.com upload + postrsocial/puritano summaries:
-//                9:16 ≥1080x1920, H.264 + AAC, 23–60 fps, ≥4 Mbps,
-//                8–12 Mbps sweet spot at 1080p30. Cap 12 Mbps. AAC 48 kHz 192k.
-//   Reels      — Meta help.instagram.com/1038071743007909 + sendcove summary:
-//                9:16 1080x1920, H.264 + AAC, 30 fps (60 only for sport),
-//                ≥3.5 Mbps, 5–10 Mbps optimal. Cap 10 Mbps. AAC 48 kHz 256k.
-//   YT Shorts  — support.google.com/youtube/answer/1722171 (Shorts same codec
-//                recipe as YouTube, 9:16 canvas): H.264 High + AAC-LC 48 kHz,
-//                1080p SDR 8 Mbps @≤30 fps / 12 Mbps @60 fps. Cap by fps.
-//   YouTube    — same YouTube help page, landscape: H.264 High + AAC-LC 48 kHz,
-//                1080p SDR 8 Mbps @≤30 fps / 12 Mbps @48–60 fps, +faststart,
-//                progressive, 4:2:0. Cap by fps.
-struct PlatformPreset {
-    const char* id;        // RenderSettings::platform string form
-    int         crf;       // quality target (x264 CRF / VAAPI global_quality)
-    int         maxrate_k; // 0 = no cap; else -maxrate/-bufsize (2x) cap
-    int         audio_k;   // AAC bitrate kbps
-    OutputFormat want_fmt; // canvas the platform expects
-    bool        want_fmt_strict; // true = warn when canvas differs
-};
-static const PlatformPreset kPlatformPresets[] = {
-    {"custom",          23,     0, 192, OutputFormat::Vertical,   false},
-    {"x",               18, 25000, 320, OutputFormat::Horizontal, false},
-    {"tiktok",          18, 12000, 192, OutputFormat::Vertical,   true},
-    {"instagram_reels", 18, 10000, 256, OutputFormat::Vertical,   true},
-    {"youtube_shorts",  18,     0, 192, OutputFormat::Vertical,   true}, // cap set by fps below
-    {"youtube",         18,     0, 192, OutputFormat::Horizontal, true}, // cap set by fps below
-};
-static const PlatformPreset& platform_preset(const RenderSettings& rs) {
-    int i = (int)rs.platform;
-    if (i < 0 || i > 5) i = 0;
-    return kPlatformPresets[i];
-}
-const char* render_platform_id(RenderPlatform p) {
-    int i = (int)p;
-    if (i < 0 || i > 5) i = 0;
-    return kPlatformPresets[i].id;
-}
-bool render_platform_from_id(const std::string& id, RenderPlatform& out) {
-    for (int i = 0; i < 6; ++i)
-        if (id == kPlatformPresets[i].id) { out = (RenderPlatform)i; return true; }
-    return false;
-}
+
 // Maxrate cap for the active preset at this fps. YouTube/Shorts follow the
 // SDR table (8 Mbps ≤30 fps, 12 Mbps ≥48 fps; 30–48 interpolates to 12).
 static int platform_maxrate_k(const RenderSettings& rs, int fps) {
@@ -938,21 +956,6 @@ static int platform_maxrate_k(const RenderSettings& rs, int fps) {
         return (fps >= 40) ? 12000 : 8000;
     return pp.maxrate_k;
 }
-// Human-readable canvas/fps validation against the active platform preset.
-// Empty = OK. Warnings only — the export still runs on the current canvas.
-std::string render_platform_check(const AppState& state) {
-    const PlatformPreset& pp = platform_preset(state.render_settings);
-    if (state.render_settings.platform == RenderPlatform::Custom) return "";
-    if (!pp.want_fmt_strict) return "";
-    if (state.format != pp.want_fmt) {
-        const char* want = pp.want_fmt == OutputFormat::Vertical ? "9:16 vertical"
-                         : pp.want_fmt == OutputFormat::Horizontal ? "16:9 horizontal" : "1:1 square";
-        return std::string(render_platform_id(state.render_settings.platform)) +
-               " expects a " + want + " canvas — switch format or pass formats=[...]";
-    }
-    return "";
-}
-
 
 // ── Render crash log ─────────────────────────────────────────────────────────
 // Written incrementally; last flushed line shows where a crash occurred.

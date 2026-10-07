@@ -2,10 +2,12 @@
 #include "platform.h"
 #include "paths.h"
 
+#if PMS_HAS_FFMPEG
 extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/pixdesc.h>
 }
+#endif
 
 #include <cmath>
 #include <cstdio>
@@ -859,6 +861,7 @@ void proxy_cancel() {
         if (pp > 0) { kill(pp, SIGTERM); waitpid(pp, nullptr, 0); }
 }
 
+#if PMS_HAS_FFMPEG
 static bool file_has_alpha(const std::string& path) {
     AVFormatContext* ctx = nullptr;
     if (avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) < 0) return false;
@@ -880,6 +883,11 @@ static bool file_has_alpha(const std::string& path) {
     avformat_close_input(&ctx);
     return has;
 }
+#else
+// Headless (iOS): no libav to read the pixel format with — every source is
+// treated as opaque.
+static bool file_has_alpha(const std::string&) { return false; }
+#endif  // PMS_HAS_FFMPEG
 
 static std::unordered_map<std::string, bool> g_alpha_cache;
 static std::mutex g_alpha_cache_mu;

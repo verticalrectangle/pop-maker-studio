@@ -193,6 +193,9 @@ std::vector<float> rmvpe_f0(const std::vector<float>& wav16k)
     }
 }
 
-#else
-// PMS_HAS_FFTW=0 headless stubs (filled from linker)
+#else  // !PMS_HAS_FFTW — headless/iOS: no log-mel front end, so no F0 (empty = error, rmvpe_onnx.h)
+#include <filesystem>
+std::string rmvpe_onnx_path() { return app_models_dir() + "/rmvpe.onnx"; }
+bool        rmvpe_onnx_exists() { return std::filesystem::exists(rmvpe_onnx_path()); }
+std::vector<float> rmvpe_f0(const std::vector<float>&) { return {}; }
 #endif  // PMS_HAS_FFTW
