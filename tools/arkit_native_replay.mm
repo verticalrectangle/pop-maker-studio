@@ -424,6 +424,9 @@ int main(int argc, char** argv) {
             }
         } else amount = atof(a.c_str());
     }
+    // The eyelid model runs on a worker thread; in the replay each frame waits
+    // for the previous frame's result, so PNGs are deterministic.
+    setenv("PMS_ARKIT_SYNC", "1", 1);
     @autoreleasepool {
         const char* sd = getenv("PMS_SHADER_DIR");
         const std::string home = getenv("HOME") ? getenv("HOME") : "";

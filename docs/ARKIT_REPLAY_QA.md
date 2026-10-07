@@ -48,7 +48,10 @@ Every recorded frame renders (the vertex filter runs in time); PNGs are
 written for every 15th frame (`--every N`) plus the max-blink, max-jaw-open,
 max-smile and max-yaw frames (`--frames i,j` picks exact frames). `--raw`
 adds the untouched frame as `fNNNN_raw.png` for before/after review. The
-tool fails if the look does not report `applied` on a picked frame.
+tool fails if the look does not report `applied` on a picked frame. The
+eyelid model (MediaPipe, corrects ARKit's lash line) runs synchronously in
+the replay with the phone's one-frame lag, so frame 0 shows ARKit's raw rim —
+judge liner/lash placement from the second recorded frame on.
 
 ## 4. Iterate
 
