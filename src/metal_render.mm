@@ -2262,7 +2262,8 @@ static id<MTLTexture> run_fx_stack(id<MTLCommandBuffer> cb, id<MTLTexture> src,
                             static const int LRIM[10] = {1100,1099,1098,1097,1096,1095,1094,1093,1092,1091};
                             static const int LRIM_L[10] = {1070,1071,1072,1073,1074,1075,1076,1077,1078,1079};
                             const int* lrims[2] = { LRIM, LRIM_L };
-                            struct LashVCPU lv2[2 * 10 * 6];
+                            struct LashVCPU { float clip[4]; float along; float edge; };
+                            LashVCPU lv2[2 * 10 * 6];
                             int n_lv2 = 0;
                             const int ltri[6] = { 0,1,2, 1,3,2 };
                             const float lav[4] = { 0,0,1,1 }, lev[4] = { 0,1,0,1 };
