@@ -654,7 +654,7 @@ struct Ctx {
     id<MTLBuffer> pos[kRing] = {}, nrm[kRing] = {}, lashv[kRing] = {};
     id<MTLTexture> crop_tex = nil;     // eyelid crop render target
     id<MTLBuffer> crop_buf = nil;      // its pixels for the eyelid worker (one job in flight)
-    float lid_off[2][kCols] = {};      // smoothed eyelid offsets, mm toward the eye opening
+    float lid_off[2][2][kCols] = {};   // [eye][upper, lower] smoothed offsets, mm toward the opening
     double lid_t = -1.0;               // last frame time they were updated
     double lid_job_t = -1.0;           // last frame time a crop went to the worker
     int ring = 0;
@@ -851,33 +851,34 @@ uint32_t hash_u32(uint32_t x) {
 float rnd(uint32_t seed) { return (float)(hash_u32(seed) & 0xffffff) / 16777215.f; }
 
 // ── Eyelid refinement (MediaPipe) ────────────────────────────────────────────
-// ARKit's upper rim is the lash line only with the eyes wide open. With the
-// lids lowered (gaze down at the phone — the usual selfie pose) it rides ~2 mm
-// onto the lid over the iris and sits inside the eye toward the outer corner:
-// the real lid is flatter than ARKit's almond. Edge rules on the image cannot
-// tell lashes from lid (eyes open, natural lashes stand above the margin;
-// lowered, they hang over the eye), so the trained eyelid contour of
-// MediaPipe's landmark model (bundled for the script API) decides. A frame
-// whose GPU work completes while the worker is idle hands it a 256²
-// roll-normalized face crop placed from ARKit's projected mesh (no detector);
-// the worker intersects the model's upper-lid contour with 16 rays per eye
-// cast from that frame's rim and publishes the offsets (mm, + toward the eye
-// opening). Later frames apply them relative to their own rim — head motion
-// stays ARKit's — smoothed, and faded out during blinks (the rim follows the
-// closing lid; the offsets lag a few frames).
+// ARKit's eye rims are the lash lines only with the eyes wide open. With the
+// lids lowered (gaze down at the phone — the usual selfie pose) the upper rim
+// rides ~2 mm onto the lid over the iris and sits inside the eye toward the
+// outer corner (the real lid is flatter than ARKit's almond), the lower rim
+// sits inside the eye opening, and ARKit's blink value stays low through all
+// of it. Edge rules on the image cannot tell lashes from lid (eyes open,
+// natural lashes stand above the margin; lowered, they hang over the eye), so
+// the trained lid contours of MediaPipe's landmark model (bundled for the
+// script API) decide. A frame whose GPU work completes while the worker is
+// idle hands it a 256² roll-normalized face crop placed from ARKit's
+// projected mesh (no detector); the worker intersects the model's lid
+// contours with 16 rays per rim cast from that frame's ARKit rims and
+// publishes the offsets (mm, + toward the eye opening). Later frames apply
+// them relative to their own rims — head motion stays ARKit's — smoothed.
 struct LidRay { float p[2], d[2], ppmm; };   // frame px, unit dir toward the opening, px per mm
 struct LidJob {
     float cx, cy, size, roll;                 // crop placement (frame px, radians)
     float eye_c[2][2];                        // eye centers (frame px), to pair contours
     float facing[2];                          // cos(eye normal, direction to the camera)
-    LidRay ray[2][kCols];
+    LidRay ray[2][2][kCols];                  // [eye][upper, lower][column]
     double t;
 };
-// Per eye: offsets on a quadratic fit along the rim (mm), and how far to trust them.
-struct LidResult { float off[2][kCols] = {}; float conf[2] = {}; double t = -1.0; };
-// MediaPipe 478-mesh upper-lid contours, corner to corner.
-const int kMpUpper[2][9] = {{33, 246, 161, 160, 159, 158, 157, 173, 133},
-                            {263, 466, 388, 387, 386, 385, 384, 398, 362}};
+// Per eye and lid: offsets on a quadratic fit along the rim (mm), and their trust.
+struct LidResult { float off[2][2][kCols] = {}; float conf[2][2] = {}; double t = -1.0; };
+// MediaPipe 478-mesh lid contours, corner to corner: [mesh eye][upper, lower].
+const int kMpLid[2][2][9] = {
+    {{33, 246, 161, 160, 159, 158, 157, 173, 133}, {33, 7, 163, 144, 145, 153, 154, 155, 133}},
+    {{263, 466, 388, 387, 386, 385, 384, 398, 362}, {263, 249, 390, 373, 374, 380, 381, 382, 362}}};
 
 struct LidWorker {
     dispatch_queue_t q = nullptr;
@@ -893,6 +894,63 @@ LidWorker lid;
 Ort::Env& lid_env() {
     static Ort::Env env(ORT_LOGGING_LEVEL_ERROR, "pms-eyelid");
     return env;
+}
+
+// Offsets along one ARKit rim from one MediaPipe contour: ray intersections,
+// then a least-squares quadratic in t. The real lid differs from ARKit's
+// smoothly (shifted, tilted, flatter or more arched); the net's contour does
+// not always — kinks and a turned eye's foreshortened outline fit badly and
+// lose trust, as does an eye facing away from the camera.
+void fit_lid(const float (*lp)[2], const LidRay* rays, float facing, float* off, float& conf) {
+    float raw[kCols];
+    bool ok[kCols];
+    for (int k = 0; k < kCols; ++k) {
+        const LidRay& R = rays[k];
+        float best_s = 1e30f;
+        for (int j = 0; j < 8; ++j) {   // solve p + d·s = a + (b − a)·u
+            const float ax = lp[j][0], ay = lp[j][1];
+            const float ex = lp[j + 1][0] - ax, ey = lp[j + 1][1] - ay;
+            const float den = ex * R.d[1] - R.d[0] * ey;
+            if (std::fabs(den) < 1e-6f) continue;
+            const float wx = ax - R.p[0], wy = ay - R.p[1];
+            const float s = (ex * wy - wx * ey) / den;
+            const float u = (R.d[0] * wy - R.d[1] * wx) / den;
+            if (u >= 0.f && u <= 1.f && std::fabs(s) < std::fabs(best_s)) best_s = s;
+        }
+        raw[k] = best_s / std::max(R.ppmm, 1e-3f);
+        ok[k] = std::fabs(raw[k]) < 4.f;
+    }
+    double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, y0 = 0, y1 = 0, y2 = 0;
+    float tlo = 1.f, thi = 0.f;
+    int n = 0;
+    for (int k = 1; k < kCols - 1; ++k) {   // corner rays graze the contour
+        if (!ok[k]) continue;
+        const double t = 0.05 + 0.9 * (k + 0.5) / kCols, t2 = t * t;
+        s0 += 1; s1 += t; s2 += t2; s3 += t2 * t; s4 += t2 * t2;
+        y0 += raw[k]; y1 += raw[k] * t; y2 += raw[k] * t2;
+        tlo = std::min(tlo, (float)t);
+        thi = std::max(thi, (float)t);
+        ++n;
+    }
+    conf = 0.f;
+    std::fill(off, off + kCols, 0.f);
+    const double det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
+    if (n < 6 || std::fabs(det) < 1e-12) return;
+    const double a = (y0 * (s2 * s4 - s3 * s3) - s1 * (y1 * s4 - s3 * y2) + s2 * (y1 * s3 - s2 * y2)) / det;
+    const double b = (s0 * (y1 * s4 - s3 * y2) - y0 * (s1 * s4 - s3 * s2) + s2 * (s1 * y2 - y1 * s2)) / det;
+    const double c = (s0 * (s2 * y2 - y1 * s3) - s1 * (s1 * y2 - y1 * s2) + y0 * (s1 * s3 - s2 * s2)) / det;
+    double sq = 0;
+    for (int k = 0; k < kCols; ++k) {
+        const double t = 0.05 + 0.9 * (k + 0.5) / kCols;
+        if (ok[k] && k > 0 && k < kCols - 1) {
+            const double r = raw[k] - (a + b * t + c * t * t);
+            sq += r * r;
+        }
+        const double tc = std::clamp((float)t, tlo, thi);   // hold the ends
+        off[k] = (float)(a + b * tc + c * tc * tc);
+    }
+    const float rms = (float)std::sqrt(sq / n);
+    conf = std::clamp(1.f - (rms - 0.45f) / 0.55f, 0.f, 1.f) * smooth01((facing - 0.65f) / 0.10f);
 }
 
 // Worker thread: one RGBA crop → per-ray offsets, published as `lid.latest`.
@@ -927,80 +985,28 @@ void lid_run(const uint8_t* rgba, const LidJob& job) {
             const float flag = out[1].GetTensorData<float>()[0];
             if (1.f / (1.f + std::exp(-flag)) > 0.5f) {
                 const float cr = std::cos(job.roll), sr = std::sin(job.roll);
-                float lp[2][9][2];   // contours in frame px
+                float lp[2][2][9][2];   // [mesh eye][upper, lower] contours in frame px
                 for (int m = 0; m < 2; ++m)
-                    for (int j = 0; j < 9; ++j) {
-                        const float* q = mesh + kMpUpper[m][j] * 3;
-                        const float lx = q[0] / kCrop * job.size - 0.5f * job.size;
-                        const float ly = q[1] / kCrop * job.size - 0.5f * job.size;
-                        lp[m][j][0] = job.cx + lx * cr - ly * sr;
-                        lp[m][j][1] = job.cy + lx * sr + ly * cr;
-                    }
+                    for (int l = 0; l < 2; ++l)
+                        for (int j = 0; j < 9; ++j) {
+                            const float* q = mesh + kMpLid[m][l][j] * 3;
+                            const float lx = q[0] / kCrop * job.size - 0.5f * job.size;
+                            const float ly = q[1] / kCrop * job.size - 0.5f * job.size;
+                            lp[m][l][j][0] = job.cx + lx * cr - ly * sr;
+                            lp[m][l][j][1] = job.cy + lx * sr + ly * cr;
+                        }
                 for (int e = 0; e < 2; ++e) {
                     // Pair contours with ARKit's eyes by image position (mirror-proof).
                     int m = 0;
                     float best_d = 1e30f;
                     for (int mm = 0; mm < 2; ++mm) {
                         float cx = 0.f, cy = 0.f;
-                        for (int j = 0; j < 9; ++j) { cx += lp[mm][j][0]; cy += lp[mm][j][1]; }
+                        for (int j = 0; j < 9; ++j) { cx += lp[mm][0][j][0]; cy += lp[mm][0][j][1]; }
                         const float dx = cx / 9.f - job.eye_c[e][0], dy = cy / 9.f - job.eye_c[e][1];
                         if (dx * dx + dy * dy < best_d) { best_d = dx * dx + dy * dy; m = mm; }
                     }
-                    float raw[kCols];
-                    bool ok[kCols];
-                    for (int k = 0; k < kCols; ++k) {
-                        const LidRay& R = job.ray[e][k];
-                        float best_s = 1e30f;
-                        for (int j = 0; j < 8; ++j) {   // solve p + d·s = a + (b − a)·u
-                            const float ax = lp[m][j][0], ay = lp[m][j][1];
-                            const float ex = lp[m][j + 1][0] - ax, ey = lp[m][j + 1][1] - ay;
-                            const float den = ex * R.d[1] - R.d[0] * ey;
-                            if (std::fabs(den) < 1e-6f) continue;
-                            const float wx = ax - R.p[0], wy = ay - R.p[1];
-                            const float s = (ex * wy - wx * ey) / den;
-                            const float u = (R.d[0] * wy - R.d[1] * wx) / den;
-                            if (u >= 0.f && u <= 1.f && std::fabs(s) < std::fabs(best_s)) best_s = s;
-                        }
-                        raw[k] = best_s / std::max(R.ppmm, 1e-3f);
-                        ok[k] = std::fabs(raw[k]) < 4.f;
-                    }
-                    // Least-squares quadratic in t: the real lid differs from
-                    // ARKit's almond smoothly (shifted, tilted, flatter or more
-                    // arched). The net's contour does not always — kinks and a
-                    // turned eye's foreshortened outline fit badly and lose
-                    // trust, as does an eye facing away from the camera.
-                    double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, y0 = 0, y1 = 0, y2 = 0;
-                    float tlo = 1.f, thi = 0.f;
-                    int n = 0;
-                    for (int k = 0; k < kCols; ++k) {
-                        if (!ok[k] || k == 0 || k == kCols - 1) continue;   // corners: grazing rays
-                        const double t = 0.05 + 0.9 * (k + 0.5) / kCols, t2 = t * t;
-                        s0 += 1; s1 += t; s2 += t2; s3 += t2 * t; s4 += t2 * t2;
-                        y0 += raw[k]; y1 += raw[k] * t; y2 += raw[k] * t2;
-                        tlo = std::min(tlo, (float)t);
-                        thi = std::max(thi, (float)t);
-                        ++n;
-                    }
-                    const double det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2)
-                                     + s2 * (s1 * s3 - s2 * s2);
-                    if (n < 6 || std::fabs(det) < 1e-12) continue;
-                    const double a = (y0 * (s2 * s4 - s3 * s3) - s1 * (y1 * s4 - s3 * y2)
-                                      + s2 * (y1 * s3 - s2 * y2)) / det;
-                    const double b = (s0 * (y1 * s4 - s3 * y2) - y0 * (s1 * s4 - s3 * s2)
-                                      + s2 * (s1 * y2 - y1 * s2)) / det;
-                    const double c = (s0 * (s2 * y2 - y1 * s3) - s1 * (s1 * y2 - y1 * s2)
-                                      + y0 * (s1 * s3 - s2 * s2)) / det;
-                    double sq = 0;
-                    for (int k = 0; k < kCols; ++k) {
-                        const double t = 0.05 + 0.9 * (k + 0.5) / kCols;
-                        if (ok[k] && k > 0 && k < kCols - 1)
-                            sq += (raw[k] - (a + b * t + c * t * t)) * (raw[k] - (a + b * t + c * t * t));
-                        const double tc = std::clamp((float)t, tlo, thi);   // hold the ends
-                        res.off[e][k] = (float)(a + b * tc + c * tc * tc);
-                    }
-                    const float rms = (float)std::sqrt(sq / n);
-                    res.conf[e] = std::clamp(1.f - (rms - 0.45f) / 0.55f, 0.f, 1.f)
-                                * smooth01((job.facing[e] - 0.65f) / 0.10f);
+                    for (int l = 0; l < 2; ++l)
+                        fit_lid(lp[m][l], job.ray[e][l], job.facing[e], res.off[e][l], res.conf[e][l]);
                 }
             }
         } catch (const std::exception& e) {
@@ -1018,15 +1024,31 @@ float lid_offset_at(const float* off, float t) {
     return mixf(off[i0], off[i1], k - (float)i0);
 }
 
+// Lid frame at rim parameter t: position, surface normal, tangent (toward the
+// inner corner) and the returned U — along the lid, away from the eye
+// opening. U is oriented by the opposite rim at the same t, plus a fixed bias
+// (up for the upper lid, down for the lower) where the rims meet at the
+// corners: the eye center sits on the rims of a nearly closed eye, and
+// orienting by it flipped U along the rim (lashes and liner jumped sides).
+V3 lid_frame(const Poly& rim, const Poly& other, float t, bool upper, V3& pos, V3& n, V3& tan) {
+    rim.eval(t, pos, n, tan);
+    V3 op, on, ot;
+    other.eval(t, op, on, ot);
+    const V3 U = normalize(cross(n, tan));
+    const V3 ref = (pos - op) + v3(0.f, upper ? 1e-3f : -1e-3f, 0.f);
+    return dot(U, ref) < 0.f ? U * -1.f : U;
+}
+
 // Strands for one lash row of one eye. Each strand leaves the lash line along
 // the lid's surface normal tilted `lift` toward the lid, curls further toward
 // the lid along its length, flares outward at the outer corner, and converges
 // on its clump's tip (wispy clusters). Lid motion rotates the local frame, so
-// blinks carry the fringe with the lid. `lid_off` (upper rows): the eyelid
-// offsets that move the roots onto the real lash line.
-void build_row(std::vector<LashVtx>& out, const Poly& rim, const Poly& other, V3 eye_c,
-               const LashRow& R, float blink, uint32_t seed, const float* lid_off) {
-    if (R.count <= 0) return;
+// blinks carry the fringe with the lid. `lid_off`: the eyelid offsets that
+// move the roots onto the real lash line; `width_k` thins the whole row
+// (lower lashes disappear as the eye closes).
+void build_row(std::vector<LashVtx>& out, const Poly& rim, const Poly& other, bool upper,
+               const LashRow& R, float blink, uint32_t seed, const float* lid_off, float width_k) {
+    if (R.count <= 0 || width_k < 0.02f) return;
     constexpr int kSeg = 6;
     struct Strand { V3 pts[kSeg + 1]; float w0; int clump; };
     std::vector<Strand> strands((size_t)R.count);
@@ -1036,9 +1058,7 @@ void build_row(std::vector<LashVtx>& out, const Poly& rim, const Poly& other, V3
         float u0 = ((float)i + 0.5f + (rnd(sd) - 0.5f) * 0.7f) / (float)R.count;
         float t = mixf(R.t0, R.t1, std::clamp(u0, 0.f, 1.f));
         V3 root, n, tan;
-        rim.eval(t, root, n, tan);
-        V3 U = normalize(cross(n, tan));                     // along the lid, away from the opening
-        if (dot(U, root - eye_c) < 0.f) U = U * -1.f;
+        const V3 U = lid_frame(rim, other, t, upper, root, n, tan);   // along the lid, away from the opening
         if (R.blink_close > 0.f && blink > 0.f) {            // ARKit's lids never fully meet
             V3 op, on, ot;
             other.eval(t, op, on, ot);
@@ -1058,7 +1078,7 @@ void build_row(std::vector<LashVtx>& out, const Poly& rim, const Poly& other, V3
         Strand& S = strands[(size_t)i];
         S.pts[0] = root;
         S.clump = ci;
-        S.w0 = R.root_mm * 1e-3f * (0.8f + 0.4f * rnd(sd + 3u));
+        S.w0 = R.root_mm * 1e-3f * (0.8f + 0.4f * rnd(sd + 3u)) * width_k;
         for (int j = 1; j <= kSeg; ++j) {
             float s = ((float)j - 0.5f) / (float)kSeg;
             float ang = lift + curl * std::pow(s, 1.4f);
@@ -1294,17 +1314,21 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
     const bool new_face = g.lid_t < 0.0 || time_s < g.lid_t || time_s - g.lid_t > 0.3;
     g.lid_t = time_s;
     const bool fresh = lr.t >= 0.0 && std::fabs(time_s - lr.t) < 0.35;
-    for (int e = 0; e < 2; ++e) {
-        const float w = fresh ? lr.conf[e] * (1.f - smooth01((blink_e[e] - 0.3f) / 0.4f)) : 0.f;
-        for (int k = 0; k < kCols; ++k) {
-            const float tgt = std::clamp(lr.off[e][k], -3.f, 3.f) * w;
-            // The net's contour jitters ±0.5 mm frame to frame on a still face;
-            // real lid moves (gaze shifts) are bigger — adaptive smoothing.
-            const float delta = tgt - g.lid_off[e][k];
-            const float alpha = std::clamp(0.12f + 0.35f * std::fabs(delta), 0.12f, 0.6f);
-            g.lid_off[e][k] = new_face ? tgt : g.lid_off[e][k] + alpha * delta;
+    // No blink fade: ARKit's blink stays low while the real lids are half
+    // down (looking at the screen) — exactly when the correction matters.
+    for (int e = 0; e < 2; ++e)
+        for (int l = 0; l < 2; ++l) {
+            const float w = fresh ? lr.conf[e][l] : 0.f;
+            for (int k = 0; k < kCols; ++k) {
+                const float tgt = std::clamp(lr.off[e][l][k], -3.f, 3.f) * w;
+                // The net's contour jitters ±0.5 mm frame to frame on a still
+                // face; real lid moves (gaze shifts, blinks) are bigger.
+                float& cur = g.lid_off[e][l][k];
+                const float delta = tgt - cur;
+                const float alpha = std::clamp(0.12f + 0.4f * std::fabs(delta), 0.12f, 0.75f);
+                cur = new_face ? tgt : cur + alpha * delta;
+            }
         }
-    }
 
     // Liner: one centerline per eye. Along the lash line (ARKit's rim moved by
     // the eyelid offsets) from the inner corner to just short of the outer
@@ -1322,12 +1346,10 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
         V3 pos, n, tan;
         for (int i = 0; i < 10; ++i) {
             const float t = 1.f - (1.f - t_end) * (float)i / 9.f;    // inner → outer
-            P.eval(t, pos, n, tan);
-            V3 U = normalize(cross(n, tan));
-            if (dot(U, pos - eye_c[e]) < 0.f) U = U * -1.f;
+            const V3 U = lid_frame(P, *lowers[e], t, true, pos, n, tan);
             const float w = mixf(w_out, w_in, smooth01(t))
                           * (1.f - 0.6f * smooth01((t - 0.8f) / 0.2f));
-            const V3 c = pos + U * (0.5f * w + off - lid_offset_at(g.lid_off[e], t) * 1e-3f);
+            const V3 c = pos + U * (0.5f * w + off - lid_offset_at(g.lid_off[e][0], t) * 1e-3f);
             S[i][0] = c.x; S[i][1] = c.y; S[i][2] = c.z; S[i][3] = w;
         }
         // `tan` is the lash line's direction at t_end (toward the inner corner).
@@ -1348,19 +1370,31 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
         fu.corner_n[e][0] = nO.x; fu.corner_n[e][1] = nO.y; fu.corner_n[e][2] = nO.z;
     }
 
-    // Lash strands (anchor space); upper roots ride the eyelid offsets.
+    // Lash strands (anchor space); roots ride the eyelid offsets. Lower lashes
+    // fade out as the eye closes — judged by the real opening (ARKit's, closed
+    // by both lid corrections), since ARKit's blink lags lowered lids; on a
+    // closed eye they are tucked under the upper fringe, drawn they smudge.
     static std::vector<LashVtx> lv;
     lv.clear();
     if (L->lash_amt > 0.f) {
-        build_row(lv, upR, loR, eye_c[0], L->upper, blink_e[0], 11u, g.lid_off[0]);
-        build_row(lv, upL, loL, eye_c[1], L->upper, blink_e[1], 12u, g.lid_off[1]);
-        build_row(lv, loR, upR, eye_c[0], L->lower, blink_e[0], 21u, nullptr);
-        build_row(lv, loL, upL, eye_c[1], L->lower, blink_e[1], 22u, nullptr);
+        float lower_k[2];
+        for (int e = 0; e < 2; ++e) {
+            V3 pu, nu, tu, pl, nl, tl;
+            uppers[e]->eval(0.5f, pu, nu, tu);
+            lowers[e]->eval(0.5f, pl, nl, tl);
+            const float open_mm = length(pu - pl) * 1e3f - lid_offset_at(g.lid_off[e][0], 0.5f)
+                                - lid_offset_at(g.lid_off[e][1], 0.5f);
+            lower_k[e] = smooth01((open_mm - 2.f) / 3.f) * (1.f - smooth01((blink_e[e] - 0.5f) / 0.35f));
+        }
+        build_row(lv, upR, loR, true, L->upper, blink_e[0], 11u, g.lid_off[0][0], 1.f);
+        build_row(lv, upL, loL, true, L->upper, blink_e[1], 12u, g.lid_off[1][0], 1.f);
+        build_row(lv, loR, upR, false, L->lower, blink_e[0], 21u, g.lid_off[0][1], lower_k[0]);
+        build_row(lv, loL, upL, false, L->lower, blink_e[1], 22u, g.lid_off[1][1], lower_k[1]);
         if (!lv.empty()) std::memcpy(g.lashv[r].contents, lv.data(), sizeof(LashVtx) * lv.size());
     }
 
     // ── 3a. eyelid crop → worker (one job in flight, ≤ 30 Hz: lids change
-    // slowly and blinks fade the correction out anyway) ──
+    // slowly; the smoothing absorbs the latency) ──
     if (lid.done.load() == lid.submitted.load() &&
         (lid_sync || g.lid_job_t < 0.0 || time_s < g.lid_job_t || time_s - g.lid_job_t >= 1.0 / 30.0)) {
         g.lid_job_t = time_s;
@@ -1390,22 +1424,22 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
             const V3 nv = normalize(mat4_dir(mv, nsum));
             const V3 pv = mat4_dir(mv, eye_c[e]) + v3(mv[12], mv[13], mv[14]);
             job.facing[e] = dot(nv, normalize(pv * -1.f));
-            for (int k = 0; k < kCols; ++k) {   // rays from ARKit's rim toward the opening
-                const float t = 0.05f + 0.9f * ((float)k + 0.5f) / (float)kCols;
-                V3 pos, n, tan;
-                uppers[e]->eval(t, pos, n, tan);
-                V3 U = normalize(cross(n, tan));
-                if (dot(U, pos - eye_c[e]) < 0.f) U = U * -1.f;
-                float ax, ay, bx, by;
-                to_px(pos, ax, ay);
-                to_px(pos - U * 1e-3f, bx, by);
-                const float dx = bx - ax, dy = by - ay, len = std::sqrt(dx * dx + dy * dy);
-                LidRay& R = job.ray[e][k];
-                R.p[0] = ax; R.p[1] = ay;
-                R.d[0] = len > 1e-4f ? dx / len : 0.f;
-                R.d[1] = len > 1e-4f ? dy / len : 1.f;
-                R.ppmm = len;
-            }
+            for (int l = 0; l < 2; ++l)   // rays from ARKit's rims toward the opening
+                for (int k = 0; k < kCols; ++k) {
+                    const float t = 0.05f + 0.9f * ((float)k + 0.5f) / (float)kCols;
+                    V3 pos, n, tan;
+                    const V3 U = lid_frame(l == 0 ? *uppers[e] : *lowers[e],
+                                           l == 0 ? *lowers[e] : *uppers[e], t, l == 0, pos, n, tan);
+                    float ax, ay, bx, by;
+                    to_px(pos, ax, ay);
+                    to_px(pos - U * 1e-3f, bx, by);
+                    const float dx = bx - ax, dy = by - ay, len = std::sqrt(dx * dx + dy * dy);
+                    LidRay& R = job.ray[e][l][k];
+                    R.p[0] = ax; R.p[1] = ay;
+                    R.d[0] = len > 1e-4f ? dx / len : 0.f;
+                    R.d[1] = len > 1e-4f ? dy / len : 1.f;
+                    R.ppmm = len;
+                }
         }
         CropUniC cu{};
         cu.c[0] = job.cx; cu.c[1] = job.cy; cu.size = job.size; cu.roll = job.roll;

@@ -67,9 +67,13 @@ judge liner/lash placement from the second recorded frame on.
 
 - **Placement**: liner and lash roots sit on the real upper lash line — also
   with lowered lids / gaze down, where ARKit's rim rides onto the lid (no
-  bare lid between ink and eye) — through blink frames, and the liner flows
-  into the wing as one stroke; the fringe moves with the lid and never
-  hooks up the lid; lipstick follows the wearer's real lip edge
+  bare lid between ink and eye) — and the liner flows into the wing as one
+  stroke; the fringe moves with the lid and never hooks up the lid. Check
+  half-closed frames (ARKit blink ~0.3–0.7: the liner stays on the lid seam)
+  and closed ones (one clean fringe along the seam, no strands hanging below
+  the eye, no forked liner, no lower lashes); open eyes keep the lower lashes
+  on the real lower lid, never over the eyeball. Lipstick follows the
+  wearer's real lip edge
   (plus the look's overline, smooth, no JPEG-block steps) and never paints
   teeth, tongue or the skin around a small mouth; blush sits on the apples;
   brows untouched.
