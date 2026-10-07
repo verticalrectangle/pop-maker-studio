@@ -62,9 +62,11 @@ tool fails if the look does not report `applied` on a picked frame.
 
 ## 5. What to look for
 
-- **Placement**: liner hugs the upper lash line through blink frames and
-  flows into the wing as one stroke; lash roots sit on the lid margin and
-  the fringe moves with the lid; lipstick follows the wearer's real lip edge
+- **Placement**: liner and lash roots sit on the real upper lash line — also
+  with lowered lids / gaze down, where ARKit's rim rides onto the lid (no
+  bare lid between ink and eye) — through blink frames, and the liner flows
+  into the wing as one stroke; the fringe moves with the lid and never
+  hooks up the lid; lipstick follows the wearer's real lip edge
   (plus the look's overline, smooth, no JPEG-block steps) and never paints
   teeth, tongue or the skin around a small mouth; blush sits on the apples;
   brows untouched.

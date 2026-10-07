@@ -8,8 +8,10 @@
 //   2. blur   (half res, 2× 1-D) mask-normalized bilateral → the local skin
 //                                color; its 1×1 mip = the face-mean skin color
 //   2b. lipev (half res, mesh)   lip evidence: redness over the local skin
+//   3a. lashline (compute, 32)   the real upper lash line from the camera —
+//                                ARKit's rim rides onto the lowered lid
 //   3. face   (full res, mesh)   skin finish, pigment layers, lips, analytic
-//                                3D liner, gloss/highlight from ARKit's light
+//                                3D liner, gloss/highlight
 //   4. lashes (full res)         depth-tested strands, premultiplied over
 //
 // Pigment model (linear light): each translucent color in a look is authored
@@ -196,6 +198,106 @@ fragment float4 mk_lipev_f(MeshOut in [[stage_in]],
     return float4(lip_evidence(acc, redness(lo)));
 }
 
+// 3a. lash line (compute: one threadgroup, a thread per rim column). With the
+// lids lowered (gaze down at the phone) ARKit's upper rim rides up to
+// ~2.5 mm onto the lid, so liner and lash roots floated above the real lash
+// line. Each column scans the camera image down the lid (−1.5 … +3 mm around
+// the rim) for a brightness drop — lid skin above, lashes below; one DP per
+// eye picks the smoothest strong-edge path over its 16 columns, with a mild
+// pull toward the rim. Only downward corrections are taken (the failure is
+// the rim riding up; weak evidence never lifts the liner onto the lid), they
+// fade out as the eye closes, and they are smoothed in time. The kernel then
+// moves the liner stroke; the lash vertex shader moves the strand roots.
+constant int kCols = 16;
+constant int kStates = 31;
+constant float kS0 = -1.5;
+constant float kSt = 0.15;
+struct RimProbe { float2 p; float2 dir; float ppmm; float blink; float2 pad; };
+struct LineUni { float2 inv_src; float keep; float pad; };
+// Offset (mm, + = toward the eye opening) at rim parameter t of eye e.
+static float rim_offset(threadgroup const float* o, int e, float t) {
+    float k = clamp((t - 0.05) / 0.9 * float(kCols) - 0.5, 0.0, float(kCols - 1));
+    int i0 = int(k), i1 = min(i0 + 1, kCols - 1);
+    return mix(o[e * kCols + i0], o[e * kCols + i1], k - float(i0));
+}
+static float rim_offset(device const float* o, int e, float t) {
+    float k = clamp((t - 0.05) / 0.9 * float(kCols) - 0.5, 0.0, float(kCols - 1));
+    int i0 = int(k), i1 = min(i0 + 1, kCols - 1);
+    return mix(o[e * kCols + i0], o[e * kCols + i1], k - float(i0));
+}
+kernel void mk_lashline_k(uint tid [[thread_position_in_threadgroup]],
+                          device const RimProbe* probes [[buffer(0)]],
+                          constant LineUni& u [[buffer(1)]],
+                          device float* offs [[buffer(2)]],
+                          device const float4* stroke_in [[buffer(3)]],
+                          device const float4* stroke_dn [[buffer(4)]],
+                          device float4* stroke_out [[buffer(5)]],
+                          texture2d<float> src [[texture(0)]]) {
+    constexpr sampler ls(filter::linear, address::clamp_to_edge);
+    threadgroup float E[2 * kCols * kStates];
+    threadgroup float path[2 * kCols];
+    threadgroup float sm[2 * kCols];
+    const int i = int(tid);
+    RimProbe P = probes[i];
+    float2 tg = float2(-P.dir.y, P.dir.x) * (0.4 * P.ppmm);
+    float lum[kStates];
+    for (int k = 0; k < kStates; ++k) {
+        float2 q = P.p + P.dir * ((kS0 + kSt * float(k)) * P.ppmm);
+        float l = 0.0;
+        for (int j = -1; j <= 1; ++j)
+            l += luma(to_lin(src.sample(ls, (q + tg * float(j)) * u.inv_src).rgb));
+        lum[k] = l * (1.0 / 3.0);
+    }
+    for (int k = 0; k < kStates; ++k) {                  // relative drop going down
+        float above = 0.0, below = 0.0, na = 0.0, nb = 0.0;
+        for (int d = 0; d <= 2; ++d) {
+            if (k - d >= 0) { above += lum[k - d]; na += 1.0; }
+            if (k + d < kStates) { below += lum[k + d]; nb += 1.0; }
+        }
+        above /= na;
+        below /= nb;
+        E[i * kStates + k] = max(above - below, 0.0) / max(above, 1e-3);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (i % kCols == 0) {
+        float D[kStates];
+        uchar back[kCols][kStates];
+        for (int k = 0; k < kStates; ++k)
+            D[k] = -E[i * kStates + k] + 0.03 * abs(kS0 + kSt * float(k));
+        for (int c = 1; c < kCols; ++c) {
+            float Dn[kStates];
+            for (int k = 0; k < kStates; ++k) {
+                float best = 1e9;
+                int bi = 0;
+                for (int m = 0; m < kStates; ++m) {
+                    float ds = kSt * float(k - m);
+                    float v = D[m] + 0.6 * ds * ds;
+                    if (v < best) { best = v; bi = m; }
+                }
+                Dn[k] = best - E[(i + c) * kStates + k] + 0.03 * abs(kS0 + kSt * float(k));
+                back[c][k] = uchar(bi);
+            }
+            for (int k = 0; k < kStates; ++k) D[k] = Dn[k];
+        }
+        int bk = 0;
+        float bv = 1e9;
+        for (int k = 0; k < kStates; ++k)
+            if (D[k] < bv) { bv = D[k]; bk = k; }
+        for (int c = kCols - 1; c >= 0; --c) {
+            path[i + c] = kS0 + kSt * float(bk);
+            if (c > 0) bk = int(back[c][bk]);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float target = clamp(path[i], 0.0, 2.5) * (1.0 - smoothstep(0.3, 0.7, P.blink));
+    float v = mix(target, offs[i], u.keep);
+    offs[i] = v;
+    sm[i] = v;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float4 dn = stroke_dn[i], s = stroke_in[i];
+    stroke_out[i] = float4(s.xyz + dn.xyz * rim_offset(sm, i / kCols, dn.w), s.w);
+}
+
 // 3. face composite.
 struct FaceUni {
     float2 inv_target; float amount; float overlay;
@@ -210,21 +312,22 @@ struct FaceUni {
     float4 ink;         // rgb liner ratio over the local skin, a amount
     float4 light_dir;   // xyz view-space direction to the light, w gain
     float4 light_col;   // rgb, luma 1
-    float4 stroke[32];  // per eye (0: person's right, x < 0): liner centerline from
-                        // the inner corner — 10 lash-line + 6 wing points, w = width (m)
     float4 corner_n[2]; // per eye: outer-corner surface normal
 };
 
 // Liner coverage at anchor-space point p: signed distance to one
-// variable-width stroke. The lash-line part is measured in 3D on the lid; the
-// wing leaves the eye's curvature, so it is measured in the outer corner's
-// tangent plane. `px_m` is the fragment's footprint in meters (antialiasing).
-static float liner_cover(constant FaceUni& u, float3 p, float px_m) {
+// variable-width stroke (per eye, 0: person's right, x < 0: centerline from
+// the inner corner — 10 lash-line + 6 wing points, w = width in m — already
+// moved onto the camera-found lash line by mk_lashline_k). The lash-line part
+// is measured in 3D on the lid; the wing leaves the eye's curvature, so it is
+// measured in the outer corner's tangent plane. `px_m` is the fragment's
+// footprint in meters (antialiasing).
+static float liner_cover(constant FaceUni& u, device const float4* stroke, float3 p, float px_m) {
     int e = p.x < 0.0 ? 0 : 1;
     float3 n = u.corner_n[e].xyz;
     float sd = 1e9;
     for (int k = 0; k < 15; ++k) {
-        float4 a = u.stroke[e * 16 + k], b = u.stroke[e * 16 + k + 1];
+        float4 a = stroke[e * 16 + k], b = stroke[e * 16 + k + 1];
         float3 pa = p - a.xyz, ab = b.xyz - a.xyz;
         if (k >= 9) { pa -= n * dot(pa, n); ab -= n * dot(ab, n); }
         float t = saturate(dot(pa, ab) / max(dot(ab, ab), 1e-12));
@@ -235,6 +338,7 @@ static float liner_cover(constant FaceUni& u, float3 p, float px_m) {
 
 fragment float4 mk_face_f(MeshOut in [[stage_in]],
                           constant FaceUni& u [[buffer(0)]],
+                          device const float4* stroke [[buffer(1)]],
                           texture2d<float> src [[texture(0)]],
                           texture2d<float> blur [[texture(1)]],
                           texture2d<float> mask_a [[texture(2)]],
@@ -260,7 +364,7 @@ fragment float4 mk_face_f(MeshOut in [[stage_in]],
     float3 lo = local_skin(blur, sp, u.skin.w, c0, mean_skin, support);
 
     float px_m = max(0.7 * length(fwidth(in.mpos)), 2e-5);
-    float ink = liner_cover(u, in.mpos, px_m);
+    float ink = liner_cover(u, stroke, in.mpos, px_m);
 
     if (u.overlay > 0.5) {               // alignment QA: UV checker + liner
         float2 cell = floor(in.uv * 48.0);
@@ -347,15 +451,24 @@ fragment float4 mk_face_f(MeshOut in [[stage_in]],
 // 4. lashes: each strand segment is a screen-aligned quad at least 1 px wide;
 // coverage = true width in px, so sub-pixel strands darken by exactly their
 // area (no aliasing, no stair-stepped fringe).
-struct LashVtx { packed_float3 p0; packed_float3 p1; float w0; float w1; float side; float end; float shade; float pad; };
+struct LashVtx {
+    packed_float3 p0; packed_float3 p1;
+    float w0; float w1; float side; float end; float shade;
+    float t;              // root's rim parameter (upper rows), < 0: stays on ARKit's rim
+    packed_float3 dn;     // root shift per mm toward the eye opening (m)
+    float eye;
+};
 struct LashUni { float4x4 mvp; float2 half_target; float px_per_m; float alpha; float4 color; };
 struct LashOut { float4 pos [[position]]; float side_px; float core_px; float cover; float shade; };
 vertex LashOut mk_lash_v(uint vid [[vertex_id]],
                          device const LashVtx* vb [[buffer(0)]],
-                         constant LashUni& u [[buffer(1)]]) {
+                         constant LashUni& u [[buffer(1)]],
+                         device const float* offs [[buffer(2)]]) {
     LashVtx L = vb[vid];
-    float4 a = u.mvp * float4(float3(L.p0), 1.0);
-    float4 b = u.mvp * float4(float3(L.p1), 1.0);
+    // upper strands ride the camera-found lash line (mk_lashline_k) rigidly
+    float3 sh = L.t >= 0.0 ? float3(L.dn) * rim_offset(offs, int(L.eye), L.t) : float3(0.0);
+    float4 a = u.mvp * float4(float3(L.p0) + sh, 1.0);
+    float4 b = u.mvp * float4(float3(L.p1) + sh, 1.0);
     float2 sa = a.xy / a.w * u.half_target, sb = b.xy / b.w * u.half_target;
     float2 dir = sb - sa;
     float len = length(dir);
@@ -611,21 +724,32 @@ struct FaceUniC {
     float skin[4], blush[4], shadow[4], freckle[4], misc[4];
     float lip_cream[4], lip_shape[4], hl[4], ink[4];
     float light_dir[4], light_col[4];
-    float stroke[32][4];
     float corner_n[2][4];
 };
-struct LashVtx { float p0[3]; float p1[3]; float w0, w1, side, end, shade, pad; };
+struct LashVtx {
+    float p0[3]; float p1[3]; float w0, w1, side, end, shade, t;
+    float dn[3]; float eye;
+};
 struct LashUniC { float mvp[16]; float half_target[2]; float px_per_m; float alpha; float color[4]; };
-static_assert(sizeof(LashVtx) == 48, "LashVtx must match the MSL packed layout");
+struct RimProbeC { float p[2]; float dir[2]; float ppmm; float blink; float pad[2]; };
+struct LineUniC { float inv_src[2]; float keep; float pad; };
+static_assert(sizeof(LashVtx) == 64, "LashVtx must match the MSL packed layout");
+static_assert(sizeof(RimProbeC) == 32, "RimProbeC must match the MSL RimProbe layout");
+constexpr int kProbes = 32;   // 2 eyes × 16 rim columns = mk_lashline_k's threadgroup
 
 struct Ctx {
     bool tried = false, ok = false;
     id<MTLDevice> dev = nil;
     id<MTLCommandQueue> upload_q = nil;
     id<MTLRenderPipelineState> prep = nil, blur = nil, lipev = nil, face = nil, lash = nil;
+    id<MTLComputePipelineState> lashline = nil;
     id<MTLDepthStencilState> dss_face = nil, dss_lash = nil;
     id<MTLBuffer> uv = nil, idx = nil;
     id<MTLBuffer> pos[kRing] = {}, nrm[kRing] = {}, lashv[kRing] = {};
+    id<MTLBuffer> probes[kRing] = {}, stroke_in[kRing] = {}, stroke_dn[kRing] = {},
+                  stroke_out[kRing] = {};
+    id<MTLBuffer> line_offs = nil;   // per rim column, mm; persists across frames
+    double line_t = -1.0;            // last frame time the lash line was updated
     int ring = 0;
     int tw = 0, th = 0;                                   // full-res target size
     id<MTLTexture> half0 = nil, half1 = nil, half2 = nil;  // prep, blur tmp, blur out (mips)
@@ -687,9 +811,19 @@ bool init_ctx(id<MTLDevice> dev) {
         g.nrm[i] = [dev newBufferWithLength:ARKIT_NPTS * 12 options:MTLResourceStorageModeShared];
         g.lashv[i] = [dev newBufferWithLength:sizeof(LashVtx) * kMaxLashVerts
                                       options:MTLResourceStorageModeShared];
+        g.probes[i] = [dev newBufferWithLength:sizeof(RimProbeC) * kProbes
+                                       options:MTLResourceStorageModeShared];
+        g.stroke_in[i] = [dev newBufferWithLength:16 * kProbes options:MTLResourceStorageModeShared];
+        g.stroke_dn[i] = [dev newBufferWithLength:16 * kProbes options:MTLResourceStorageModeShared];
+        g.stroke_out[i] = [dev newBufferWithLength:16 * kProbes options:MTLResourceStorageModePrivate];
     }
+    g.line_offs = [dev newBufferWithLength:sizeof(float) * kProbes options:MTLResourceStorageModeShared];
+    std::memset(g.line_offs.contents, 0, sizeof(float) * kProbes);
+    id<MTLFunction> lk = [lib newFunctionWithName:@"mk_lashline_k"];
+    g.lashline = lk ? [dev newComputePipelineStateWithFunction:lk error:&err] : nil;
+    if (!g.lashline) NSLog(@"[arkit_makeup] mk_lashline_k pso: %@", err);
     g.upload_q = [dev newCommandQueue];
-    g.ok = g.prep && g.blur && g.lipev && g.face && g.lash && g.dss_face && g.dss_lash;
+    g.ok = g.prep && g.blur && g.lipev && g.face && g.lash && g.lashline && g.dss_face && g.dss_lash;
     return g.ok;
 }
 
@@ -813,12 +947,13 @@ float rnd(uint32_t seed) { return (float)(hash_u32(seed) & 0xffffff) / 16777215.
 // the lid's surface normal tilted `lift` toward the lid, curls further toward
 // the lid along its length, flares outward at the outer corner, and converges
 // on its clump's tip (wispy clusters). Lid motion rotates the local frame, so
-// blinks carry the fringe with the lid.
+// blinks carry the fringe with the lid. `follow`: the GPU moves each strand
+// rigidly onto the camera-found lash line (mk_lashline_k; upper rows).
 void build_row(std::vector<LashVtx>& out, const Poly& rim, const Poly& other, V3 eye_c,
-               const LashRow& R, float blink, uint32_t seed) {
+               const LashRow& R, float blink, uint32_t seed, int eye, bool follow) {
     if (R.count <= 0) return;
     constexpr int kSeg = 6;
-    struct Strand { V3 pts[kSeg + 1]; float w0; int clump; };
+    struct Strand { V3 pts[kSeg + 1]; float w0; int clump; float t; V3 dn; };
     std::vector<Strand> strands((size_t)R.count);
     const float d2r = 3.14159265f / 180.f;
     for (int i = 0; i < R.count; ++i) {
@@ -847,6 +982,8 @@ void build_row(std::vector<LashVtx>& out, const Poly& rim, const Poly& other, V3
         Strand& S = strands[(size_t)i];
         S.pts[0] = root;
         S.clump = ci;
+        S.t = t;
+        S.dn = U * -1e-3f;                                  // per mm toward the opening
         S.w0 = R.root_mm * 1e-3f * (0.8f + 0.4f * rnd(sd + 3u));
         for (int j = 1; j <= kSeg; ++j) {
             float s = ((float)j - 0.5f) / (float)kSeg;
@@ -884,6 +1021,9 @@ void build_row(std::vector<LashVtx>& out, const Poly& rim, const Poly& other, V3
                 v.w0 = w0; v.w1 = w1;
                 v.end = cv[0]; v.side = cv[1];
                 v.shade = 1.f + 0.6f * (cv[0] > 0.5f ? s1 : s0);   // tips thin to lighter
+                v.t = follow ? S.t : -1.f;
+                v.dn[0] = S.dn.x; v.dn[1] = S.dn.y; v.dn[2] = S.dn.z;
+                v.eye = (float)eye;
                 out.push_back(v);
             }
         }
@@ -1068,26 +1208,32 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
     // into the lower lid), lifted half a stroke onto the lid so the ink's
     // lower edge sits on the lash line; then a quadratic wing that leaves in
     // the lash line's own direction and bends to the look's wing angle — one
-    // stroke, so band and wing never cross.
+    // stroke, so band and wing never cross. Each point also carries its
+    // lid-down direction and rim parameter: mk_lashline_k moves it onto the
+    // camera-found lash line (the wing rides along with its start).
     const float w_in = L->liner_in_mm * 1e-3f, w_out = L->liner_out_mm * 1e-3f;
     const float off = L->liner_offset_mm * 1e-3f, wing_len = L->wing_mm * 1e-3f;
     const float t_end = 0.12f;
     const float lift = L->wing_lift_deg * 3.14159265f / 180.f;
+    float (*stroke)[4] = (float (*)[4])g.stroke_in[r].contents;
+    float (*stroke_dn)[4] = (float (*)[4])g.stroke_dn[r].contents;
     for (int e = 0; e < 2; ++e) {
         const Poly& P = *uppers[e];
-        float (*S)[4] = &fu.stroke[e * 16];
-        V3 pos, n, tan;
+        float (*S)[4] = stroke + e * 16;
+        float (*Dn)[4] = stroke_dn + e * 16;
+        V3 pos, n, tan, U;
         for (int i = 0; i < 10; ++i) {
             const float t = 1.f - (1.f - t_end) * (float)i / 9.f;    // inner → outer
             P.eval(t, pos, n, tan);
-            V3 U = normalize(cross(n, tan));
+            U = normalize(cross(n, tan));
             if (dot(U, pos - eye_c[e]) < 0.f) U = U * -1.f;
             const float w = mixf(w_out, w_in, smooth01(t))
                           * (1.f - 0.6f * smooth01((t - 0.8f) / 0.2f));
             const V3 c = pos + U * (0.5f * w + off);
             S[i][0] = c.x; S[i][1] = c.y; S[i][2] = c.z; S[i][3] = w;
+            Dn[i][0] = -U.x * 1e-3f; Dn[i][1] = -U.y * 1e-3f; Dn[i][2] = -U.z * 1e-3f; Dn[i][3] = t;
         }
-        // `tan` is the lash line's direction at t_end (toward the inner corner).
+        // `tan` and `U` are the lash line's at t_end (tan toward the inner corner).
         const V3 nO = P.n.front();
         const V3 axis = normalize(P.p.front() - P.p.back());        // inner → outer corner
         V3 lead = normalize(tan * -1.f + axis);
@@ -1101,9 +1247,48 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
             const V3 q = A * ((1.f - s) * (1.f - s)) + C * (2.f * (1.f - s) * s) + T * (s * s);
             S[9 + j][0] = q.x; S[9 + j][1] = q.y; S[9 + j][2] = q.z;
             S[9 + j][3] = w_out * std::pow(1.f - s, 0.9f);
+            std::memcpy(Dn[9 + j], Dn[9], sizeof(Dn[9]));
         }
         fu.corner_n[e][0] = nO.x; fu.corner_n[e][1] = nO.y; fu.corner_n[e][2] = nO.z;
     }
+
+    // Lash-line probes: 16 columns per upper rim (t = 0.05 … 0.95), each a
+    // screen-space ray from ARKit's rim toward the eye opening, `ppmm` pixels
+    // per millimetre along it.
+    auto to_px = [&](V3 p, float& x, float& y) {
+        const float cx = mvp[0] * p.x + mvp[4] * p.y + mvp[8] * p.z + mvp[12];
+        const float cy = mvp[1] * p.x + mvp[5] * p.y + mvp[9] * p.z + mvp[13];
+        const float iw = 1.f / std::max(mvp[3] * p.x + mvp[7] * p.y + mvp[11] * p.z + mvp[15], 1e-6f);
+        x = (cx * iw * 0.5f + 0.5f) * (float)W;
+        y = (0.5f - cy * iw * 0.5f) * (float)H;
+    };
+    const float blink_e[2] = {f.has_blend ? f.blend[kBlinkR] : 0.f,
+                              f.has_blend ? f.blend[kBlinkL] : 0.f};
+    RimProbeC* probes = (RimProbeC*)g.probes[r].contents;
+    for (int e = 0; e < 2; ++e)
+        for (int k = 0; k < 16; ++k) {
+            const float t = 0.05f + 0.9f * ((float)k + 0.5f) / 16.f;
+            V3 pos, n, tan;
+            uppers[e]->eval(t, pos, n, tan);
+            V3 U = normalize(cross(n, tan));
+            if (dot(U, pos - eye_c[e]) < 0.f) U = U * -1.f;
+            float ax, ay, bx, by;
+            to_px(pos, ax, ay);
+            to_px(pos - U * 1e-3f, bx, by);
+            const float dx = bx - ax, dy = by - ay, len = std::sqrt(dx * dx + dy * dy);
+            RimProbeC& pr = probes[e * 16 + k];
+            pr.p[0] = ax; pr.p[1] = ay;
+            pr.dir[0] = len > 1e-4f ? dx / len : 0.f;
+            pr.dir[1] = len > 1e-4f ? dy / len : 1.f;
+            pr.ppmm = len;
+            pr.blink = blink_e[e];
+        }
+    LineUniC lnu{};
+    lnu.inv_src[0] = 1.f / (float)W;
+    lnu.inv_src[1] = 1.f / (float)H;
+    // A new or resumed face starts from its own frame; otherwise ~2-frame smoothing.
+    lnu.keep = (g.line_t < 0.0 || time_s < g.line_t || time_s - g.line_t > 0.3) ? 0.f : 0.5f;
+    g.line_t = time_s;
 
     // Lash strands (anchor space).
     static std::vector<LashVtx> lv;
@@ -1111,11 +1296,25 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
     if (L->lash_amt > 0.f) {
         const float bR = f.has_blend ? f.blend[kBlinkR] : 0.f;
         const float bL = f.has_blend ? f.blend[kBlinkL] : 0.f;
-        build_row(lv, upR, loR, eye_c[0], L->upper, bR, 11u);
-        build_row(lv, upL, loL, eye_c[1], L->upper, bL, 12u);
-        build_row(lv, loR, upR, eye_c[0], L->lower, bR, 21u);
-        build_row(lv, loL, upL, eye_c[1], L->lower, bL, 22u);
+        build_row(lv, upR, loR, eye_c[0], L->upper, bR, 11u, 0, true);
+        build_row(lv, upL, loL, eye_c[1], L->upper, bL, 12u, 1, true);
+        build_row(lv, loR, upR, eye_c[0], L->lower, bR, 21u, 0, false);
+        build_row(lv, loL, upL, eye_c[1], L->lower, bL, 22u, 1, false);
         if (!lv.empty()) std::memcpy(g.lashv[r].contents, lv.data(), sizeof(LashVtx) * lv.size());
+    }
+
+    {   // ── 3a. lash line (compute) ──
+        id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+        [ce setComputePipelineState:g.lashline];
+        [ce setBuffer:g.probes[r] offset:0 atIndex:0];
+        [ce setBytes:&lnu length:sizeof(lnu) atIndex:1];
+        [ce setBuffer:g.line_offs offset:0 atIndex:2];
+        [ce setBuffer:g.stroke_in[r] offset:0 atIndex:3];
+        [ce setBuffer:g.stroke_dn[r] offset:0 atIndex:4];
+        [ce setBuffer:g.stroke_out[r] offset:0 atIndex:5];
+        [ce setTexture:src atIndex:0];
+        [ce dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(kProbes, 1, 1)];
+        [ce endEncoding];
     }
 
     {
@@ -1134,6 +1333,7 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
         [e setDepthStencilState:g.dss_face];
         bind_mesh(e);
         [e setFragmentBytes:&fu length:sizeof(fu) atIndex:0];
+        [e setFragmentBuffer:g.stroke_out[r] offset:0 atIndex:1];
         [e setFragmentTexture:src atIndex:0];
         [e setFragmentTexture:g.half2 atIndex:1];
         [e setFragmentTexture:L->mask_a atIndex:2];
@@ -1154,6 +1354,7 @@ bool arkit_makeup_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb,
             [e setDepthStencilState:g.dss_lash];
             [e setCullMode:MTLCullModeNone];
             [e setVertexBuffer:g.lashv[r] offset:0 atIndex:0];
+            [e setVertexBuffer:g.line_offs offset:0 atIndex:2];
             [e setVertexBytes:&lu length:sizeof(lu) atIndex:1];
             [e setFragmentBytes:&lu length:sizeof(lu) atIndex:0];
             [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0
