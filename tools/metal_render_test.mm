@@ -1,6 +1,4 @@
 #include <cmath>
-#include <filesystem>
-#include "../src/paths.h"
 #include <algorithm>
 // metal_render_test.mm — numeric offscreen verification of the Metal scene
 // compositor + FX runner (the iOS render path), run on a macOS host GPU.
@@ -42,8 +40,6 @@
 #undef Marker
 #include "../src/pms_engine.h"
 #include "../src/metal_render.h"
-#include "stb_image.h"
-#include <unistd.h>
 #include "../src/app.h"          // AppState/Track/Clip — case f builds a scene directly
 #include "json.hpp"
 #include <cstdio>
@@ -239,24 +235,6 @@ static std::string bgr_str(const double c[3]) {
     char buf[64];
     snprintf(buf, sizeof buf, "(B=%.1f G=%.1f R=%.1f)", c[0], c[1], c[2]);
     return buf;
-}
-struct RegionStats { double mean_lum, std_lum; int max_chan, min_chan; };
-static RegionStats region_stats(const Img& im, PxRect r) {
-    double sum = 0.0, sum2 = 0.0; long n = 0;
-    int maxc = 0, minc = 255;
-    for (int y = r.y0; y < r.y1; ++y)
-        for (int x = r.x0; x < r.x1; ++x) {
-            const uint8_t* p = at(im, x, y);
-            int m = std::max((int)p[0], std::max((int)p[1], (int)p[2]));
-            int n2 = std::min((int)p[0], std::min((int)p[1], (int)p[2]));
-            maxc = std::max(maxc, m); minc = std::min(minc, n2);
-            double lum = 0.114 * p[0] + 0.587 * p[1] + 0.299 * p[2];
-            sum += lum; sum2 += lum * lum; ++n;
-        }
-    double mean = n ? sum / n : 0.0;
-    double var = n ? sum2 / n - mean * mean : 0.0;
-    RegionStats st; st.mean_lum = mean; st.std_lum = std::sqrt(std::max(0.0, var));
-    st.max_chan = maxc; st.min_chan = minc; return st;
 }
 
 // ── Cases ────────────────────────────────────────────────────────────────────
@@ -790,121 +768,6 @@ static void case_shape() {
            bgr_str(center).c_str(), bgr_str(corner).c_str());
 }
 
-
-// o. face_fx end-to-end: the REAL record-mode makeup path — face models +
-// tracker worker + camera side-feed + the Metal beauty/warp passes. Feeds the
-// repo test portrait as camera frames, waits for the worker to lock on, then
-// asserts a procedural makeup look (Barbie: blush/lip/lash + shape) visibly
-// changes the frame. Skips (with a note) when models are absent.
-static void case_face_fx(CVPixelBufferRef unused) {
-    (void)unused;
-    const std::string C = "o.face_fx";
-    json fd = cmd(C, "face_track_enable", {{"on", true}});
-    if (!fd.value("models_present", false)) {
-        printf("  [o] face models missing — face_fx case SKIPPED\n");
-        return;
-    }
-    int iw = 0, ih = 0, n = 0;
-    unsigned char* rgb = stbi_load("assets/test_face.png", &iw, &ih, &n, 3);
-    if (!rgb) fail(C, "cannot load assets/test_face.png");
-    NSDictionary* attrs = @{ (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
-                             (id)kCVPixelBufferMetalCompatibilityKey: @YES };
-    CVPixelBufferRef pb = NULL;
-    CVPixelBufferCreate(kCFAllocatorDefault, iw, ih, kCVPixelFormatType_32BGRA,
-                        (__bridge CFDictionaryRef)attrs, &pb);
-    if (!pb) fail(C, "camera pixel buffer alloc failed");
-    CVPixelBufferLockBaseAddress(pb, 0);
-    uint8_t* dst = (uint8_t*)CVPixelBufferGetBaseAddress(pb);
-    size_t bpr = CVPixelBufferGetBytesPerRow(pb);
-    for (int y = 0; y < ih; ++y)
-        for (int x = 0; x < iw; ++x) {
-            const unsigned char* px = rgb + ((size_t)y * iw + x) * 3;
-            uint8_t* q = dst + (size_t)y * bpr + (size_t)x * 4;
-            q[0] = px[2]; q[1] = px[1]; q[2] = px[0]; q[3] = 255;
-        }
-    CVPixelBufferUnlockBaseAddress(pb, 0);
-    stbi_image_free(rgb);
-
-    build_video_project(C);
-    clear_layer(0, 0);
-    cmd(C, "set_live_fx", {{"fx", json::array()}});
-    // Feed frames until the worker locks on (async — poll face_debug).
-    bool locked = false;
-    for (int k = 0; k < 100 && !locked; ++k) {
-        pms_submit_camera_frame(g_e, pb, 0, 0.1);
-        usleep(50 * 1000);
-        locked = cmd(C, "face_debug", json::object()).value("valid", false);
-    }
-    check(locked, C, "face worker never produced a valid observation");
-    Img plain = render_frame(C + ".plain");
-
-    // UV-mesh material blend: dark pigment should keep skin detail, not flatten.
-    const std::string goth_tex = "makeup_goth.png";
-    bool goth_present = std::filesystem::exists(app_models_dir() + "/face/" + goth_tex);
-    if (goth_present) {
-        cmd(C, "set_live_fx",
-            {{"fx", json::array({ {{"fx_type", "face_fx"},
-                                   {"face_makeup_tex", goth_tex},
-                                   {"params", {{"face_filter", 0.0},
-                                               {"face_amount", 1.0}}}} })}});
-        pms_submit_camera_frame(g_e, pb, 0, 0.2);
-        Img goth = render_frame(C + ".goth");
-        double gdiff = frac_diff(goth, plain, 6);
-        check(gdiff > 0.01, C, "face_fx (makeup_goth) changed no pixels (diff=" +
-              std::to_string(gdiff) + ")");
-        PxRect eye = {0, 260, W, 300};
-        RegionStats p_eye = region_stats(plain, eye);
-        RegionStats g_eye = region_stats(goth, eye);
-        check(g_eye.std_lum > p_eye.std_lum * 0.5, C,
-              "dark pigment flattened source detail (goth std=" +
-              std::to_string(g_eye.std_lum) + " vs plain=" + std::to_string(p_eye.std_lum) + ")");
-        printf("  [o] face_fx/goth: diff=%.3f, detail preserved (std %.1f vs %.1f)\n",
-               gdiff, g_eye.std_lum, p_eye.std_lum);
-    }
-
-    // Bright low-alpha gloss should add highlight, not paint white over the source.
-    const std::string gloss_tex = "makeup_cherry_gloss.png";
-    bool gloss_present = std::filesystem::exists(app_models_dir() + "/face/" + gloss_tex);
-    if (gloss_present) {
-        cmd(C, "set_live_fx",
-            {{"fx", json::array({ {{"fx_type", "face_fx"},
-                                   {"face_makeup_tex", gloss_tex},
-                                   {"params", {{"face_filter", 0.0},
-                                               {"face_amount", 1.0}}}} })}});
-        pms_submit_camera_frame(g_e, pb, 0, 0.3);
-        Img glossy = render_frame(C + ".gloss");
-        double gldiff = frac_diff(glossy, plain, 6);
-        check(gldiff > 0.01, C, "face_fx (makeup_cherry_gloss) changed no pixels (diff=" +
-              std::to_string(gldiff) + ")");
-        PxRect gloss = {0, 300, W, 400};
-        RegionStats p_gloss = region_stats(plain, gloss);
-        RegionStats a_gloss = region_stats(glossy, gloss);
-        check(a_gloss.mean_lum < p_gloss.mean_lum + 12.0, C,
-              "gloss over-brightened mean (cherry gloss mean=" +
-              std::to_string(a_gloss.mean_lum) + " vs plain=" + std::to_string(p_gloss.mean_lum) + ")");
-        check(a_gloss.max_chan < p_gloss.max_chan + 14 && a_gloss.max_chan < 252, C,
-              "gloss clipped to white (cherry gloss max=" + std::to_string(a_gloss.max_chan) + ")");
-        printf("  [o] face_fx/cherry_gloss: diff=%.3f, gloss non-clipped (max %d, mean %.1f)\n",
-               gldiff, a_gloss.max_chan, a_gloss.mean_lum);
-    }
-
-    // Keep the original procedural smoke check.
-    cmd(C, "set_live_fx",
-        {{"fx", json::array({ {{"fx_type", "face_fx"},
-                               {"params", {{"face_filter", 14.0},   // Barbie
-                                           {"face_amount", 1.0}}}} })}});
-    pms_submit_camera_frame(g_e, pb, 0, 0.4);
-    Img out = render_frame(C + ".made_up");
-    double diff = frac_diff(out, plain, 6);
-    check(diff > 0.01, C, "face_fx (Barbie) changed no pixels (diff frac=" +
-          std::to_string(diff) + ") — makeup passes dead");
-    cmd(C, "set_live_fx", {{"fx", json::array()}});
-    cmd(C, "face_track_enable", {{"on", false}});
-    pms_submit_camera_frame(g_e, NULL, 0, 0);
-    CVPixelBufferRelease(pb);
-    printf("  [o] face_fx: tracker locked, makeup passes change pixels (%.3f)\n", diff);
-}
-
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -961,7 +824,6 @@ int main() {
         case_chroma_feedback(green, gradient);
         case_chroma_matte_key(red, blue);
         case_shape();
-        case_face_fx(checker);
 
         CVPixelBufferRelease(green);    CVPixelBufferRelease(gradient);
         CVPixelBufferRelease(red);      CVPixelBufferRelease(blue);

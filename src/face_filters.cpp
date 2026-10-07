@@ -316,8 +316,8 @@ bool beauty_look_for(int filter_id, BeautyLook& L) {
     }
 }
 
-// Shape half of a parametric beauty look — shared by the enum path below and
-// the Makeup Studio's custom looks (face_fx live entries on Metal).
+// Shape half of a parametric beauty look (the enum path below fills L from
+// beauty_look_for).
 int face_filter_bumps_look(const BeautyLook& L, float amount, const FaceObs& obs,
                            FaceWarpBump* out) {
     if (!obs.valid || obs.w <= 0 || obs.h <= 0) return 0;
@@ -437,7 +437,7 @@ int face_filter_bumps(int filter_id, float amount, const FaceObs& obs,
         case FaceFilter::Sculpt:
         case FaceFilter::Honey: {
             // Shape half of the beauty looks (skin half runs on the GPU in
-            // face_beauty_apply) — shared with the Studio path.
+            // face_beauty_apply).
             BeautyLook L;
             if (!beauty_look_for(filter_id, L)) break;
             return face_filter_bumps_look(L, amount, obs, out);
@@ -644,10 +644,8 @@ void face_filter_draw_doggy(ImDrawList* dl, const FaceObs& obs, float amount,
 // Warp + doggy sprites for a tracked face, rendered into the slot's FBO.
 // `obs` lives in the texture's pixel space (w×h). Returns tex unchanged when
 // the filter produces nothing. `anim_t` drives the tongue wag.
-// Assemble the platform-neutral render plan (see face_filters.h). This is
-// the exact parameter assembly face_filter_apply_obs used inline — moved out
-// so the iOS Metal runner shares it with the desktop GL path.
-bool g_face_overlay = false;
+// Assemble the platform-neutral render plan (see face_filters.h) — the
+// parameter assembly face_filter_apply_obs renders.
 
 bool face_filter_build_plan_look(const BeautyLook& L, float amount,
                                  const FaceObs& obs, int w, int h,

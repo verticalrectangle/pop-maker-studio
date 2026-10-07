@@ -99,9 +99,9 @@ set(IMGUI_APP_SOURCES
 if(NOT APPLE AND NOT PMS_HEADLESS)
     list(APPEND PMS_PLATFORM_ENGINE_SOURCES src/audio_pw.cpp)
 endif()
-# Metal RenderSurface (Phase 3) — Apple only.
+# Metal RenderSurface (Phase 3) + the ARKit makeup renderer — Apple only.
 if(APPLE)
-    list(APPEND PMS_PLATFORM_ENGINE_SOURCES src/metal_render.mm)
+    list(APPEND PMS_PLATFORM_ENGINE_SOURCES src/metal_render.mm src/arkit_makeup.mm)
 endif()
 
 option(PMS_ENGINE_ONLY "Build only pms-engine + engine-smoke (no desktop app; macOS Phase 2 bring-up)" OFF)
@@ -277,14 +277,6 @@ add_executable(face-smoke tools/face_smoke.cpp)
 target_link_libraries(face-smoke PRIVATE pms-engine)
 target_include_directories(face-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 
-# arkit-map-smoke: regression gate for the static ARKit->MediaPipe
-# correspondence (tools/gen_arkit_mp_map.py). Projects the canonical ARKit
-# mesh into a synthetic frame and asserts anatomical landmark placement.
-# No models needed. Run: arkit-map-smoke tools/arkit_face_canonical.obj
-add_executable(arkit-map-smoke tools/arkit_map_smoke.cpp)
-target_link_libraries(arkit-map-smoke PRIVATE pms-engine)
-target_include_directories(arkit-map-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor ${CMAKE_SOURCE_DIR}/vendor/imgui)
-
 # metal-render-test: numeric offscreen assertions for the Metal scene
 # compositor + FX runner (the iOS render path) on a macOS host GPU. Drives the
 # real C ABI (pms_create/pms_command/pms_submit_layer_frame/pms_render) and
@@ -298,23 +290,14 @@ if(APPLE)
     target_include_directories(metal-render-test PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
     target_compile_options(metal-render-test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
-    add_executable(face-fx-smoke tools/face_fx_smoke.mm)
-    target_link_libraries(face-fx-smoke PRIVATE pms-engine
-        "-framework Metal" "-framework CoreVideo" "-framework IOSurface"
-        "-framework QuartzCore" "-framework Foundation")
-    target_include_directories(face-fx-smoke PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
-
+    # arkit-native-replay: renders ARKit makeup looks through the real engine
+    # onto real-face fixtures (recorded frames + geometry) or the synthetic
+    # canonical head, writing PNGs and asserting placement/blink invariants.
     add_executable(arkit-native-replay tools/arkit_native_replay.mm)
     target_link_libraries(arkit-native-replay PRIVATE pms-engine
         "-framework Metal" "-framework CoreVideo" "-framework IOSurface"
         "-framework QuartzCore" "-framework Foundation")
     target_include_directories(arkit-native-replay PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
-
-    add_executable(face-fx-photo tools/face_fx_photo.mm)
-    target_link_libraries(face-fx-photo PRIVATE pms-engine
-        "-framework Metal" "-framework CoreVideo" "-framework IOSurface"
-        "-framework QuartzCore" "-framework Foundation")
-    target_include_directories(face-fx-photo PRIVATE src ${CMAKE_SOURCE_DIR}/vendor)
 endif()
 
 

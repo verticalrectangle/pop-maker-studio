@@ -5,7 +5,6 @@
 #include "face_track.h"
 #include "fx_shader.h"
 #include <imgui.h>
-#include "arkit_face.h"
 #include <functional>
 
 struct FaceWarpBump {
@@ -42,8 +41,7 @@ const char* face_filter_name(int id);
 int         face_filter_count();
 
 // One parametric beauty engine (skin + shape + makeup scalars). Preset looks
-// (beauty_look_for) fill it from the FaceFilter enum; the iOS Makeup Studio
-// composes it directly from live-stack params — no enum growth per look.
+// (beauty_look_for) fill it from the FaceFilter enum.
 struct BeautyLook {
     float smooth = 0, brighten = 0, warmth = 0, eye_pop = 0, blush = 0, lip = 0;
     float eyes = 0, cheek = 0, vline = 0, nose = 0, lips_plump = 0;
@@ -76,14 +74,10 @@ int face_filter_bumps_look(const BeautyLook& L, float amount, const FaceObs& obs
 
 // Platform-neutral render plan for a beauty/makeup look: everything the GPU
 // passes need (assembled FaceBeautyParams, the UV-mesh landmark positions +
-// makeup texture name, and the warp bumps), with NO graphics calls — shared
-// by the desktop GL path (face_filter_apply_obs) and the iOS Metal runner
-// (metal_render.mm face_fx branch). `w/h` = the target texture size; obs
-// landmarks are rescaled from observation space exactly like apply_obs.
-// Debug: render the tracked/bridged 478 landmarks over the frame (toggled
-// via the "face_overlay" IPC command) — on-device alignment QA.
-extern bool g_face_overlay;
-
+// makeup texture name, and the warp bumps), with NO graphics calls — the
+// desktop GL path (face_filter_apply_obs) renders it. `w/h` = the target
+// texture size; obs landmarks are rescaled from observation space exactly
+// like apply_obs.
 struct FaceRenderPlan {
     bool  valid = false;
     bool  has_beauty = false;
@@ -92,23 +86,12 @@ struct FaceRenderPlan {
     float makeup_opacity = 0.f;
     float makeup_adapt   = 1.f;
     float mesh_pts[FT_NPTS][2];         // texture-space px (when makeup_tex)
-    // Landmarks came from the ARKit mesh (latency-free lid tracking):
-    // the render backend skips the MediaPipe-era blink fade in face_mk_f.
-    bool  has_arkit_mesh = false;
     FaceWarpBump bumps[MAX_FACE_BUMPS];
     int   n_bumps = 0;
 };
-// Build a MediaPipe-format FaceRenderPlan from an ARKit observation.
-// Maps ARKit mesh landmarks → MediaPipe indices, computes runtime landmarks,
-// then calls face_filter_build_plan_look. The makeup texture pass uses the
-// MediaPipe mesh (468 pts) + MediaPipe canonical UVs (k_face_uv), NOT the
-// ARKit mesh — makeup PNGs are authored for MediaPipe UV space.
-bool face_filter_build_plan_from_arkit(const BeautyLook& L, float amount,
-                                       const ARKitFaceObs& obs, int w, int h,
-                                       FaceRenderPlan& out);
 bool face_filter_build_plan(int filter_id, float amount, const FaceObs& obs,
                             int w, int h, FaceRenderPlan& out);
-// Plan for a parametric look (Makeup Studio path — bypasses the enum).
+// Plan for a parametric look (bypasses the enum).
 bool face_filter_build_plan_look(const BeautyLook& L, float amount,
                                  const FaceObs& obs, int w, int h,
                                  FaceRenderPlan& out);

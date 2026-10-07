@@ -1,138 +1,85 @@
-# ARKit Makeup QA — fixture capture, replay, and gates
+# ARKit makeup QA — capture, replay, gates
 
-How to test the native tier-1 makeup path (docs in pms-ios:
-`docs/ARKIT_NATIVE_PLAN.md`) without touching the phone for every
-iteration. Written for agents; everything here runs from the Linux box via
-`ssh macbookpro.local` (no password) except the capture itself.
+How to judge and tune an ARKit makeup look (architecture: pms-ios
+`docs/ARKIT_NATIVE_PLAN.md`) on a real face without touching the phone for
+every iteration. Everything below runs from the Linux box via
+`ssh macbookpro.local` except the capture itself.
 
-## The loop in one paragraph
+## 1. Capture (on the phone)
 
-The app records real face geometry (triple-tap), you pull the `.jsonl` off
-the phone once, and from then on `arkit-native-replay` re-renders that
-exact face — every frame, any look, any intensity — through the real
-engine on the Mac and writes PNGs you can look at. Placement bugs, blend
-bugs, blink/gaze behavior: verify offline against the wearer's true
-geometry, fix, re-render, and only deploy when the PNGs are right. Never
-tune makeup art against the canonical head if a fixture exists — the
-canonical head's proportions lie (brows, eye shape, jitter are all
-per-person).
+Record screen, front camera, **triple-tap the preview**: the face overlay
+toggles on and 10 s (300 frames at 30 fps) are recorded to the app's
+Documents as `arkit_capture_<unix-ts>/` — `frames.jsonl` plus `fNNNN.jpg`,
+the exact portrait BGRA frame the engine received for each ARFrame. A hint
+reports "Fixture saved". Script: hold still ~2 s, blink, smile, look around,
+turn the head both ways, talk.
 
-## 1. Capture a fixture (user action, on device)
+`frames.jsonl`, one ARFrame per line: `t`, `w`, `h`, `verts` (1220×3,
+anchor space, m), `model` / `view` / `proj` / `eye_l` / `eye_r` (column-major
+4×4), `blend` (52, MediaPipe order), `exposure` {`duration`, `offset`},
+`light` {`dir`, `intensity`, `ambient`, `kelvin`, `sh`}, `img`.
 
-Triple-tap the camera preview in RecordView. This toggles the engine
-landmark overlay AND records ~6 s (180 frames) of geometry to the app's
-Documents: `arkit_capture_<unix-ts>.jsonl`. Have the user perform the
-motion that breaks things (blink, look around, talk, tilt).
-
-Each JSONL line is one frame:
-
-```json
-{"t": <ARFrame timestamp s>, "w": 1080, "h": 1440,
- "verts":  [1220*3 floats, anchor space, meters],
- "model":  [16], "view": [16], "proj": [16],   // column-major simd
- "eye_l":  [16], "eye_r": [16],                // eyeball transforms
- "blend":  [52]}                               // MediaPipe order, _neutral=0
-```
-
-## 2. Pull it (Mac, phone on USB/Wi-Fi)
+## 2. Pull it to the Mac (phone on USB/Wi-Fi, no unlock needed)
 
 ```sh
 ssh macbookpro.local 'xcrun devicectl device info files \
-  --device 00008140-0008641C1E90801C \
-  --domain-type appDataContainer \
-  --domain-identifier xyz.epsilver.popmakerstudio \
-  --subdirectory Documents' | grep arkit_capture
-
+  --device 00008140-0008641C1E90801C --domain-type appDataContainer \
+  --domain-identifier xyz.epsilver.popmakerstudio --subdirectory Documents' | grep arkit_capture
 ssh macbookpro.local 'xcrun devicectl device copy from \
-  --device 00008140-0008641C1E90801C \
-  --domain-type appDataContainer \
+  --device 00008140-0008641C1E90801C --domain-type appDataContainer \
   --domain-identifier xyz.epsilver.popmakerstudio \
-  --source Documents/arkit_capture_<ts>.jsonl \
-  --destination /tmp/fixture.jsonl'
+  --source Documents/arkit_capture_<ts> --destination ~/arkit_fixtures/arkit_capture_<ts>'
 ```
 
-(The files also appear in the iOS Files app under On My iPhone → Pop Maker
-Studio, but devicectl is scriptable.)
+Keep fixtures out of `/tmp` (wiped on reboot).
 
-## 3. Replay (Mac; build once with ninja)
+## 3. Replay
 
 ```sh
 cd ~/dev/pop-maker-studio
-ninja -C build-mac arkit-native-replay
+scripts/build_mac.sh        # headless engine (= the iOS configuration) + gates in build-mac/
 export PMS_ASSET_ROOT=$HOME/dev/pms-ios/Engine/EngineAssets
 export PMS_SHADER_DIR=$HOME/dev/pms-ios/Shaders/msl
-
-# real-face fixture: renders every recorded frame, writes a PNG every 45
-./build-mac/arkit-native-replay /tmp/fixture.jsonl /tmp/out <filter_id> <amount>
-
-# synthetic canonical head: scripted neutral/blink/gaze/yaw + assertions
-./build-mac/arkit-native-replay tools/arkit_face_canonical.obj /tmp/out 13 1.2
-
-# extra knobs
-#   5th arg "r,g,b"           flat skin tone (whitening / tone-adaptation QA)
-#   PMS_NATIVE_ATLAS=x.png    force an atlas from models/face/arkit/
-#                             (checker.png = alignment; makeup_*.png = plates)
-./build-mac/arkit-native-replay tools/arkit_face_canonical.obj /tmp/deep 22 1.3 "96,66,50"
-PMS_NATIVE_ATLAS=checker.png ./build-mac/arkit-native-replay tools/arkit_face_canonical.obj /tmp/chk 13 1.0
+mkdir -p /tmp/rev
+./build-mac/arkit-native-replay ~/arkit_fixtures/arkit_capture_<ts> /tmp/rev egirl 1.0 --raw
 ```
 
-`filter_id` = FaceFilter enum in `src/face_filters.h` (Goth 13, Barbie 14,
-CatEye 26, EGirl 22, Doll 23…). Plate looks: force via `PMS_NATIVE_ATLAS`.
+Every recorded frame renders (the vertex filter runs in time); PNGs are
+written for every 15th frame (`--every N`) plus the max-blink, max-jaw-open,
+max-smile and max-yaw frames (`--frames i,j` picks exact frames). `--raw`
+adds the untouched frame as `fNNNN_raw.png` for before/after review. The
+tool fails if the look does not report `applied` on a picked frame.
 
-## 4. What to look for in the PNGs
+## 4. Iterate
 
-- **Checker**: glued to the face at every pose; eye/mouth holes open; no
-  swimming. If the checker is off, everything after it is meaningless.
-- **Liner/lash**: ON the visible lash line (the hole rim), not above it,
-  stopping short of the hole's oversized outer corners.
-- **Blink frames**: lid pigment slides down OVER the iris as one piece;
-  iris disc disappears behind the lid (depth + stencil). No doubled arcs
-  (depth), no strokes lagging one by one (one-euro vertex filter).
-- **Gaze frames**: iris follows; still clipped by the aperture.
-- **Yaw frames**: no pale "mask edge" past the silhouette (grazing fade).
-- **Skin tone runs** (light vs deep `--skin`): pigment adapts — pink stays
-  pink but takes the skin's brightness; NO whitening from foundation
-  washes; skin texture visible through pigment.
-- **Under-eye / bags**: aegyo looks (Doll Pink, Angel, Anime Doll, …) may
-  show a sheer bright strip tight under the lash — never a dark trough
-  under it. A highlight+crease pair sculpts real bags worse; material-
-  aware blend then deepens the trough. Check on a *real* fixture, not the
-  canonical head (bags are per-person). If bags pop, kill/soften `el_aegyo`
-  and rebake plates → ARKit atlases.
+- Colors, amounts, liner/lash shape: edit the look JSON in pms-ios
+  `Engine/EngineAssets/models/face/arkit/<id>.json` and re-run the replay —
+  no rebuild.
+- Mask geometry (blush/shadow/brow placement, lip border, freckles,
+  highlights): `tools/gen_arkit_makeup.py --assets <pms-ios>/Engine/EngineAssets`
+  (numpy + Pillow; runs on Linux), then replay.
+- Renderer: `src/arkit_makeup.mm`; `ninja -C build-mac arkit-native-replay`.
 
-## 5. Gates (run all before pushing engine or atlas changes)
+## 5. What to look for
 
-Linux: `cmake --build build --target engine-smoke arkit-map-smoke &&
-./build/engine-smoke && ./build/arkit-map-smoke tools/arkit_face_canonical.obj`
+- **Placement**: liner hugs the upper lash line through blink frames; lash
+  roots sit on the lid margin and the fringe moves with the lid; lips fill
+  to the vermilion border and never paint teeth or the inner mouth; blush
+  sits on the apples; brows darken real hair, no painted shape.
+- **Skin**: pores and shading visible through blush and smoothing; no seam
+  at the mesh edge; eyes, brows and lips are never smoothed.
+- **Light**: gloss and the nose-tip highlight sit where the real shine is.
+- **Hard frames**: yaw (no pigment past the silhouette), smile (lips and
+  blush stretch with the skin), blink.
 
-Mac (`ninja -C build-mac …`): `engine-smoke`, `arkit-map-smoke`
-(tier-2/3 bridge: blink sim, gaze checks, weight bounds),
-`metal-render-test` (MP path + Metal validation — it catches real crashes),
-`arkit-native-replay` synthetic (asserts pigment placement/blink/gaze).
-Then the iOS device build. Ship engine → `origin/dev`, pms-ios (incl.
-`Engine/EngineAssets/models/face/arkit/`) → `origin/main`; the user
-deploys via the Desktop "Deploy Pop Maker.command" (ssh signing fails:
-GUI keychain).
+## 6. Gates (before pushing engine or look changes)
 
-## 6. Atlas iteration (art fixes are texture edits, not engine changes)
+Linux: `cmake --build build --target engine-smoke && ./build/engine-smoke`.
 
-`tools/gen_arkit_makeup.py` bakes everything in
-`pms-ios/Engine/EngineAssets/models/face/arkit/`:
-73 plates (MP-UV art through the TPS-pinned, brow-pinned, bilinear warp;
-brow art erased — painted brows can't match real brow hair) + 30 builtin
-looks (eye layers painted directly on the hole rims in ARKit UV) +
-`checker.png`. Delete `tools/arkit_uv_warp.npz` to force a warp-map
-rebuild after correspondence changes. Rebake → replay → look → commit
-atlases in pms-ios.
-
-## History / why these exact checks exist
-
-Every check above corresponds to a shipped failure: 8 rounds of 2D-bridge
-misalignment (see pms-ios `docs/ARKIT_NATIVE_PLAN.md` for the table),
-liner floating above lash lines (warp built from similarity fit only),
-phantom brows (TPS dragging the brow zone), leopard freckles
-(nearest-neighbor warp), mask edges at profile (no silhouette fade),
-doubled liner on closed lids (no depth buffer), twitchy lids (unfiltered
-vertex noise), whitening (mid-grey multiply tint), under-eye bags carved
-harder by aegyo highlight+crease (RGBA blur muddying the strip into dark
-pigment the material blend then deepened). Static neutral-pose
+Mac: `scripts/build_mac.sh --run` — `engine-smoke`, then
+`arkit-native-replay synth` (E-Girl on the canonical head: pigment only
+inside the face, blink moves the eye makeup and not the lips, yaw keeps it
+attached, `face_overlay` renders, an unknown look reports `look_missing`),
+then `metal-render-test`. Then the iOS device build. Ship engine →
+`origin/dev`, pms-ios (incl. `Engine/EngineAssets/models/face/arkit/`) →
+`origin/main`.

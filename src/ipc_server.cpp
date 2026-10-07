@@ -9,6 +9,7 @@
 #include "face_track.h"
 #include "face_cache.h"
 #include "face_filters.h"
+#include "arkit_face.h"     // g_face_overlay (face_overlay command)
 #include "agent_harness.h"
 #include "render.h"
 #include "bg_presets.h"
@@ -3024,17 +3025,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         return json{{"ok", true}};
     }
 
-    if (method == "face_track_enable") {    // camera side-feed to the face worker
-        bool on = params.value("on", true);
-        bool sync = params.value("sync", false);
-        face_track_set_sync_mode(sync);
-        face_feed_enable(on);
-        if (params.contains("max_faces"))
-            face_track_set_max_faces(params.value("max_faces", 2));
-        return json{{"ok", true}, {"on", on}, {"sync", sync},
-                    {"models_present", face_track_available()}};
-    }
-
     if (method == "face_overlay") {     // debug landmark overlay toggle
         g_face_overlay = params.value("on", false);
         return json{{"ok", true}, {"on", g_face_overlay}};
@@ -3046,7 +3036,6 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         int n = face_track_latest_all(faces, 4);
         json j;
         j["models_present"] = face_track_available();
-        j["feed_enabled"]   = face_feed_enabled();
         j["n_faces"]        = n;
         j["valid"]          = n > 0;
         j["score"]          = n > 0 ? faces[0].score : 0.f;
@@ -3060,7 +3049,7 @@ static json dispatch(AppState& state, const std::string& method, const json& par
         j["landmark_ms"]     = g_dbg_lmk_us.load() / 1000.0;
         j["read_age_ms"]     = g_dbg_read_age_us.load() / 1000.0;
         // Opt-in landmark dump (478 xy pairs in frame pixels) for alignment
-        // QA overlays and the face-fx-photo harness.
+        // QA overlays.
         if (params.value("pts", false) && n > 0) {
             json pts = json::array();
             for (int i = 0; i < FT_NPTS; ++i)

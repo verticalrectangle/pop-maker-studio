@@ -49,34 +49,34 @@ void pms_submit_mic_block(pms_engine*, const float* interleaved_lr,
 void pms_submit_person_matte(pms_engine*, void* cv_pixel_buffer_r8,
                              double host_time_seconds);
 
-// Submit ARKit face anchor data (front camera, TrueDepth). Up to 4 faces.
-// vertices: flat float array [n_faces * 1220 * 2] — 2D pixel coords in the
-//   composited frame space (projected by the Swift caller).
-// blendshapes: flat float array [n_faces * 52] — ARKit blendshape coefficients.
-// w,h: size of the frame the vertices are projected into (all faces share it).
-// n_faces: number of tracked faces (0..4). Pass n_faces=0 to clear (face lost).
-// uvs_1220x2: ARKit textureCoordinates (constant per topology, same every frame).
-//              May be NULL if unavailable — the mesh pass is then skipped.
-void pms_submit_arkit_face(pms_engine*, const float* vertices_1220x2,
-                           const float* uvs_1220x2,
-                           const float* blendshapes_52, int n_faces,
-                           int w, int h);
+// ARFrame.lightEstimate for the face being submitted (face tracking delivers
+// an ARDirectionalLightEstimate). primary_dir is world space — the direction
+// the light travels — in the same world the view matrix maps from. sh is
+// sphericalHarmonicsCoefficients verbatim (27 floats). directional == 0 when
+// only the ambient terms are valid.
+typedef struct pms_arkit_light {
+    float primary_dir[3];
+    float primary_intensity;      // lumens
+    float sh[27];
+    float ambient_intensity;      // lumens, 1000 = neutral
+    float ambient_kelvin;
+    int   directional;
+} pms_arkit_light;
 
-// Native 3D ARKit face submission (tier-1 rewrite; supersedes the 2D
-// variant on devices with TrueDepth). All matrices are column-major
-// simd_float4x4 layout. verts are ARFaceGeometry.vertices in face-anchor
-// model space (meters); model = anchor transform; view/proj = the camera's
-// viewMatrix/projectionMatrix for the PORTRAIT viewport (w x h) that the
-// submitted camera frames use. eye_l/eye_r = left/rightEyeTransform
-// (anchor space). is_tracked == 0 clears the slot (face lost): the engine
-// hides makeup instead of painting with frozen geometry.
+// ARKit face state for one ARFrame (TrueDepth front camera); submit it in the
+// same callback as that frame's pms_submit_camera_frame. All matrices are
+// column-major simd_float4x4 layout. verts are ARFaceGeometry.vertices in
+// face-anchor model space (meters); model = anchor transform; view/proj = the
+// camera's viewMatrix/projectionMatrix for the PORTRAIT viewport (w x h) the
+// submitted camera frames use. blendshapes_52 in MediaPipe order (_neutral at
+// 0); light may be NULL. is_tracked == 0 clears the slot (face lost): the
+// engine hides makeup instead of painting with frozen geometry.
 void pms_submit_arkit_face_3d(pms_engine*, const float* verts_1220x3,
                               const float* model_4x4,
                               const float* view_4x4,
                               const float* proj_4x4,
-                              const float* eye_l_4x4,
-                              const float* eye_r_4x4,
                               const float* blendshapes_52,
+                              const pms_arkit_light* light,
                               int is_tracked, int w, int h);
 
 // Submit one visual layer's frame, addressed by engine clip identity
@@ -104,7 +104,7 @@ char* pms_poll_events(pms_engine*);
 
 void pms_free(char*);
 
-#define PMS_ENGINE_ABI 4
+#define PMS_ENGINE_ABI 5
 uint32_t pms_abi_version(void);
 uint32_t pms_project_version(void);
 

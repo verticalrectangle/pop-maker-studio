@@ -78,27 +78,8 @@ bool face_track_latest(FaceObs& out);
 // Multi-face: up to max_n concurrent faces (tracked independently, each
 // velocity-extrapolated to the read instant). Returns the count written.
 int  face_track_latest_all(FaceObs* out, int max_n);
-// How many faces the worker tracks (1..4, default 2). Cost is one landmark
-// run per face per frame — set 1 for single-selfie battery mode.
-void face_track_set_max_faces(int n);
-
-// Camera side-feed gate (iOS record mode): pms_submit_camera_frame only
-// converts + submits frames to the face worker while this is on, so plain
-// recording pays nothing. Toggled by the face_track_enable command.
-void face_feed_enable(bool on);
-bool face_feed_enabled();
-
 // Synchronous single-frame run (take analysis pass) — no smoothing.
 bool face_track_run_sync(const uint8_t* rgb, int w, int h, FaceObs& out);
-// Synchronous live path: run inference on the latest submitted frame and
-// update the shared FaceTrack table. Used for rear-camera CoreML sync.
-int face_track_run_sync_live();
-// Enable/disable synchronous live tracking (rear camera). When enabled,
-// face_track_submit stores the latest frame; face_track_run_sync_live runs
-// it on the render thread. The worker is not used while sync is enabled.
-void face_track_set_sync_mode(bool on);
-bool face_track_sync_enabled();
-
 void face_track_shutdown();
 bool face_track_dump_last(const char* path);  // debug: PPM of last submitted frame
 

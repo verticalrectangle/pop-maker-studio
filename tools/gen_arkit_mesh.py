@@ -8,8 +8,8 @@ Fallback input: a .mat file containing 'TriangleIndices' (3x2304, 1-indexed)
 from a dumped ARSession (e.g. Jeon-apple_facestim_generation). In this case
 UVs are stubbed with zeros and a TODO is emitted.
 
-Semantic landmark correspondence now lives in gen_arkit_mp_map.py
-(arkit_mp_map.h), computed from canonical rest-pose meshes.
+The header feeds the ARKit makeup renderer (src/arkit_makeup.mm) and the mask
+baker (tools/gen_arkit_makeup.py), which paints in these UVs.
 """
 import os
 import sys
@@ -103,9 +103,6 @@ def main():
         _, uv, tris = parse_obj(src)
         npts = len(uv)
     write_mesh_header(npts, uv, tris, os.path.join(out_dir, "arkit_face_mesh.h"))
-    # arkit_landmark_map.h is gone: the hand-typed semantic table had L/R
-    # inverted and is replaced by the exact offline correspondence from
-    # gen_arkit_mp_map.py (arkit_mp_map.h).
 
 
 if __name__ == "__main__":
